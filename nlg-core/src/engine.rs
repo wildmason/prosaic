@@ -426,9 +426,18 @@ impl Engine {
         template: &Template,
         context: &Context,
     ) -> Result<String, NlgError> {
+        self.render_segments(key, &template.segments, context)
+    }
+
+    fn render_segments(
+        &self,
+        key: &str,
+        segments: &[Segment],
+        context: &Context,
+    ) -> Result<String, NlgError> {
         let mut output = String::new();
 
-        for segment in &template.segments {
+        for segment in segments {
             match segment {
                 Segment::Literal(text) => output.push_str(text),
                 Segment::Slot {
@@ -437,6 +446,16 @@ impl Engine {
                 } => {
                     let rendered = self.render_slot(key, slot_key, pipes, context)?;
                     output.push_str(&rendered);
+                }
+                Segment::Conditional {
+                    condition_key,
+                    inner,
+                } => {
+                    // Only render inner segments if the condition is truthy
+                    if is_truthy(context.get(condition_key)) {
+                        let rendered = self.render_segments(key, inner, context)?;
+                        output.push_str(&rendered);
+                    }
                 }
             }
         }
@@ -801,6 +820,20 @@ fn prepend_replacing_subject(output: &str, connective: &str) -> String {
     }
     // Fallback: just prepend
     format!("{connective} {}", lowercase_first(output))
+}
+
+/// Determine if a value is "truthy" for conditional rendering.
+/// - `None` → false
+/// - Number 0 → false, any other number → true
+/// - Empty string → false, non-empty → true
+/// - Empty list → false, non-empty → true
+fn is_truthy(value: Option<&Value>) -> bool {
+    match value {
+        None => false,
+        Some(Value::Number(n)) => *n != 0,
+        Some(Value::String(s)) => !s.is_empty(),
+        Some(Value::List(items)) => !items.is_empty(),
+    }
 }
 
 /// Extract the primary entity name from a render context.

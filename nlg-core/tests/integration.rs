@@ -578,3 +578,87 @@ fn batch_sequential_when_entities_differ_across_actions() {
     let period_count = result.matches('.').count();
     assert!(period_count >= 2, "Expected 2 periods for 2 sentences, got {period_count}: {result}");
 }
+
+// ── Conditional sections ────────────────────────────────────────────────
+
+#[test]
+fn conditional_section_skipped_when_zero() {
+    let mut engine = engine();
+    engine.register_template(
+        "t",
+        "{name|refer} was removed{?count}, impacting {count} {count|pluralize:consumer}{/?}",
+    ).unwrap();
+
+    let mut ctx = Context::new();
+    ctx.insert("entity_type", Value::String("class".into()));
+    ctx.insert("name", Value::String("Foo".into()));
+    ctx.insert("count", Value::Number(0));
+
+    let result = engine.render("t", &ctx).unwrap();
+    // 0 count — conditional should be skipped entirely
+    assert_eq!(result, "The class Foo was removed.");
+    assert!(!result.contains("0"), "Should not contain '0', got: {result}");
+}
+
+#[test]
+fn conditional_section_rendered_when_nonzero() {
+    let mut engine = engine();
+    engine.register_template(
+        "t",
+        "{name|refer} was removed{?count}, impacting {count} {count|pluralize:consumer}{/?}",
+    ).unwrap();
+
+    let mut ctx = Context::new();
+    ctx.insert("entity_type", Value::String("class".into()));
+    ctx.insert("name", Value::String("Foo".into()));
+    ctx.insert("count", Value::Number(3));
+
+    let result = engine.render("t", &ctx).unwrap();
+    assert_eq!(result, "The class Foo was removed, impacting 3 consumers.");
+}
+
+#[test]
+fn conditional_section_skipped_for_empty_list() {
+    let mut engine = engine();
+    engine.register_template(
+        "t",
+        "Added item{?items} with refs: {items|join}{/?}",
+    ).unwrap();
+
+    let mut ctx = Context::new();
+    ctx.insert("items", Value::List(vec![]));
+
+    let result = engine.render("t", &ctx).unwrap();
+    assert_eq!(result, "Added item");
+}
+
+#[test]
+fn conditional_section_rendered_for_nonempty_list() {
+    let mut engine = engine();
+    engine.register_template(
+        "t",
+        "Added item{?items} with refs: {items|join}{/?}",
+    ).unwrap();
+
+    let mut ctx = Context::new();
+    ctx.insert("items", Value::List(vec!["a".into(), "b".into()]));
+
+    let result = engine.render("t", &ctx).unwrap();
+    assert!(result.contains("with refs: a and b"));
+}
+
+#[test]
+fn conditional_section_skipped_when_key_missing() {
+    let mut engine = engine();
+    engine.register_template(
+        "t",
+        "Always{?optional}, maybe{/?}",
+    ).unwrap();
+
+    let ctx = Context::new();
+    // No "optional" key at all
+
+    let result = engine.render("t", &ctx).unwrap();
+    // Should not include the conditional content
+    assert!(!result.contains("maybe"), "Should skip missing-key conditional, got: {result}");
+}

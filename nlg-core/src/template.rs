@@ -21,6 +21,12 @@ pub enum Segment {
     Literal(String),
     /// A slot referencing a context key, with optional pipe transforms.
     Slot { key: String, pipes: Vec<Pipe> },
+    /// A conditional section: only renders if the condition key is truthy.
+    /// Truthy means: non-zero number, non-empty list, non-empty string.
+    Conditional {
+        condition_key: String,
+        inner: Vec<Segment>,
+    },
 }
 
 /// A parsed template ready for rendering.
@@ -38,64 +44,159 @@ impl Template {
     /// - `{key|pipe}` — apply a pipe transform
     /// - `{key|pipe:arg}` — pipe with an argument
     /// - `{key|pipe1|pipe2:arg}` — chained pipes
+    /// - `{?key}...{/?}` — conditional section (renders only if `key` is truthy)
     pub fn parse(source: &str) -> Result<Self, NlgError> {
-        let mut segments = Vec::new();
-        let mut chars = source.char_indices().peekable();
-        let mut literal_start = 0;
+        let segments = parse_segments(source, 0, source.len())?;
+        Ok(Template {
+            source: source.to_string(),
+            segments,
+        })
+    }
+}
 
-        while let Some(&(i, ch)) = chars.peek() {
-            if ch == '{' {
-                // Flush any accumulated literal
-                if i > literal_start {
-                    segments.push(Segment::Literal(source[literal_start..i].to_string()));
+/// Parse a range of source into segments. Handles nested conditionals.
+fn parse_segments(source: &str, start: usize, end: usize) -> Result<Vec<Segment>, NlgError> {
+    let mut segments = Vec::new();
+    let slice = &source[start..end];
+    let bytes = slice.as_bytes();
+    let mut i: usize = 0;
+    let mut literal_start: usize = 0;
+
+    while i < bytes.len() {
+        if bytes[i] != b'{' {
+            i += 1;
+            continue;
+        }
+
+        // Flush accumulated literal
+        if i > literal_start {
+            segments.push(Segment::Literal(slice[literal_start..i].to_string()));
+        }
+
+        let content_start = i + 1;
+        let is_conditional = content_start < bytes.len() && bytes[content_start] == b'?';
+        let is_closing = content_start + 1 < bytes.len()
+            && bytes[content_start] == b'/'
+            && bytes[content_start + 1] == b'?';
+
+        if is_closing {
+            return Err(NlgError::TemplateParseError {
+                template: source.to_string(),
+                position: start + i,
+                reason: "unexpected closing `{/?}` without opening".to_string(),
+            });
+        }
+
+        if is_conditional {
+            // Parse {?key}...{/?}
+            let key_start = content_start + 1; // after `?`
+            let key_end = slice[key_start..]
+                .find('}')
+                .map(|rel| key_start + rel)
+                .ok_or_else(|| NlgError::TemplateParseError {
+                    template: source.to_string(),
+                    position: start + i,
+                    reason: "unclosed `{?`".to_string(),
+                })?;
+
+            let condition_key = slice[key_start..key_end].trim().to_string();
+            if condition_key.is_empty() {
+                return Err(NlgError::TemplateParseError {
+                    template: source.to_string(),
+                    position: start + i,
+                    reason: "empty condition key".to_string(),
+                });
+            }
+
+            let inner_start = key_end + 1;
+            let inner_end = find_matching_close(slice, inner_start).ok_or_else(|| {
+                NlgError::TemplateParseError {
+                    template: source.to_string(),
+                    position: start + i,
+                    reason: format!("unclosed conditional `{{?{condition_key}}}`"),
                 }
+            })?;
 
-                // Skip the opening brace
-                chars.next();
+            let inner_segments =
+                parse_segments(source, start + inner_start, start + inner_end)?;
 
-                // Find the closing brace
-                let slot_start = i + 1;
-                let mut slot_end = None;
-                let mut depth = 1;
+            segments.push(Segment::Conditional {
+                condition_key,
+                inner: inner_segments,
+            });
 
-                for (j, c) in chars.by_ref() {
-                    if c == '{' {
-                        depth += 1;
-                    } else if c == '}' {
+            // Advance past `{/?}` (4 chars)
+            i = inner_end + 4;
+            literal_start = i;
+        } else {
+            // Regular slot — find matching `}` (with `{` nesting support)
+            let mut slot_end: Option<usize> = None;
+            let mut depth: i32 = 1;
+            let mut j = content_start;
+            while j < bytes.len() {
+                match bytes[j] {
+                    b'{' => depth += 1,
+                    b'}' => {
                         depth -= 1;
                         if depth == 0 {
                             slot_end = Some(j);
                             break;
                         }
                     }
+                    _ => {}
                 }
+                j += 1;
+            }
+            let slot_end = slot_end.ok_or_else(|| NlgError::TemplateParseError {
+                template: source.to_string(),
+                position: start + i,
+                reason: "unclosed `{`".to_string(),
+            })?;
 
-                let slot_end = slot_end.ok_or_else(|| NlgError::TemplateParseError {
-                    template: source.to_string(),
-                    position: i,
-                    reason: "unclosed `{`".to_string(),
-                })?;
+            let slot_content = &slice[content_start..slot_end];
+            let segment = parse_slot(slot_content, source, start + i)?;
+            segments.push(segment);
 
-                let slot_content = &source[slot_start..slot_end];
-                let segment = parse_slot(slot_content, source, i)?;
-                segments.push(segment);
+            i = slot_end + 1;
+            literal_start = i;
+        }
+    }
 
-                literal_start = slot_end + 1;
-            } else {
-                chars.next();
+    // Flush trailing literal
+    if literal_start < slice.len() {
+        segments.push(Segment::Literal(slice[literal_start..].to_string()));
+    }
+
+    Ok(segments)
+}
+
+/// Find the position of the matching `{/?}` for a conditional opened at `start`.
+/// Handles nested conditionals.
+fn find_matching_close(slice: &str, start: usize) -> Option<usize> {
+    let mut depth: i32 = 1;
+    let bytes = slice.as_bytes();
+    let mut i = start;
+
+    while i < bytes.len() {
+        if i + 1 < bytes.len() && bytes[i] == b'{' {
+            if bytes[i + 1] == b'?' {
+                depth += 1;
+                i += 2;
+                continue;
+            }
+            if i + 2 < bytes.len() && bytes[i + 1] == b'/' && bytes[i + 2] == b'?' {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(i);
+                }
+                i += 3;
+                continue;
             }
         }
-
-        // Flush trailing literal
-        if literal_start < source.len() {
-            segments.push(Segment::Literal(source[literal_start..].to_string()));
-        }
-
-        Ok(Template {
-            source: source.to_string(),
-            segments,
-        })
+        i += 1;
     }
+
+    None
 }
 
 fn parse_slot(content: &str, source: &str, position: usize) -> Result<Segment, NlgError> {
@@ -306,5 +407,40 @@ mod tests {
         // " which impacts " {count} " direct " {count|pluralize:consumer}
         // " [" {consumers|truncate:3|join} "]"
         assert_eq!(t.segments.len(), 13);
+    }
+
+    // ── Conditional tests ───────────────────────────────────────────────
+
+    #[test]
+    fn parse_conditional_section() {
+        let t = Template::parse("foo{?count} bar{/?} baz").unwrap();
+        assert_eq!(t.segments.len(), 3);
+        assert_eq!(t.segments[0], Segment::Literal("foo".into()));
+        assert!(matches!(t.segments[1], Segment::Conditional { .. }));
+        assert_eq!(t.segments[2], Segment::Literal(" baz".into()));
+    }
+
+    #[test]
+    fn parse_conditional_with_inner_slot() {
+        let t = Template::parse("{name}{?count}, {count} items{/?}").unwrap();
+        assert_eq!(t.segments.len(), 2);
+        if let Segment::Conditional { condition_key, inner } = &t.segments[1] {
+            assert_eq!(condition_key, "count");
+            assert_eq!(inner.len(), 3); // ", ", {count}, " items"
+        } else {
+            panic!("Expected Conditional segment");
+        }
+    }
+
+    #[test]
+    fn parse_unclosed_conditional_is_error() {
+        let result = Template::parse("{?count} never closed");
+        assert!(matches!(result, Err(NlgError::TemplateParseError { .. })));
+    }
+
+    #[test]
+    fn parse_empty_conditional_key_is_error() {
+        let result = Template::parse("{?}content{/?}");
+        assert!(matches!(result, Err(NlgError::TemplateParseError { .. })));
     }
 }
