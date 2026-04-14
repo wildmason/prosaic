@@ -1,12 +1,13 @@
-use nlg_core::{Engine, NlgError};
+use nlg_core::{Engine, NlgError, Salience};
 
 /// Register code-analysis vocabulary templates into an engine.
 ///
 /// Provides templates for common code change events: renames, deletions,
 /// additions, modifications, moves, and signature changes.
 ///
-/// Each event type has multiple template variants for use with
-/// `Variation::RoundRobin` or `Variation::Seeded` to avoid repetitive output.
+/// Templates are registered at three salience levels (Low, Medium, High) so
+/// the engine can match verbosity to event magnitude: low-impact changes get
+/// terser phrasing while high-impact changes get elaboration.
 pub fn register(engine: &mut Engine) -> Result<(), NlgError> {
     register_rename_templates(engine)?;
     register_delete_templates(engine)?;
@@ -18,6 +19,19 @@ pub fn register(engine: &mut Engine) -> Result<(), NlgError> {
 }
 
 fn register_rename_templates(engine: &mut Engine) -> Result<(), NlgError> {
+    // Low: terse, drops impact details
+    engine.register_template_at(
+        "code.renamed",
+        "{old_name|refer} was renamed to {new_name}",
+        Salience::Low,
+    )?;
+    engine.register_template_at(
+        "code.renamed",
+        "{old_name|refer} is now called {new_name}",
+        Salience::Low,
+    )?;
+
+    // Medium: default, includes impact clause
     engine.register_template(
         "code.renamed",
         "{old_name|refer} was renamed to {new_name}{?consumer_count}, \
@@ -36,10 +50,42 @@ fn register_rename_templates(engine: &mut Engine) -> Result<(), NlgError> {
          ({consumer_count} {consumer_count|pluralize:consumer} affected{?consumers}: \
          {consumers|truncate:3|join}{/?}){/?}",
     )?;
+
+    // High: elaborative, emphasizes significance.
+    // Uses plain `join:bracketed` so the template's own literal prefix
+    // ("including", "notably") isn't duplicated by an auto-selected list style.
+    engine.register_template_at(
+        "code.renamed",
+        "{old_name|refer} has been renamed to {new_name} \u{2014} a significant change \
+         rippling through {consumer_count} direct {consumer_count|pluralize:consumer}{?consumers}, \
+         including {consumers|truncate:5|join:bracketed}{/?}",
+        Salience::High,
+    )?;
+    engine.register_template_at(
+        "code.renamed",
+        "{old_name|refer} was renamed to {new_name}. This change affects a substantial \
+         {consumer_count} {consumer_count|pluralize:dependent}{?consumers} \u{2014} notably \
+         {consumers|truncate:5|join:bracketed}{/?}",
+        Salience::High,
+    )?;
+
     Ok(())
 }
 
 fn register_delete_templates(engine: &mut Engine) -> Result<(), NlgError> {
+    // Low
+    engine.register_template_at(
+        "code.deleted",
+        "{name|refer} was removed",
+        Salience::Low,
+    )?;
+    engine.register_template_at(
+        "code.deleted",
+        "{name|refer} has been deleted",
+        Salience::Low,
+    )?;
+
+    // Medium
     engine.register_template(
         "code.deleted",
         "{name|refer} was removed{?consumer_count}, \
@@ -58,6 +104,17 @@ fn register_delete_templates(engine: &mut Engine) -> Result<(), NlgError> {
          breaking {consumer_count} {consumer_count|pluralize:consumer}{?consumers} \
          {consumers|truncate:3|join}{/?}{/?}",
     )?;
+
+    // High
+    engine.register_template_at(
+        "code.deleted",
+        "{name|refer} has been removed entirely \u{2014} a breaking change affecting \
+         {consumer_count} {consumer_count|pluralize:consumer}{?consumers} including \
+         {consumers|truncate:5|join:bracketed}{/?}. All {consumer_count|pluralize:reference} \
+         will need migration.",
+        Salience::High,
+    )?;
+
     Ok(())
 }
 
@@ -78,6 +135,19 @@ fn register_add_templates(engine: &mut Engine) -> Result<(), NlgError> {
 }
 
 fn register_modify_templates(engine: &mut Engine) -> Result<(), NlgError> {
+    // Low
+    engine.register_template_at(
+        "code.modified",
+        "{name|refer} was modified",
+        Salience::Low,
+    )?;
+    engine.register_template_at(
+        "code.modified",
+        "{name|refer} has been updated",
+        Salience::Low,
+    )?;
+
+    // Medium
     engine.register_template(
         "code.modified",
         "{name|refer} was modified{?consumer_count}, \
@@ -96,6 +166,17 @@ fn register_modify_templates(engine: &mut Engine) -> Result<(), NlgError> {
          {consumer_count} {consumer_count|pluralize:dependent}{?consumers} \
          {consumers|truncate:3|join}{/?}{/?}",
     )?;
+
+    // High
+    engine.register_template_at(
+        "code.modified",
+        "{name|refer} has been substantially modified, with downstream impact \
+         across {consumer_count} {consumer_count|pluralize:consumer}{?consumers} \
+         including {consumers|truncate:5|join:bracketed}{/?}. Thorough review is \
+         recommended.",
+        Salience::High,
+    )?;
+
     Ok(())
 }
 
@@ -189,9 +270,10 @@ mod tests {
         );
 
         let result = engine.render("code.renamed", &ctx).unwrap();
-        assert!(result.contains("getData was renamed to fetchData"));
-        assert!(result.contains("1 direct consumer"));
-        assert!(result.contains("DashboardComponent"));
+        // With consumer_count=1, this is a Low-salience event — templates
+        // drop the impact clause for terseness.
+        assert!(result.contains("getData"));
+        assert!(result.contains("fetchData"));
     }
 
     #[test]
@@ -341,5 +423,65 @@ mod tests {
         // The important thing is both render successfully
         assert!(!result1.is_empty());
         assert!(!result2.is_empty());
+    }
+
+    #[test]
+    fn low_salience_produces_terse_output() {
+        let engine = test_engine();
+        let mut ctx = Context::new();
+        ctx.insert("entity_type", Value::String("class".into()));
+        ctx.insert("name", Value::String("Trivial".into()));
+        ctx.insert("consumer_count", Value::Number(1));
+        ctx.insert("consumers", Value::List(vec!["OnlyConsumer".into()]));
+
+        let result = engine.render("code.modified", &ctx).unwrap();
+        // Low salience: drop impact clause, keep it terse
+        assert!(!result.contains("affect"), "Low salience should drop impact clause, got: {result}");
+    }
+
+    #[test]
+    fn high_salience_produces_elaborated_output() {
+        let engine = test_engine();
+        let mut ctx = Context::new();
+        ctx.insert("entity_type", Value::String("class".into()));
+        ctx.insert("name", Value::String("Critical".into()));
+        ctx.insert("consumer_count", Value::Number(50));
+        ctx.insert(
+            "consumers",
+            Value::List(vec![
+                "A".into(), "B".into(), "C".into(), "D".into(), "E".into(),
+                "F".into(), "G".into(), "H".into(),
+            ]),
+        );
+
+        let result = engine.render("code.modified", &ctx).unwrap();
+        // High salience: elaborate with emphasis language
+        assert!(
+            result.contains("substantial") || result.contains("significant") || result.contains("recommended"),
+            "Expected elaborated high-salience output, got: {result}"
+        );
+        // Should show more consumers (truncate:5 vs truncate:3)
+        assert!(result.contains("50"));
+    }
+
+    #[test]
+    fn medium_salience_uses_default_templates() {
+        let engine = test_engine();
+        let mut ctx = Context::new();
+        ctx.insert("entity_type", Value::String("class".into()));
+        ctx.insert("name", Value::String("Standard".into()));
+        ctx.insert("consumer_count", Value::Number(5));
+        ctx.insert(
+            "consumers",
+            Value::List(vec!["A".into(), "B".into(), "C".into(), "D".into(), "E".into()]),
+        );
+
+        let result = engine.render("code.modified", &ctx).unwrap();
+        // Medium salience: standard impact clause with count
+        assert!(result.contains("5"));
+        assert!(
+            result.contains("affect") || result.contains("review") || result.contains("dependent"),
+            "Expected medium-salience impact clause, got: {result}"
+        );
     }
 }

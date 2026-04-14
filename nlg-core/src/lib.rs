@@ -5,6 +5,8 @@ mod template;
 mod engine;
 mod builder;
 mod discourse;
+mod salience;
+mod document;
 
 pub use language::{Language, Tense, Person, Conjunction};
 pub use context::{Context, Value};
@@ -14,3 +16,5 @@ pub use engine::{Engine, Variation, Strictness};
 pub use builder::{Sentence, Clause, Subject, Voice, entity, named};
 pub use context::IntoContext;
 pub use discourse::{ListStyle, ReferenceForm};
+pub use salience::{Salience, SalienceThresholds};
+pub use document::{DocumentPlan, Paragraph};

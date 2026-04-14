@@ -1,5 +1,6 @@
 use nlg_core::{
-    Strictness, Clause, Context, Engine, Sentence, Tense, Value, Variation, Voice, entity, named,
+    Clause, Context, DocumentPlan, Engine, Sentence, Strictness, Tense, Value, Variation, Voice,
+    entity, named,
 };
 use nlg_derive::IntoContext;
 use nlg_grammar_en::English;
@@ -8,6 +9,8 @@ fn main() {
     println!("=== nlg crate demo ===\n");
 
     referring_expression_demo();
+    salience_demo();
+    document_planning_demo();
     discourse_aware_demos();
     batch_rendering_demo();
     template_api_demos();
@@ -29,6 +32,136 @@ fn show(label: &str, result: &str) {
 }
 
 // ── Referring Expressions ─────────────────────────────────────────────────
+
+// ── Importance-Aware Verbosity ─────────────────────────────────────────
+
+fn salience_demo() {
+    header("Importance-Aware Verbosity (Salience)");
+
+    let mut engine = Engine::new(English::new())
+        .strictness(Strictness::Strict)
+        .variation(Variation::Fixed);
+    nlg_vocab_code::register(&mut engine).unwrap();
+
+    println!("  The engine auto-selects template verbosity based on event magnitude.");
+    println!("  Same event type (code.modified), three different impact levels:\n");
+
+    // Low salience — 0 consumers
+    let mut low = Context::new();
+    low.insert("entity_type", Value::String("method".into()));
+    low.insert("name", Value::String("formatDate".into()));
+    low.insert("consumer_count", Value::Number(0));
+    low.insert("consumers", Value::List(vec![]));
+    let r_low = engine.render("code.modified", &low).unwrap();
+    println!("    Low impact (0 consumers):");
+    println!("      \"{r_low}\"\n");
+
+    engine.reset();
+
+    // Medium salience — 5 consumers
+    let mut med = Context::new();
+    med.insert("entity_type", Value::String("method".into()));
+    med.insert("name", Value::String("processOrder".into()));
+    med.insert("consumer_count", Value::Number(5));
+    med.insert("consumers", Value::List(vec![
+        "CartComponent".into(), "CheckoutFlow".into(), "OrderHistory".into(),
+        "AdminPanel".into(), "InvoiceService".into(),
+    ]));
+    let r_med = engine.render("code.modified", &med).unwrap();
+    println!("    Medium impact (5 consumers):");
+    println!("      \"{r_med}\"\n");
+
+    engine.reset();
+
+    // High salience — 50 consumers
+    let mut high = Context::new();
+    high.insert("entity_type", Value::String("service".into()));
+    high.insert("name", Value::String("AuthenticationService".into()));
+    high.insert("consumer_count", Value::Number(50));
+    high.insert("consumers", Value::List(vec![
+        "LoginPage".into(), "SignupPage".into(), "ApiGateway".into(),
+        "AdminDashboard".into(), "UserProfile".into(), "SessionManager".into(),
+        "PermissionGuard".into(), "AuditLogger".into(),
+    ]));
+    let r_high = engine.render("code.modified", &high).unwrap();
+    println!("    High impact (50 consumers):");
+    println!("      \"{r_high}\"\n");
+}
+
+// ── Document Planning ───────────────────────────────────────────────────
+
+fn document_planning_demo() {
+    header("Document Planning (Multi-Paragraph Narratives)");
+
+    let mut engine = Engine::new(English::new())
+        .strictness(Strictness::Strict)
+        .variation(Variation::Fixed);
+    nlg_vocab_code::register(&mut engine).unwrap();
+
+    println!("  DocumentPlan groups events by entity and orders by salience,");
+    println!("  producing a multi-paragraph narrative where the biggest changes lead.\n");
+
+    // Mix of changes: one big rename, some modifications to same class, and a trivial add
+    let make_rename = |old: &str, new: &str, count: i64, consumers: Vec<&str>| {
+        let mut ctx = Context::new();
+        ctx.insert("entity_type", Value::String("service".into()));
+        ctx.insert("old_name", Value::String(old.into()));
+        ctx.insert("new_name", Value::String(new.into()));
+        ctx.insert("consumer_count", Value::Number(count));
+        ctx.insert(
+            "consumers",
+            Value::List(consumers.into_iter().map(String::from).collect()),
+        );
+        ctx
+    };
+
+    let make_modify = |name: &str, count: i64, consumers: Vec<&str>| {
+        let mut ctx = Context::new();
+        ctx.insert("entity_type", Value::String("class".into()));
+        ctx.insert("name", Value::String(name.into()));
+        ctx.insert("consumer_count", Value::Number(count));
+        ctx.insert(
+            "consumers",
+            Value::List(consumers.into_iter().map(String::from).collect()),
+        );
+        ctx
+    };
+
+    let make_add = |name: &str| {
+        let mut ctx = Context::new();
+        ctx.insert("entity_type", Value::String("helper".into()));
+        ctx.insert("name", Value::String(name.into()));
+        ctx.insert("location", Value::String("src/utils/".into()));
+        ctx
+    };
+
+    let events: Vec<(&str, Context)> = vec![
+        // Low-impact trivia (should end up last)
+        ("code.added", make_add("StringFormatter")),
+        // Medium-impact cluster on same entity (should stay grouped)
+        ("code.modified", make_modify("UserRepository", 4, vec!["UserService", "AuthFlow", "ProfilePage", "AdminView"])),
+        ("code.modified", make_modify("UserRepository", 4, vec!["UserService", "AuthFlow", "ProfilePage", "AdminView"])),
+        // High-impact rename (should lead the narrative)
+        ("code.renamed", make_rename(
+            "PaymentGateway", "BillingService", 35,
+            vec![
+                "CheckoutFlow", "OrderService", "RefundHandler",
+                "InvoiceGenerator", "ReceiptEmail", "AdminReports",
+                "TaxCalculator",
+            ],
+        )),
+    ];
+
+    let plan = DocumentPlan::from_events(&events, &engine);
+    println!("  Plan produced {} paragraph(s).\n", plan.paragraphs.len());
+
+    let narrative = plan.render(&engine).unwrap();
+    println!("  Final narrative:\n");
+    for line in narrative.lines() {
+        println!("    {line}");
+    }
+    println!();
+}
 
 fn referring_expression_demo() {
     header("Referring Expressions (Entity Tracking)");

@@ -6,6 +6,7 @@ use crate::context::{Context, IntoContext, Value};
 use crate::discourse::{DiscourseState, ListStyle, ReferenceForm};
 use crate::error::NlgError;
 use crate::language::{Conjunction, Language};
+use crate::salience::{Salience, SalienceThresholds};
 use crate::template::{Pipe, PipeArg, Segment, Template};
 
 /// Controls how missing slots are handled during rendering.
@@ -45,13 +46,17 @@ impl Default for Variation {
     }
 }
 
+/// A template registered under a key, with its salience level.
+type SalientTemplate = (Salience, Template);
+
 /// The core NLG engine. Holds a language implementation, template registry,
 /// configuration, and discourse state for natural cross-sentence rendering.
 pub struct Engine {
     language: Box<dyn Language>,
-    templates: HashMap<String, Vec<Template>>,
+    templates: HashMap<String, Vec<SalientTemplate>>,
     strictness: Strictness,
     variation: Variation,
+    salience_thresholds: SalienceThresholds,
     round_robin_counters: HashMap<String, AtomicUsize>,
     discourse: RefCell<DiscourseState>,
 }
@@ -64,6 +69,7 @@ impl Engine {
             templates: HashMap::new(),
             strictness: Strictness::default(),
             variation: Variation::default(),
+            salience_thresholds: SalienceThresholds::default(),
             round_robin_counters: HashMap::new(),
             discourse: RefCell::new(DiscourseState::new()),
         }
@@ -81,6 +87,12 @@ impl Engine {
         self
     }
 
+    /// Set the thresholds for automatic salience derivation from context.
+    pub fn salience_thresholds(mut self, thresholds: SalienceThresholds) -> Self {
+        self.salience_thresholds = thresholds;
+        self
+    }
+
     /// Get a reference to the language implementation.
     pub fn language(&self) -> &dyn Language {
         &*self.language
@@ -91,15 +103,32 @@ impl Engine {
         self.discourse.borrow_mut().reset();
     }
 
-    /// Register a template string under a key. Multiple templates registered
-    /// under the same key become alternatives for variation.
+    /// Register a template string under a key with Medium salience.
+    /// Multiple templates registered under the same key become alternatives
+    /// for variation at that salience level.
     pub fn register_template(&mut self, key: &str, source: &str) -> Result<(), NlgError> {
+        self.register_template_at(key, source, Salience::Medium)
+    }
+
+    /// Register a template at a specific salience level. The engine selects
+    /// templates at the salience matching the rendered event's magnitude.
+    pub fn register_template_at(
+        &mut self,
+        key: &str,
+        source: &str,
+        salience: Salience,
+    ) -> Result<(), NlgError> {
         let template = Template::parse(source)?;
         self.templates
             .entry(key.to_string())
             .or_default()
-            .push(template);
+            .push((salience, template));
         Ok(())
+    }
+
+    /// Compute the salience for a context using this engine's thresholds.
+    pub fn context_salience(&self, ctx: &Context) -> Salience {
+        Salience::from_context(ctx, self.salience_thresholds)
     }
 
     /// Render a registered template with the given context.
@@ -108,7 +137,7 @@ impl Engine {
     /// template history, word frequency. Each call benefits from context
     /// established by previous calls. Use `reset()` between unrelated sequences.
     pub fn render(&self, key: &str, context: impl IntoContext) -> Result<String, NlgError> {
-        let alternatives = self
+        let all_alternatives = self
             .templates
             .get(key)
             .ok_or_else(|| NlgError::UnknownTemplate(key.to_string()))?;
@@ -132,9 +161,15 @@ impl Engine {
             discourse.select_connective(&relation)
         };
 
+        // Filter templates by salience level matching the context magnitude.
+        // Falls back to Medium, then any available template if the target
+        // salience has no registered templates.
+        let target_salience = self.context_salience(&context);
+        let alternatives = filter_by_salience(all_alternatives, target_salience);
+
         // Select template with choosebest scoring and anti-repeat
         let (template, variant_index) =
-            self.select_alternative_scored(key, alternatives, &context)?;
+            self.select_alternative_scored(key, &alternatives, &context)?;
 
         // Record template choice
         self.discourse
@@ -372,6 +407,13 @@ impl Engine {
                 }
                 let candidate = self.render_template(key, template, context)?;
                 candidates.push((i, candidate));
+            }
+
+            // If filtering left us with no candidates (e.g., only one template
+            // matches salience and it was last used), fall back to using it anyway.
+            if candidates.is_empty() {
+                let index = last_variant.unwrap_or(0).min(alternatives.len() - 1);
+                return Ok((&alternatives[index], index));
             }
 
             // Now score against discourse history (immutable borrow only)
@@ -820,6 +862,37 @@ fn prepend_replacing_subject(output: &str, connective: &str) -> String {
     }
     // Fallback: just prepend
     format!("{connective} {}", lowercase_first(output))
+}
+
+/// Filter templates to those matching the target salience level.
+///
+/// Fallback order:
+/// 1. Templates registered at the exact target salience.
+/// 2. Templates registered at Medium salience (the default).
+/// 3. All registered templates (degrades gracefully).
+fn filter_by_salience(
+    alternatives: &[SalientTemplate],
+    target: Salience,
+) -> Vec<Template> {
+    let exact: Vec<Template> = alternatives
+        .iter()
+        .filter(|(s, _)| *s == target)
+        .map(|(_, t)| t.clone())
+        .collect();
+    if !exact.is_empty() {
+        return exact;
+    }
+
+    let medium: Vec<Template> = alternatives
+        .iter()
+        .filter(|(s, _)| *s == Salience::Medium)
+        .map(|(_, t)| t.clone())
+        .collect();
+    if !medium.is_empty() {
+        return medium;
+    }
+
+    alternatives.iter().map(|(_, t)| t.clone()).collect()
 }
 
 /// Determine if a value is "truthy" for conditional rendering.

@@ -1,4 +1,4 @@
-use nlg_core::{Context, Engine, Strictness, Value, Variation, Sentence, Clause, Voice, entity, named, Tense};
+use nlg_core::{Context, Engine, Strictness, Value, Variation, Sentence, Clause, Voice, entity, named, Tense, Salience};
 use nlg_derive::IntoContext;
 use nlg_grammar_en::English;
 
@@ -661,4 +661,65 @@ fn conditional_section_skipped_when_key_missing() {
     let result = engine.render("t", &ctx).unwrap();
     // Should not include the conditional content
     assert!(!result.contains("maybe"), "Should skip missing-key conditional, got: {result}");
+}
+
+// ── Salience-based template selection ────────────────────────────────────
+
+#[test]
+fn salience_selects_correct_level() {
+    let mut engine = engine();
+    engine.register_template_at("event", "terse {name}", Salience::Low).unwrap();
+    engine.register_template("event", "standard {name} with impact").unwrap();
+    engine.register_template_at("event", "elaborate full account of {name}", Salience::High).unwrap();
+
+    let mut ctx_low = Context::new();
+    ctx_low.insert("name", Value::String("Foo".into()));
+    ctx_low.insert("consumer_count", Value::Number(0));
+
+    let mut ctx_med = Context::new();
+    ctx_med.insert("name", Value::String("Bar".into()));
+    ctx_med.insert("consumer_count", Value::Number(5));
+
+    let mut ctx_high = Context::new();
+    ctx_high.insert("name", Value::String("Baz".into()));
+    ctx_high.insert("consumer_count", Value::Number(50));
+
+    engine.reset();
+    let low = engine.render("event", &ctx_low).unwrap();
+    assert!(low.starts_with("terse"), "Expected low template, got: {low}");
+    engine.reset();
+    let med = engine.render("event", &ctx_med).unwrap();
+    assert!(med.starts_with("standard"), "Expected medium template, got: {med}");
+    engine.reset();
+    let high = engine.render("event", &ctx_high).unwrap();
+    assert!(high.starts_with("elaborate"), "Expected high template, got: {high}");
+}
+
+#[test]
+fn salience_falls_back_to_medium_when_level_missing() {
+    let mut engine = engine();
+    // Only register Medium
+    engine.register_template("event", "standard for {name}").unwrap();
+
+    let mut ctx = Context::new();
+    ctx.insert("name", Value::String("Foo".into()));
+    ctx.insert("consumer_count", Value::Number(50)); // Would be High
+
+    let result = engine.render("event", &ctx).unwrap();
+    assert!(result.contains("standard"), "Expected fallback to Medium, got: {result}");
+}
+
+#[test]
+fn explicit_salience_key_overrides_count() {
+    let mut engine = engine();
+    engine.register_template_at("event", "low {name}", Salience::Low).unwrap();
+    engine.register_template_at("event", "high {name}", Salience::High).unwrap();
+
+    let mut ctx = Context::new();
+    ctx.insert("name", Value::String("Foo".into()));
+    ctx.insert("consumer_count", Value::Number(50)); // Would normally be High
+    ctx.insert("salience", Value::String("low".into())); // Explicit override
+
+    let result = engine.render("event", &ctx).unwrap();
+    assert!(result.contains("low"), "Expected Low from explicit override, got: {result}");
 }
