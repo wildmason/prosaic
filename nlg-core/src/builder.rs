@@ -2,6 +2,15 @@ use crate::engine::Engine;
 use crate::error::NlgError;
 use crate::language::{Conjunction, Tense};
 
+/// Voice controls whether the verb is rendered in active or passive form.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Voice {
+    /// Active voice: "Foo renamed Foobar"
+    Active,
+    /// Passive voice: "Foo was renamed to Foobar"
+    Passive,
+}
+
 /// A subject in a sentence, optionally with an entity type prefix.
 #[derive(Debug, Clone)]
 pub struct Subject {
@@ -94,7 +103,11 @@ impl Clause {
 
     fn render(&self, engine: &Engine) -> Result<String, NlgError> {
         let lang = engine.language();
-        let mut parts = vec![self.intro.clone()];
+        let mut parts: Vec<String> = Vec::new();
+
+        if !self.intro.is_empty() {
+            parts.push(self.intro.clone());
+        }
 
         if let Some(amount) = self.amount {
             parts.push(amount.to_string());
@@ -134,6 +147,8 @@ impl Clause {
 pub struct Sentence {
     subject: Option<Subject>,
     verb: Option<(String, Tense)>,
+    voice: Voice,
+    preposition: Option<String>,
     object: Option<String>,
     clauses: Vec<Clause>,
 }
@@ -143,6 +158,8 @@ impl Sentence {
         Self {
             subject: None,
             verb: None,
+            voice: Voice::Passive,
+            preposition: None,
             object: None,
             clauses: Vec::new(),
         }
@@ -157,6 +174,23 @@ impl Sentence {
     /// Set the verb and its tense.
     pub fn verb(mut self, verb: &str, tense: Tense) -> Self {
         self.verb = Some((verb.to_string(), tense));
+        self
+    }
+
+    /// Set the voice (default: Passive).
+    ///
+    /// - `Voice::Passive`: "The class Foo was renamed to Foobar"
+    /// - `Voice::Active`: "The class Foo renamed Foobar"
+    pub fn voice(mut self, voice: Voice) -> Self {
+        self.voice = voice;
+        self
+    }
+
+    /// Set the preposition connecting the verb to the object (default: "to" for passive).
+    ///
+    /// e.g., `.preposition("into")` → "was converted into Bar"
+    pub fn preposition(mut self, prep: &str) -> Self {
+        self.preposition = Some(prep.to_string());
         self
     }
 
@@ -185,16 +219,41 @@ impl Sentence {
             }
         }
 
-        // Verb
+        // Verb (with voice handling)
         if let Some((ref verb, tense)) = self.verb {
-            let conjugated =
-                lang.conjugate(verb, tense, crate::language::Person::Third);
-            parts.push(conjugated);
+            match self.voice {
+                Voice::Passive if tense == Tense::Past => {
+                    let participle = lang.past_participle(verb);
+                    parts.push(format!("was {participle}"));
+                }
+                Voice::Passive if tense == Tense::Present => {
+                    let participle = lang.past_participle(verb);
+                    parts.push(format!("is {participle}"));
+                }
+                Voice::Passive if tense == Tense::Future => {
+                    let participle = lang.past_participle(verb);
+                    parts.push(format!("will be {participle}"));
+                }
+                _ => {
+                    let conjugated = lang.conjugate(verb, tense, crate::language::Person::Third);
+                    parts.push(conjugated);
+                }
+            }
         }
 
-        // Object
+        // Object (with preposition)
         if let Some(ref object) = self.object {
-            parts.push(object.clone());
+            match &self.preposition {
+                Some(prep) => parts.push(format!("{prep} {object}")),
+                None => {
+                    // Default preposition: "to" for passive voice, none for active
+                    if self.voice == Voice::Passive {
+                        parts.push(format!("to {object}"));
+                    } else {
+                        parts.push(object.clone());
+                    }
+                }
+            }
         }
 
         let mut sentence = parts.join(" ");
@@ -202,8 +261,10 @@ impl Sentence {
         // Clauses
         for clause in &self.clauses {
             let rendered = clause.render(engine)?;
-            sentence.push(' ');
-            sentence.push_str(&rendered);
+            if !rendered.is_empty() {
+                sentence.push(' ');
+                sentence.push_str(&rendered);
+            }
         }
 
         Ok(sentence)
@@ -248,6 +309,9 @@ mod tests {
                 Tense::Future => format!("will {verb}"),
             }
         }
+        fn past_participle(&self, verb: &str) -> String {
+            format!("{verb}ed")
+        }
         fn join_list(&self, items: &[&str], conjunction: Conjunction) -> String {
             let conj = match conjunction {
                 Conjunction::And => "and",
@@ -276,7 +340,7 @@ mod tests {
     }
 
     #[test]
-    fn simple_sentence() {
+    fn passive_voice_past_tense() {
         let engine = test_engine();
         let s = Sentence::new()
             .subject(entity("class", "Foo"))
@@ -285,11 +349,25 @@ mod tests {
             .render(&engine)
             .unwrap();
 
+        assert_eq!(s, "The class Foo was renameed to Foobar");
+    }
+
+    #[test]
+    fn active_voice_past_tense() {
+        let engine = test_engine();
+        let s = Sentence::new()
+            .subject(entity("class", "Foo"))
+            .verb("rename", Tense::Past)
+            .object("Foobar")
+            .voice(Voice::Active)
+            .render(&engine)
+            .unwrap();
+
         assert_eq!(s, "The class Foo renameed Foobar");
     }
 
     #[test]
-    fn sentence_with_clause() {
+    fn passive_voice_with_clause() {
         let engine = test_engine();
         let s = Sentence::new()
             .subject(entity("class", "Foo"))
@@ -305,12 +383,12 @@ mod tests {
 
         assert_eq!(
             s,
-            "The class Foo renameed Foobar which impacts 6 direct consumers"
+            "The class Foo was renameed to Foobar which impacts 6 direct consumers"
         );
     }
 
     #[test]
-    fn sentence_with_clause_and_list() {
+    fn passive_voice_with_clause_and_list() {
         let engine = test_engine();
         let s = Sentence::new()
             .subject(entity("class", "Foo"))
@@ -328,13 +406,13 @@ mod tests {
 
         assert_eq!(
             s,
-            "The class Foo renameed Foobar which impacts 6 direct consumers \
+            "The class Foo was renameed to Foobar which impacts 6 direct consumers \
              [Baz, Qux, Quux, and 3 more]"
         );
     }
 
     #[test]
-    fn sentence_without_entity_type() {
+    fn passive_voice_no_object() {
         let engine = test_engine();
         let s = Sentence::new()
             .subject(named("UserService"))
@@ -342,7 +420,63 @@ mod tests {
             .render(&engine)
             .unwrap();
 
+        assert_eq!(s, "UserService was modifyed");
+    }
+
+    #[test]
+    fn active_voice_no_object() {
+        let engine = test_engine();
+        let s = Sentence::new()
+            .subject(named("UserService"))
+            .verb("modify", Tense::Past)
+            .voice(Voice::Active)
+            .render(&engine)
+            .unwrap();
+
         assert_eq!(s, "UserService modifyed");
+    }
+
+    #[test]
+    fn custom_preposition() {
+        let engine = test_engine();
+        let s = Sentence::new()
+            .subject(entity("class", "Foo"))
+            .verb("convert", Tense::Past)
+            .preposition("into")
+            .object("Bar")
+            .render(&engine)
+            .unwrap();
+
+        assert_eq!(s, "The class Foo was converted into Bar");
+    }
+
+    #[test]
+    fn passive_present_tense() {
+        let engine = test_engine();
+        let s = Sentence::new()
+            .subject(entity("module", "Core"))
+            .verb("export", Tense::Present)
+            .clause(
+                Clause::with_intro("")
+                    .amount(5)
+                    .noun("component"),
+            )
+            .render(&engine)
+            .unwrap();
+
+        assert_eq!(s, "The module Core is exported 5 components");
+    }
+
+    #[test]
+    fn passive_future_tense() {
+        let engine = test_engine();
+        let s = Sentence::new()
+            .subject(entity("interface", "Foo"))
+            .verb("deprecate", Tense::Future)
+            .render(&engine)
+            .unwrap();
+
+        assert_eq!(s, "The interface Foo will be deprecateed");
     }
 
     #[test]
@@ -362,7 +496,7 @@ mod tests {
 
         assert_eq!(
             s,
-            "The method getData deleteed which impacts 2 callers [ComponentA and ComponentB]"
+            "The method getData was deleteed which impacts 2 callers [ComponentA and ComponentB]"
         );
     }
 }

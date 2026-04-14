@@ -37,6 +37,10 @@ impl Language for English {
         conjugate::conjugate(verb, tense, person)
     }
 
+    fn past_participle(&self, verb: &str) -> String {
+        conjugate::past_participle(verb)
+    }
+
     fn join_list(&self, items: &[&str], conjunction: Conjunction) -> String {
         lists::join_list(items, conjunction)
     }

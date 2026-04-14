@@ -10,5 +10,5 @@ pub use context::{Context, Value};
 pub use error::NlgError;
 pub use template::{Template, Pipe, PipeArg};
 pub use engine::{Engine, Variation, Strictness};
-pub use builder::{Sentence, Clause, Subject, entity, named};
+pub use builder::{Sentence, Clause, Subject, Voice, entity, named};
 pub use context::IntoContext;

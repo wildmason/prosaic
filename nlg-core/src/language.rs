@@ -39,6 +39,10 @@ pub trait Language: Send + Sync {
     /// Conjugate `verb` in the given `tense` and `person`.
     fn conjugate(&self, verb: &str, tense: Tense, person: Person) -> String;
 
+    /// Return the past participle of a verb (e.g., "broken", "renamed", "removed").
+    /// Used for passive voice constructions ("was renamed", "will be broken").
+    fn past_participle(&self, verb: &str) -> String;
+
     /// Join a list of items with the given conjunction.
     /// Should use the language's standard list format (e.g., Oxford comma in English).
     fn join_list(&self, items: &[&str], conjunction: Conjunction) -> String;

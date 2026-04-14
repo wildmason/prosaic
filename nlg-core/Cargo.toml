@@ -11,3 +11,4 @@ thiserror = "2"
 [dev-dependencies]
 nlg-derive = { path = "../nlg-derive" }
 nlg-grammar-en = { path = "../nlg-grammar-en" }
+nlg-vocab-code = { path = "../nlg-vocab-code" }

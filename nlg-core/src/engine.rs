@@ -384,6 +384,9 @@ mod tests {
                 Tense::Future => format!("will {verb}"),
             }
         }
+        fn past_participle(&self, verb: &str) -> String {
+            format!("{verb}ed")
+        }
         fn join_list(&self, items: &[&str], conjunction: Conjunction) -> String {
             let conj = match conjunction {
                 Conjunction::And => "and",

@@ -1,4 +1,4 @@
-use nlg_core::{Context, Engine, Strictness, Value, Variation, Sentence, Clause, entity, named, Tense};
+use nlg_core::{Context, Engine, Strictness, Value, Variation, Sentence, Clause, Voice, entity, named, Tense};
 use nlg_derive::IntoContext;
 use nlg_grammar_en::English;
 
@@ -79,13 +79,39 @@ fn full_rename_scenario_single_consumer() {
 // ── Builder API end-to-end ───────────────────────────────────────────────
 
 #[test]
-fn builder_full_sentence() {
+fn builder_full_sentence_passive() {
     let engine = engine();
 
     let result = Sentence::new()
         .subject(entity("class", "Foo"))
         .verb("rename", Tense::Past)
         .object("Foobar")
+        .clause(
+            Clause::which("impacts")
+                .amount(6)
+                .noun("direct consumer")
+                .list(&["Baz", "Qux", "Quux", "Corge", "Grault", "Garply"])
+                .truncate(3),
+        )
+        .render(&engine)
+        .unwrap();
+
+    assert_eq!(
+        result,
+        "The class Foo was renamed to Foobar which impacts 6 direct consumers \
+         [Baz, Qux, Quux, and 3 more]"
+    );
+}
+
+#[test]
+fn builder_full_sentence_active() {
+    let engine = engine();
+
+    let result = Sentence::new()
+        .subject(entity("class", "Foo"))
+        .verb("rename", Tense::Past)
+        .object("Foobar")
+        .voice(Voice::Active)
         .clause(
             Clause::which("impacts")
                 .amount(6)
@@ -113,16 +139,35 @@ fn builder_simple_deletion() {
         .render(&engine)
         .unwrap();
 
-    assert_eq!(result, "processOrder removed");
+    assert_eq!(result, "processOrder was removed");
 }
 
 #[test]
-fn builder_future_tense() {
+fn builder_future_tense_passive() {
     let engine = engine();
 
     let result = Sentence::new()
         .subject(entity("method", "fetchData"))
         .verb("break", Tense::Future)
+        .clause(
+            Clause::with_intro("in")
+                .amount(3)
+                .noun("test"),
+        )
+        .render(&engine)
+        .unwrap();
+
+    assert_eq!(result, "The method fetchData will be broken in 3 tests");
+}
+
+#[test]
+fn builder_future_tense_active() {
+    let engine = engine();
+
+    let result = Sentence::new()
+        .subject(entity("method", "fetchData"))
+        .verb("break", Tense::Future)
+        .voice(Voice::Active)
         .clause(
             Clause::with_intro("in")
                 .amount(3)

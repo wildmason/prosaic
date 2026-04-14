@@ -1,88 +1,88 @@
 use nlg_core::{Person, Tense};
 
 /// Common irregular verb forms: (base, past, past_participle).
-/// We use the past form for Past tense and base for Present/Future.
-const IRREGULAR_VERBS: &[(&str, &str)] = &[
-    ("be", "was"),
-    ("become", "became"),
-    ("begin", "began"),
-    ("break", "broke"),
-    ("bring", "brought"),
-    ("build", "built"),
-    ("buy", "bought"),
-    ("can", "could"),
-    ("catch", "caught"),
-    ("choose", "chose"),
-    ("come", "came"),
-    ("cost", "cost"),
-    ("cut", "cut"),
-    ("do", "did"),
-    ("draw", "drew"),
-    ("drive", "drove"),
-    ("eat", "ate"),
-    ("fall", "fell"),
-    ("feel", "felt"),
-    ("find", "found"),
-    ("fly", "flew"),
-    ("forget", "forgot"),
-    ("get", "got"),
-    ("give", "gave"),
-    ("go", "went"),
-    ("grow", "grew"),
-    ("have", "had"),
-    ("hear", "heard"),
-    ("hide", "hid"),
-    ("hit", "hit"),
-    ("hold", "held"),
-    ("hurt", "hurt"),
-    ("keep", "kept"),
-    ("know", "knew"),
-    ("lead", "led"),
-    ("leave", "left"),
-    ("lend", "lent"),
-    ("let", "let"),
-    ("lose", "lost"),
-    ("make", "made"),
-    ("mean", "meant"),
-    ("meet", "met"),
-    ("move", "moved"),
-    ("pay", "paid"),
-    ("put", "put"),
-    ("read", "read"),
-    ("remove", "removed"),
-    ("rename", "renamed"),
-    ("ride", "rode"),
-    ("ring", "rang"),
-    ("rise", "rose"),
-    ("run", "ran"),
-    ("say", "said"),
-    ("see", "saw"),
-    ("sell", "sold"),
-    ("send", "sent"),
-    ("set", "set"),
-    ("show", "showed"),
-    ("shut", "shut"),
-    ("sing", "sang"),
-    ("sit", "sat"),
-    ("sleep", "slept"),
-    ("speak", "spoke"),
-    ("spend", "spent"),
-    ("split", "split"),
-    ("stand", "stood"),
-    ("steal", "stole"),
-    ("strike", "struck"),
-    ("swim", "swam"),
-    ("take", "took"),
-    ("teach", "taught"),
-    ("tell", "told"),
-    ("think", "thought"),
-    ("throw", "threw"),
-    ("understand", "understood"),
-    ("update", "updated"),
-    ("wake", "woke"),
-    ("wear", "wore"),
-    ("win", "won"),
-    ("write", "wrote"),
+/// When past == past_participle, the third element still must be present.
+const IRREGULAR_VERBS: &[(&str, &str, &str)] = &[
+    ("be", "was", "been"),
+    ("become", "became", "become"),
+    ("begin", "began", "begun"),
+    ("break", "broke", "broken"),
+    ("bring", "brought", "brought"),
+    ("build", "built", "built"),
+    ("buy", "bought", "bought"),
+    ("can", "could", "could"),
+    ("catch", "caught", "caught"),
+    ("choose", "chose", "chosen"),
+    ("come", "came", "come"),
+    ("cost", "cost", "cost"),
+    ("cut", "cut", "cut"),
+    ("do", "did", "done"),
+    ("draw", "drew", "drawn"),
+    ("drive", "drove", "driven"),
+    ("eat", "ate", "eaten"),
+    ("fall", "fell", "fallen"),
+    ("feel", "felt", "felt"),
+    ("find", "found", "found"),
+    ("fly", "flew", "flown"),
+    ("forget", "forgot", "forgotten"),
+    ("get", "got", "gotten"),
+    ("give", "gave", "given"),
+    ("go", "went", "gone"),
+    ("grow", "grew", "grown"),
+    ("have", "had", "had"),
+    ("hear", "heard", "heard"),
+    ("hide", "hid", "hidden"),
+    ("hit", "hit", "hit"),
+    ("hold", "held", "held"),
+    ("hurt", "hurt", "hurt"),
+    ("keep", "kept", "kept"),
+    ("know", "knew", "known"),
+    ("lead", "led", "led"),
+    ("leave", "left", "left"),
+    ("lend", "lent", "lent"),
+    ("let", "let", "let"),
+    ("lose", "lost", "lost"),
+    ("make", "made", "made"),
+    ("mean", "meant", "meant"),
+    ("meet", "met", "met"),
+    ("move", "moved", "moved"),
+    ("pay", "paid", "paid"),
+    ("put", "put", "put"),
+    ("read", "read", "read"),
+    ("remove", "removed", "removed"),
+    ("rename", "renamed", "renamed"),
+    ("ride", "rode", "ridden"),
+    ("ring", "rang", "rung"),
+    ("rise", "rose", "risen"),
+    ("run", "ran", "run"),
+    ("say", "said", "said"),
+    ("see", "saw", "seen"),
+    ("sell", "sold", "sold"),
+    ("send", "sent", "sent"),
+    ("set", "set", "set"),
+    ("show", "showed", "shown"),
+    ("shut", "shut", "shut"),
+    ("sing", "sang", "sung"),
+    ("sit", "sat", "sat"),
+    ("sleep", "slept", "slept"),
+    ("speak", "spoke", "spoken"),
+    ("spend", "spent", "spent"),
+    ("split", "split", "split"),
+    ("stand", "stood", "stood"),
+    ("steal", "stole", "stolen"),
+    ("strike", "struck", "struck"),
+    ("swim", "swam", "swum"),
+    ("take", "took", "taken"),
+    ("teach", "taught", "taught"),
+    ("tell", "told", "told"),
+    ("think", "thought", "thought"),
+    ("throw", "threw", "thrown"),
+    ("understand", "understood", "understood"),
+    ("update", "updated", "updated"),
+    ("wake", "woke", "woken"),
+    ("wear", "wore", "worn"),
+    ("win", "won", "won"),
+    ("write", "wrote", "written"),
 ];
 
 /// Conjugate a verb in the given tense and person.
@@ -94,17 +94,39 @@ pub fn conjugate(verb: &str, tense: Tense, person: Person) -> String {
     }
 }
 
+/// Return the past participle of a verb.
+/// For regular verbs this is the same as the past tense.
+/// For irregular verbs it may differ (e.g., "broke" vs "broken").
+pub fn past_participle(verb: &str) -> String {
+    let lower = verb.to_lowercase();
+
+    for &(base, _, participle) in IRREGULAR_VERBS {
+        if lower == base {
+            return participle.to_string();
+        }
+    }
+
+    // Regular verbs: past participle == past tense
+    regular_past(verb)
+}
+
 fn past_tense(verb: &str) -> String {
     let lower = verb.to_lowercase();
 
     // Check irregular verbs
-    for &(base, past) in IRREGULAR_VERBS {
+    for &(base, past, _) in IRREGULAR_VERBS {
         if lower == base {
             return past.to_string();
         }
     }
 
-    // Regular past tense rules
+    regular_past(verb)
+}
+
+/// Regular past tense / past participle rules (shared by both).
+fn regular_past(verb: &str) -> String {
+    let lower = verb.to_lowercase();
+
     if lower.ends_with('e') {
         return format!("{verb}d");
     }
@@ -295,5 +317,56 @@ mod tests {
     fn first_and_second_person_present_unchanged() {
         assert_eq!(conjugate("walk", Tense::Present, Person::First), "walk");
         assert_eq!(conjugate("walk", Tense::Present, Person::Second), "walk");
+    }
+
+    // Past participle tests
+
+    #[test]
+    fn regular_past_participle() {
+        assert_eq!(past_participle("walk"), "walked");
+        assert_eq!(past_participle("create"), "created");
+        assert_eq!(past_participle("rename"), "renamed");
+        assert_eq!(past_participle("stop"), "stopped");
+    }
+
+    #[test]
+    fn irregular_past_participle_differs_from_past() {
+        assert_eq!(past_participle("break"), "broken");
+        assert_eq!(past_participle("choose"), "chosen");
+        assert_eq!(past_participle("drive"), "driven");
+        assert_eq!(past_participle("eat"), "eaten");
+        assert_eq!(past_participle("forget"), "forgotten");
+        assert_eq!(past_participle("give"), "given");
+        assert_eq!(past_participle("go"), "gone");
+        assert_eq!(past_participle("hide"), "hidden");
+        assert_eq!(past_participle("know"), "known");
+        assert_eq!(past_participle("see"), "seen");
+        assert_eq!(past_participle("show"), "shown");
+        assert_eq!(past_participle("speak"), "spoken");
+        assert_eq!(past_participle("steal"), "stolen");
+        assert_eq!(past_participle("take"), "taken");
+        assert_eq!(past_participle("throw"), "thrown");
+        assert_eq!(past_participle("write"), "written");
+    }
+
+    #[test]
+    fn irregular_past_participle_same_as_past() {
+        assert_eq!(past_participle("build"), "built");
+        assert_eq!(past_participle("buy"), "bought");
+        assert_eq!(past_participle("find"), "found");
+        assert_eq!(past_participle("keep"), "kept");
+        assert_eq!(past_participle("make"), "made");
+        assert_eq!(past_participle("sell"), "sold");
+        assert_eq!(past_participle("send"), "sent");
+        assert_eq!(past_participle("think"), "thought");
+    }
+
+    #[test]
+    fn past_participle_unchanged_verbs() {
+        assert_eq!(past_participle("cut"), "cut");
+        assert_eq!(past_participle("hit"), "hit");
+        assert_eq!(past_participle("put"), "put");
+        assert_eq!(past_participle("set"), "set");
+        assert_eq!(past_participle("split"), "split");
     }
 }
