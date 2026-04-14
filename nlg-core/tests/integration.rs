@@ -18,7 +18,7 @@ fn full_rename_scenario() {
             "renamed",
             "The {entity_type} {old_name} was renamed to {new_name} \
              which impacts {count} direct {count|pluralize:consumer} \
-             [{consumers|truncate:3|join}]",
+             {consumers|truncate:3|join:bracketed}",
         )
         .unwrap();
 
@@ -217,7 +217,7 @@ fn derive_with_template_rendering() {
 // ── Variation determinism ────────────────────────────────────────────────
 
 #[test]
-fn seeded_variation_is_deterministic_across_calls() {
+fn seeded_variation_is_deterministic_from_fresh_state() {
     let mut engine = Engine::new(English::new())
         .strictness(Strictness::Strict)
         .variation(Variation::Seeded(42));
@@ -228,16 +228,19 @@ fn seeded_variation_is_deterministic_across_calls() {
 
     let ctx = Context::new();
 
-    let results: Vec<String> = (0..10)
-        .map(|_| engine.render("t", &ctx).unwrap())
-        .collect();
+    // From fresh state, same seed produces same result
+    let result1 = engine.render("t", &ctx).unwrap();
+    engine.reset();
+    let result2 = engine.render("t", &ctx).unwrap();
+    engine.reset();
+    let result3 = engine.render("t", &ctx).unwrap();
 
-    // All calls with same seed and key produce identical output
-    assert!(results.iter().all(|r| r == &results[0]));
+    assert_eq!(result1, result2);
+    assert_eq!(result2, result3);
 }
 
 #[test]
-fn fixed_variation_always_first() {
+fn fixed_variation_picks_first_on_fresh_render() {
     let mut engine = Engine::new(English::new())
         .strictness(Strictness::Strict)
         .variation(Variation::Fixed);
@@ -248,9 +251,33 @@ fn fixed_variation_always_first() {
 
     let ctx = Context::new();
 
-    for _ in 0..10 {
-        assert_eq!(engine.render("t", &ctx).unwrap(), "alpha");
-    }
+    // First render always picks first variant
+    assert_eq!(engine.render("t", &ctx).unwrap(), "alpha");
+
+    // After reset, picks first again
+    engine.reset();
+    assert_eq!(engine.render("t", &ctx).unwrap(), "alpha");
+}
+
+#[test]
+fn discourse_avoids_repeating_same_variant() {
+    let mut engine = Engine::new(English::new())
+        .strictness(Strictness::Strict)
+        .variation(Variation::Fixed);
+
+    engine.register_template("t", "alpha").unwrap();
+    engine.register_template("t", "beta").unwrap();
+    engine.register_template("t", "gamma").unwrap();
+
+    let ctx = Context::new();
+
+    let r1 = engine.render("t", &ctx).unwrap();
+    let r2 = engine.render("t", &ctx).unwrap();
+    let r3 = engine.render("t", &ctx).unwrap();
+
+    // Discourse-aware engine avoids immediate repetition
+    assert_ne!(r1, r2);
+    assert_ne!(r2, r3);
 }
 
 // ── Strictness modes end-to-end ──────────────────────────────────────────
@@ -397,7 +424,7 @@ fn snapshot_angular_service_rename() {
         .register_template(
             "change",
             "The {entity_type} {old_name} was renamed to {new_name} which impacts \
-             {count} direct {count|pluralize:consumer} [{consumers|truncate:3|join}]",
+             {count} direct {count|pluralize:consumer} {consumers|truncate:3|join:bracketed}",
         )
         .unwrap();
 

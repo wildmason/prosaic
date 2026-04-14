@@ -4,6 +4,7 @@ mod error;
 mod template;
 mod engine;
 mod builder;
+mod discourse;
 
 pub use language::{Language, Tense, Person, Conjunction};
 pub use context::{Context, Value};
@@ -12,3 +13,4 @@ pub use template::{Template, Pipe, PipeArg};
 pub use engine::{Engine, Variation, Strictness};
 pub use builder::{Sentence, Clause, Subject, Voice, entity, named};
 pub use context::IntoContext;
+pub use discourse::{ListStyle, ReferenceForm};

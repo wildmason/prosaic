@@ -1,7 +1,9 @@
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::context::{Context, IntoContext, Value};
+use crate::discourse::{DiscourseState, ListStyle};
 use crate::error::NlgError;
 use crate::language::{Conjunction, Language};
 use crate::template::{Pipe, PipeArg, Segment, Template};
@@ -44,13 +46,14 @@ impl Default for Variation {
 }
 
 /// The core NLG engine. Holds a language implementation, template registry,
-/// and configuration for rendering.
+/// configuration, and discourse state for natural cross-sentence rendering.
 pub struct Engine {
     language: Box<dyn Language>,
     templates: HashMap<String, Vec<Template>>,
     strictness: Strictness,
     variation: Variation,
     round_robin_counters: HashMap<String, AtomicUsize>,
+    discourse: RefCell<DiscourseState>,
 }
 
 impl Engine {
@@ -62,6 +65,7 @@ impl Engine {
             strictness: Strictness::default(),
             variation: Variation::default(),
             round_robin_counters: HashMap::new(),
+            discourse: RefCell::new(DiscourseState::new()),
         }
     }
 
@@ -82,6 +86,11 @@ impl Engine {
         &*self.language
     }
 
+    /// Clear all discourse state. Call this between unrelated rendering contexts.
+    pub fn reset(&self) {
+        self.discourse.borrow_mut().reset();
+    }
+
     /// Register a template string under a key. Multiple templates registered
     /// under the same key become alternatives for variation.
     pub fn register_template(&mut self, key: &str, source: &str) -> Result<(), NlgError> {
@@ -94,35 +103,234 @@ impl Engine {
     }
 
     /// Render a registered template with the given context.
+    ///
+    /// The engine tracks discourse state across calls: entity mentions,
+    /// template history, word frequency. Each call benefits from context
+    /// established by previous calls. Use `reset()` between unrelated sequences.
     pub fn render(&self, key: &str, context: impl IntoContext) -> Result<String, NlgError> {
         let alternatives = self
             .templates
             .get(key)
             .ok_or_else(|| NlgError::UnknownTemplate(key.to_string()))?;
 
-        let template = self.select_alternative(key, alternatives);
         let context = context.into_context();
-        self.render_template(key, template, &context)
+
+        // Advance discourse state
+        self.discourse.borrow_mut().begin_render();
+
+        // Extract entity info from context for discourse tracking
+        let entity_name = context
+            .get("name")
+            .or_else(|| context.get("old_name"))
+            .map(|v| v.as_display());
+        let entity_type = context.get("entity_type").map(|v| v.as_display());
+
+        // Detect discourse connective
+        let connective = {
+            let mut discourse = self.discourse.borrow_mut();
+            let relation = discourse.detect_relation(key, entity_name.as_deref());
+            discourse.select_connective(&relation)
+        };
+
+        // Select template with choosebest scoring and anti-repeat
+        let (template, variant_index) =
+            self.select_alternative_scored(key, alternatives, &context)?;
+
+        // Record template choice
+        self.discourse
+            .borrow_mut()
+            .record_template_choice(key, variant_index);
+
+        // Render the template
+        let mut output = self.render_template(key, template, &context)?;
+
+        // Prepend discourse connective if applicable
+        if let Some(conn) = connective {
+            // "It also" needs to replace the subject, others prepend
+            if conn.starts_with("It ") {
+                // Replace "The {type} {name}" at the start with the connective
+                output = prepend_replacing_subject(&output, conn);
+            } else {
+                output = format!("{conn} {}", lowercase_first(&output));
+            }
+        }
+
+        // Record entity mention in discourse state
+        if let (Some(name), Some(etype)) = (&entity_name, &entity_type) {
+            self.discourse
+                .borrow_mut()
+                .mention_entity(name, etype);
+        }
+
+        // Record output words for future repetition scoring
+        self.discourse
+            .borrow_mut()
+            .record_output_words(&output);
+
+        Ok(output)
     }
 
     /// Render a one-off template string (not registered) with the given context.
-    pub fn render_inline(&self, source: &str, context: impl IntoContext) -> Result<String, NlgError> {
+    /// Inline templates do not participate in discourse tracking (no connectives,
+    /// no entity tracking) but do record output words for repetition scoring.
+    pub fn render_inline(
+        &self,
+        source: &str,
+        context: impl IntoContext,
+    ) -> Result<String, NlgError> {
         let template = Template::parse(source)?;
         let context = context.into_context();
-        self.render_template("<inline>", &template, &context)
+        let output = self.render_template("<inline>", &template, &context)?;
+        self.discourse
+            .borrow_mut()
+            .record_output_words(&output);
+        Ok(output)
     }
 
-    fn select_alternative<'a>(&self, key: &str, alternatives: &'a [Template]) -> &'a Template {
-        if alternatives.len() == 1 {
-            return &alternatives[0];
+    /// Render a batch of events as a cohesive paragraph.
+    ///
+    /// Compared to calling `render()` sequentially, batch rendering can:
+    /// - Aggregate events with shared subjects ("was renamed and moved")
+    /// - Order events for narrative flow
+    /// - Insert discourse connectives between sentences
+    pub fn render_batch(
+        &self,
+        events: &[(&str, Context)],
+    ) -> Result<String, NlgError> {
+        if events.is_empty() {
+            return Ok(String::new());
         }
 
-        let index = match self.variation {
+        // Group events by entity name for potential aggregation
+        let mut sentences: Vec<String> = Vec::new();
+        let mut i = 0;
+
+        while i < events.len() {
+            let (key, ref ctx) = events[i];
+            let entity_name = ctx
+                .get("name")
+                .or_else(|| ctx.get("old_name"))
+                .map(|v| v.as_display());
+
+            // Look ahead for aggregation: same entity, different action
+            let mut aggregated = vec![i];
+            if let Some(ref name) = entity_name {
+                let mut j = i + 1;
+                while j < events.len() {
+                    let (_, ref next_ctx) = events[j];
+                    let next_name = next_ctx
+                        .get("name")
+                        .or_else(|| next_ctx.get("old_name"))
+                        .map(|v| v.as_display());
+                    if next_name.as_deref() == Some(name.as_str()) {
+                        aggregated.push(j);
+                        j += 1;
+                    } else {
+                        break;
+                    }
+                }
+            }
+
+            if aggregated.len() > 1 {
+                // Render first event normally, then aggregate subsequent actions
+                let sentence = self.render(key, &events[aggregated[0]].1)?;
+
+                // Extract verb phrases from subsequent events and append with "and"
+                let mut additional_actions: Vec<String> = Vec::new();
+                for &idx in &aggregated[1..] {
+                    let (agg_key, ref agg_ctx) = events[idx];
+                    // Render the additional event and extract the action part
+                    let full = self.render(agg_key, agg_ctx)?;
+                    // Try to extract just the action (after "was " or similar)
+                    if let Some(action) = extract_action_phrase(&full) {
+                        additional_actions.push(action);
+                    } else {
+                        // Can't extract — render as separate sentence
+                        sentences.push(full);
+                    }
+                }
+
+                if additional_actions.is_empty() {
+                    sentences.push(sentence);
+                } else {
+                    // Append aggregated actions with "and"
+                    let combined = format!(
+                        "{} and {}",
+                        sentence.trim_end_matches('.'),
+                        additional_actions.join(" and ")
+                    );
+                    sentences.push(combined);
+                }
+
+                i += aggregated.len();
+            } else {
+                sentences.push(self.render(key, &events[i].1)?);
+                i += 1;
+            }
+        }
+
+        Ok(sentences.join(" "))
+    }
+
+    fn select_alternative_scored<'a>(
+        &self,
+        key: &str,
+        alternatives: &'a [Template],
+        context: &Context,
+    ) -> Result<(&'a Template, usize), NlgError> {
+        if alternatives.len() == 1 {
+            return Ok((&alternatives[0], 0));
+        }
+
+        // Extract what we need from discourse, then drop the borrow
+        // so render_template can borrow_mut for list style selection.
+        let (last_variant, is_first) = {
+            let discourse = self.discourse.borrow();
+            (
+                discourse.last_template_variant(key),
+                discourse.is_first_render(),
+            )
+        };
+
+        // If we have discourse history and multiple alternatives, use choosebest
+        if !is_first && alternatives.len() > 1 {
+            // Render all candidates first (this may borrow_mut discourse for list styles)
+            let mut candidates: Vec<(usize, String)> = Vec::new();
+            for (i, template) in alternatives.iter().enumerate() {
+                if Some(i) == last_variant {
+                    continue;
+                }
+                let candidate = self.render_template(key, template, context)?;
+                candidates.push((i, candidate));
+            }
+
+            // Now score against discourse history (immutable borrow only)
+            let discourse = self.discourse.borrow();
+            let mut best_index = candidates[0].0;
+            let mut best_score = f64::MAX;
+
+            for (i, candidate) in &candidates {
+                let score = discourse.repetition_score(candidate);
+                if score < best_score {
+                    best_score = score;
+                    best_index = *i;
+                }
+            }
+
+            return Ok((&alternatives[best_index], best_index));
+        }
+
+        // Fall back to standard variation selection
+        let index = self.select_variant_index(key, alternatives.len());
+        Ok((&alternatives[index], index))
+    }
+
+    fn select_variant_index(&self, key: &str, count: usize) -> usize {
+        match self.variation {
             Variation::Fixed => 0,
             Variation::Seeded(seed) => {
-                // Simple hash-based selection: mix seed with key
                 let hash = simple_hash(key, seed);
-                hash as usize % alternatives.len()
+                hash as usize % count
             }
             Variation::RoundRobin => {
                 let counter = self
@@ -130,20 +338,16 @@ impl Engine {
                     .get(key)
                     .map(|c| c.fetch_add(1, Ordering::Relaxed))
                     .unwrap_or(0);
-                counter % alternatives.len()
+                counter % count
             }
             Variation::Random => {
-                // Use a simple time-based approach for non-deterministic selection.
-                // Not cryptographically random, but good enough for text variation.
                 let nanos = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap_or_default()
                     .subsec_nanos() as usize;
-                nanos % alternatives.len()
+                nanos % count
             }
-        };
-
-        &alternatives[index]
+        }
     }
 
     fn render_template(
@@ -157,7 +361,10 @@ impl Engine {
         for segment in &template.segments {
             match segment {
                 Segment::Literal(text) => output.push_str(text),
-                Segment::Slot { key: slot_key, pipes } => {
+                Segment::Slot {
+                    key: slot_key,
+                    pipes,
+                } => {
                     let rendered = self.render_slot(key, slot_key, pipes, context)?;
                     output.push_str(&rendered);
                 }
@@ -263,13 +470,48 @@ impl Engine {
             reason: "value must be a list".to_string(),
         })?;
 
+        // Check for explicit style override
+        let forced_style = match &pipe.arg {
+            Some(PipeArg::String(s)) if s == "bracketed" => Some(ListStyle::Bracketed),
+            Some(PipeArg::String(s)) if s == "including" => Some(ListStyle::Including),
+            Some(PipeArg::String(s)) if s == "such_as" => Some(ListStyle::SuchAs),
+            Some(PipeArg::String(s)) if s == "dash" => Some(ListStyle::Dash),
+            _ => None,
+        };
+
         let conjunction = match &pipe.arg {
             Some(PipeArg::String(s)) if s == "or" => Conjunction::Or,
             _ => Conjunction::And,
         };
 
+        // Determine list style
+        let style = forced_style.unwrap_or_else(|| {
+            self.discourse.borrow_mut().next_list_style()
+        });
+
         let refs: Vec<&str> = items.iter().map(|s| s.as_str()).collect();
-        Ok(Value::String(self.language.join_list(&refs, conjunction)))
+
+        // Check if the list was truncated (last item matches "N more" pattern)
+        let has_truncation = items.last().is_some_and(|last| {
+            last.ends_with(" more")
+                && last.split_whitespace().next().is_some_and(|w| w.parse::<usize>().is_ok())
+        });
+
+        if has_truncation && items.len() >= 2 {
+            let shown = &refs[..refs.len() - 1];
+            let remainder = &items[items.len() - 1]; // e.g., "3 more"
+            Ok(Value::String(format_truncated_list(
+                shown,
+                remainder,
+                style,
+                conjunction,
+                &*self.language,
+            )))
+        } else {
+            // No truncation — use standard join, but apply list style wrapper
+            let joined = self.language.join_list(&refs, conjunction);
+            Ok(Value::String(joined))
+        }
     }
 
     fn pipe_ordinal(&self, value: &Value) -> Result<Value, NlgError> {
@@ -312,8 +554,6 @@ impl Engine {
 
         let remaining = items.len() - max;
         let mut truncated: Vec<String> = items[..max].to_vec();
-        // Use "{N} more" without "and" — the join pipe's conjunction
-        // will supply "and" or "or" naturally.
         let suffix = format!("{remaining} more");
         truncated.push(suffix);
 
@@ -324,6 +564,37 @@ impl Engine {
         let s = value.as_display();
         let capitalized = capitalize_first(&s);
         Ok(Value::String(capitalized))
+    }
+}
+
+/// Format a truncated list with natural style.
+fn format_truncated_list(
+    shown: &[&str],
+    remainder: &str,
+    style: ListStyle,
+    conjunction: Conjunction,
+    language: &dyn Language,
+) -> String {
+    let joined = language.join_list(shown, conjunction);
+    match style {
+        ListStyle::Including => {
+            format!("including {joined} among others")
+        }
+        ListStyle::SuchAs => {
+            format!("such as {joined}")
+        }
+        ListStyle::Dash => {
+            format!("\u{2014} notably {joined}, plus {remainder}")
+        }
+        ListStyle::Bracketed => {
+            let refs: Vec<&str> = shown
+                .iter()
+                .copied()
+                .chain(std::iter::once(remainder.trim()))
+                .collect();
+            let all_joined = language.join_list(&refs, conjunction);
+            format!("[{all_joined}]")
+        }
     }
 }
 
@@ -340,6 +611,48 @@ fn capitalize_first(s: &str) -> String {
             result
         }
     }
+}
+
+fn lowercase_first(s: &str) -> String {
+    let mut chars = s.chars();
+    match chars.next() {
+        None => String::new(),
+        Some(c) => {
+            let mut result = String::with_capacity(s.len());
+            for lower in c.to_lowercase() {
+                result.push(lower);
+            }
+            result.extend(chars);
+            result
+        }
+    }
+}
+
+/// Try to replace "The {type} {name} was ..." with a connective like "It also was ..."
+fn prepend_replacing_subject(output: &str, connective: &str) -> String {
+    // Look for pattern: "The <word> <word> was" or "The <word> <word> has"
+    if let Some(rest) = output.strip_prefix("The ") {
+        // Skip entity_type and name (two words)
+        let words: Vec<&str> = rest.splitn(3, ' ').collect();
+        if words.len() >= 3 {
+            return format!("{connective} {}", words[2..].join(" "));
+        }
+    }
+    // Fallback: just prepend
+    format!("{connective} {}", lowercase_first(output))
+}
+
+/// Try to extract the action phrase from a rendered sentence.
+/// e.g., from "The class Foo was renamed to Bar" → "renamed to Bar"
+fn extract_action_phrase(sentence: &str) -> Option<String> {
+    // Look for "was <past_participle> ..." pattern
+    if let Some(idx) = sentence.find(" was ") {
+        let after_was = &sentence[idx + 5..];
+        if !after_was.is_empty() {
+            return Some(after_was.to_string());
+        }
+    }
+    None
 }
 
 /// Simple non-cryptographic hash for seeded variation.
@@ -420,6 +733,8 @@ mod tests {
         Engine::new(TestLang)
     }
 
+    // ── Basic rendering (backward compatibility) ─────────────────────────
+
     #[test]
     fn render_simple_substitution() {
         let mut engine = test_engine();
@@ -482,6 +797,7 @@ mod tests {
         ctx.insert("n", Value::Number(1));
         assert_eq!(engine.render("count", &ctx).unwrap(), "1 item");
 
+        engine.reset();
         ctx.insert("n", Value::Number(5));
         assert_eq!(engine.render("count", &ctx).unwrap(), "5 items");
     }
@@ -497,6 +813,7 @@ mod tests {
         ctx.insert("thing", Value::String("apple".into()));
         assert_eq!(engine.render("a", &ctx).unwrap(), "an apple");
 
+        engine.reset();
         ctx.insert("thing", Value::String("banana".into()));
         assert_eq!(engine.render("a", &ctx).unwrap(), "a banana");
     }
@@ -532,10 +849,10 @@ mod tests {
     }
 
     #[test]
-    fn render_truncate_then_join() {
+    fn render_truncate_then_join_bracketed() {
         let mut engine = test_engine();
         engine
-            .register_template("t", "{items|truncate:2|join}")
+            .register_template("t", "{items|truncate:2|join:bracketed}")
             .unwrap();
 
         let mut ctx = Context::new();
@@ -549,7 +866,7 @@ mod tests {
                 "e".into(),
             ]),
         );
-        assert_eq!(engine.render("t", &ctx).unwrap(), "a, b, and 3 more");
+        assert_eq!(engine.render("t", &ctx).unwrap(), "[a, b, and 3 more]");
     }
 
     #[test]
@@ -593,9 +910,9 @@ mod tests {
         engine.register_template("t", "second").unwrap();
 
         let ctx = Context::new();
-        for _ in 0..10 {
-            assert_eq!(engine.render("t", &ctx).unwrap(), "first");
-        }
+        // First render always picks first (no discourse history yet)
+        let result = engine.render("t", &ctx).unwrap();
+        assert_eq!(result, "first");
     }
 
     #[test]
@@ -606,6 +923,7 @@ mod tests {
 
         let ctx = Context::new();
         let result1 = engine.render("t", &ctx).unwrap();
+        engine.reset();
         let result2 = engine.render("t", &ctx).unwrap();
         assert_eq!(result1, result2);
     }
@@ -643,5 +961,83 @@ mod tests {
             engine.render("entity.renamed", &ctx).unwrap(),
             "The class Foo was renamed to Foobar which impacts 6 direct consumers"
         );
+    }
+
+    // ── Discourse-aware tests ────────────────────────────────────────────
+
+    #[test]
+    fn reset_clears_discourse_state() {
+        let mut engine = test_engine();
+        engine
+            .register_template("t", "The {entity_type} {name} was modified")
+            .unwrap();
+
+        let mut ctx = Context::new();
+        ctx.insert("entity_type", Value::String("class".into()));
+        ctx.insert("name", Value::String("Foo".into()));
+
+        engine.render("t", &ctx).unwrap();
+        engine.reset();
+
+        // After reset, should behave as if first render
+        let result = engine.render("t", &ctx).unwrap();
+        assert!(result.starts_with("The class Foo"));
+    }
+
+    #[test]
+    fn template_anti_repeat_with_multiple_variants() {
+        let mut engine = test_engine();
+        engine.register_template("t", "variant A").unwrap();
+        engine.register_template("t", "variant B").unwrap();
+        engine.register_template("t", "variant C").unwrap();
+
+        let ctx = Context::new();
+        let r1 = engine.render("t", &ctx).unwrap();
+        let r2 = engine.render("t", &ctx).unwrap();
+
+        // Second render should pick a different variant than the first
+        assert_ne!(r1, r2);
+    }
+
+    #[test]
+    fn list_style_cycles_across_renders() {
+        let mut engine = test_engine();
+        engine
+            .register_template("t", "{items|truncate:1|join}")
+            .unwrap();
+
+        let mut ctx = Context::new();
+        ctx.insert(
+            "items",
+            Value::List(vec!["alpha".into(), "beta".into(), "gamma".into()]),
+        );
+
+        let r1 = engine.render("t", &ctx).unwrap();
+        let r2 = engine.render("t", &ctx).unwrap();
+        let r3 = engine.render("t", &ctx).unwrap();
+        let r4 = engine.render("t", &ctx).unwrap();
+
+        // Each should use a different list style
+        let results = vec![r1, r2, r3, r4];
+        let unique: std::collections::HashSet<&String> = results.iter().collect();
+        assert!(unique.len() >= 3, "Expected at least 3 unique list styles, got {}: {:?}", unique.len(), results);
+    }
+
+    #[test]
+    fn bracketed_style_forced() {
+        let mut engine = test_engine();
+        engine
+            .register_template("t", "{items|truncate:1|join:bracketed}")
+            .unwrap();
+
+        let mut ctx = Context::new();
+        ctx.insert(
+            "items",
+            Value::List(vec!["alpha".into(), "beta".into(), "gamma".into()]),
+        );
+
+        let result = engine.render("t", &ctx).unwrap();
+        assert!(result.starts_with('[') && result.ends_with(']'),
+            "Expected bracketed format, got: {result}");
     }
 }

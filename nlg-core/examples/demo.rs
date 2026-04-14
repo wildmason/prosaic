@@ -7,6 +7,8 @@ use nlg_grammar_en::English;
 fn main() {
     println!("=== nlg crate demo ===\n");
 
+    discourse_aware_demos();
+    batch_rendering_demo();
     template_api_demos();
     builder_api_demos();
     vocab_code_demos();
@@ -23,6 +25,125 @@ fn header(title: &str) {
 fn show(label: &str, result: &str) {
     println!("  {label}:");
     println!("    \"{result}\"\n");
+}
+
+// ── Discourse-Aware Rendering ─────────────────────────────────────────────
+
+fn discourse_aware_demos() {
+    header("Discourse-Aware Sequential Rendering");
+
+    let mut engine = Engine::new(English::new())
+        .strictness(Strictness::Strict)
+        .variation(Variation::Fixed);
+    nlg_vocab_code::register(&mut engine).unwrap();
+
+    println!("  Rendering 5 related events sequentially (no reset between them):\n");
+
+    // Event 1: rename
+    let mut ctx = Context::new();
+    ctx.insert("entity_type", Value::String("class".into()));
+    ctx.insert("old_name", Value::String("UserService".into()));
+    ctx.insert("new_name", Value::String("AccountService".into()));
+    ctx.insert("consumer_count", Value::Number(6));
+    ctx.insert("consumers", Value::List(vec![
+        "ProfileComponent".into(), "SettingsComponent".into(), "AdminModule".into(),
+        "AuthGuard".into(), "DashboardWidget".into(), "NotificationService".into(),
+    ]));
+    let r1 = engine.render("code.renamed", &ctx).unwrap();
+    println!("    1. \"{r1}\"");
+
+    // Event 2: delete (different entity, triggers connective)
+    let mut ctx = Context::new();
+    ctx.insert("entity_type", Value::String("interface".into()));
+    ctx.insert("name", Value::String("LegacyConfig".into()));
+    ctx.insert("consumer_count", Value::Number(3));
+    ctx.insert("consumers", Value::List(vec![
+        "ConfigLoader".into(), "BootstrapModule".into(), "MigrationScript".into(),
+    ]));
+    let r2 = engine.render("code.deleted", &ctx).unwrap();
+    println!("    2. \"{r2}\"");
+
+    // Event 3: modify (different entity, different action)
+    let mut ctx = Context::new();
+    ctx.insert("entity_type", Value::String("method".into()));
+    ctx.insert("name", Value::String("calculateTotal".into()));
+    ctx.insert("consumer_count", Value::Number(4));
+    ctx.insert("consumers", Value::List(vec![
+        "CartComponent".into(), "CheckoutFlow".into(),
+        "InvoiceService".into(), "PricingEngine".into(),
+    ]));
+    let r3 = engine.render("code.modified", &ctx).unwrap();
+    println!("    3. \"{r3}\"");
+
+    // Event 4: another rename (same action as #1, triggers "Similarly")
+    let mut ctx = Context::new();
+    ctx.insert("entity_type", Value::String("class".into()));
+    ctx.insert("old_name", Value::String("AuthService".into()));
+    ctx.insert("new_name", Value::String("IdentityService".into()));
+    ctx.insert("consumer_count", Value::Number(2));
+    ctx.insert("consumers", Value::List(vec![
+        "LoginPage".into(), "TokenManager".into(),
+    ]));
+    let r4 = engine.render("code.renamed", &ctx).unwrap();
+    println!("    4. \"{r4}\"");
+
+    // Event 5: add (new entity)
+    let mut ctx = Context::new();
+    ctx.insert("entity_type", Value::String("service".into()));
+    ctx.insert("name", Value::String("TelemetryService".into()));
+    ctx.insert("location", Value::String("src/services/telemetry.service.ts".into()));
+    let r5 = engine.render("code.added", &ctx).unwrap();
+    println!("    5. \"{r5}\"");
+
+    println!();
+    println!("  Note: list styles cycle (including/such as/dash/bracketed),");
+    println!("  template variants anti-repeat, and discourse connectives");
+    println!("  link related events.\n");
+}
+
+fn batch_rendering_demo() {
+    header("Batch Rendering with Aggregation");
+
+    let mut engine = Engine::new(English::new())
+        .strictness(Strictness::Strict)
+        .variation(Variation::Fixed);
+    nlg_vocab_code::register(&mut engine).unwrap();
+
+    // Events about the same entity (should aggregate)
+    let mut ctx1 = Context::new();
+    ctx1.insert("entity_type", Value::String("class".into()));
+    ctx1.insert("old_name", Value::String("DataManager".into()));
+    ctx1.insert("new_name", Value::String("DataService".into()));
+    ctx1.insert("consumer_count", Value::Number(3));
+    ctx1.insert("consumers", Value::List(vec![
+        "Dashboard".into(), "Reports".into(), "Export".into(),
+    ]));
+
+    let mut ctx2 = Context::new();
+    ctx2.insert("entity_type", Value::String("class".into()));
+    ctx2.insert("name", Value::String("DataManager".into()));
+    ctx2.insert("old_location", Value::String("src/utils/".into()));
+    ctx2.insert("new_location", Value::String("src/core/".into()));
+    ctx2.insert("consumer_count", Value::Number(3));
+    ctx2.insert("consumers", Value::List(vec![
+        "Dashboard".into(), "Reports".into(), "Export".into(),
+    ]));
+
+    // Unrelated entity
+    let mut ctx3 = Context::new();
+    ctx3.insert("entity_type", Value::String("service".into()));
+    ctx3.insert("name", Value::String("AuthGuard".into()));
+    ctx3.insert("location", Value::String("src/guards/auth.guard.ts".into()));
+
+    let events: Vec<(&str, Context)> = vec![
+        ("code.renamed", ctx1),
+        ("code.moved", ctx2),
+        ("code.added", ctx3),
+    ];
+
+    let paragraph = engine.render_batch(&events).unwrap();
+    println!("  Batch output (3 events, first 2 share an entity):\n");
+    println!("    \"{paragraph}\"\n");
 }
 
 // ── Template API ─────────────────────────────────────────────────────────
