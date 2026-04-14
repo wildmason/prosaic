@@ -321,11 +321,6 @@ impl DiscourseState {
         style
     }
 
-    /// Get the current render index.
-    pub fn render_index(&self) -> usize {
-        self.render_index
-    }
-
     /// Whether this is the first render (no prior discourse context).
     pub fn is_first_render(&self) -> bool {
         self.render_index <= 1
