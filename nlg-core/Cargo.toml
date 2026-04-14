@@ -1,0 +1,13 @@
+[package]
+name = "nlg-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "General-purpose natural language generation from structured data"
+
+[dependencies]
+thiserror = "2"
+
+[dev-dependencies]
+nlg-derive = { path = "../nlg-derive" }
+nlg-grammar-en = { path = "../nlg-grammar-en" }
