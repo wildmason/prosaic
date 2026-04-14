@@ -55,6 +55,11 @@ impl Context {
     pub fn get(&self, key: &str) -> Option<&Value> {
         self.values.get(key)
     }
+
+    /// Iterate over all keys in the context.
+    pub fn keys(&self) -> impl Iterator<Item = &String> {
+        self.values.keys()
+    }
 }
 
 /// Convenience trait for converting types into `Context`.

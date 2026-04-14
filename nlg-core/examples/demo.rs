@@ -199,6 +199,53 @@ fn batch_rendering_demo() {
     let paragraph = engine.render_batch(&events).unwrap();
     println!("  Batch output (3 events, first 2 share an entity):\n");
     println!("    \"{paragraph}\"\n");
+
+    // Same-action aggregation: 3 renames of different classes
+    let mut engine2 = Engine::new(English::new()).variation(Variation::Fixed);
+    nlg_vocab_code::register(&mut engine2).unwrap();
+
+    let make_rename = |old: &str, new: &str| {
+        let mut ctx = Context::new();
+        ctx.insert("entity_type", Value::String("class".into()));
+        ctx.insert("old_name", Value::String(old.into()));
+        ctx.insert("new_name", Value::String(new.into()));
+        ctx.insert("consumer_count", Value::Number(1));
+        ctx.insert("consumers", Value::List(vec!["App".into()]));
+        ctx
+    };
+
+    let events: Vec<(&str, Context)> = vec![
+        ("code.renamed", make_rename("UserService", "AccountService")),
+        ("code.renamed", make_rename("AuthService", "IdentityService")),
+        ("code.renamed", make_rename("DataService", "StorageService")),
+    ];
+
+    let aggregated = engine2.render_batch(&events).unwrap();
+    println!("  Same action with differing details (falls back to sequential):\n");
+    println!("    \"{aggregated}\"\n");
+
+    // True aggregation: same action, same secondary context (deletions in same module)
+    let mut engine3 = Engine::new(English::new()).variation(Variation::Fixed);
+    nlg_vocab_code::register(&mut engine3).unwrap();
+
+    let make_delete = |name: &str| {
+        let mut ctx = Context::new();
+        ctx.insert("entity_type", Value::String("class".into()));
+        ctx.insert("name", Value::String(name.into()));
+        ctx.insert("consumer_count", Value::Number(0));
+        ctx.insert("consumers", Value::List(vec![]));
+        ctx
+    };
+
+    let events: Vec<(&str, Context)> = vec![
+        ("code.deleted", make_delete("OldUtils")),
+        ("code.deleted", make_delete("LegacyHelpers")),
+        ("code.deleted", make_delete("DeprecatedShims")),
+    ];
+
+    let aggregated = engine3.render_batch(&events).unwrap();
+    println!("  True aggregation (3 deletions with matching context):\n");
+    println!("    \"{aggregated}\"\n");
 }
 
 // ── Template API ─────────────────────────────────────────────────────────

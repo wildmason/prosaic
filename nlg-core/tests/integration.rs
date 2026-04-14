@@ -43,7 +43,7 @@ fn full_rename_scenario() {
     assert_eq!(
         result,
         "The class Foo was renamed to Foobar which impacts 6 direct consumers \
-         [Baz, Qux, Quux, and 3 more]"
+         [Baz, Qux, Quux, and 3 more]."
     );
 }
 
@@ -72,7 +72,7 @@ fn full_rename_scenario_single_consumer() {
     let result = engine.render("renamed", &ctx).unwrap();
     assert_eq!(
         result,
-        "The interface IUser was renamed to User which impacts 1 direct consumer [UserService]"
+        "The interface IUser was renamed to User which impacts 1 direct consumer [UserService]."
     );
 }
 
@@ -210,7 +210,7 @@ fn derive_with_template_rendering() {
     let result = engine.render("changed", event).unwrap();
     assert_eq!(
         result,
-        "AuthService (service) was changed, affecting 3 consumers"
+        "AuthService (service) was changed, affecting 3 consumers."
     );
 }
 
@@ -308,7 +308,7 @@ fn lenient_mode_shows_placeholder() {
     ctx.insert("name", Value::String("Alice".into()));
 
     let result = engine.render("t", &ctx).unwrap();
-    assert_eq!(result, "Hello Alice, you have [missing: count] items");
+    assert_eq!(result, "Hello Alice, you have [missing: count] items.");
 }
 
 #[test]
@@ -322,7 +322,7 @@ fn silent_mode_omits_missing() {
     ctx.insert("name", Value::String("Alice".into()));
 
     let result = engine.render("t", &ctx).unwrap();
-    assert_eq!(result, "Hello Alice, you have  items");
+    assert_eq!(result, "Hello Alice, you have  items.");
 }
 
 // ── Pipe chaining edge cases ─────────────────────────────────────────────
@@ -446,7 +446,7 @@ fn snapshot_angular_service_rename() {
     assert_eq!(
         engine.render("change", &ctx).unwrap(),
         "The class UserService was renamed to AccountService which impacts \
-         4 direct consumers [ProfileComponent, SettingsComponent, AdminModule, and 1 more]"
+         4 direct consumers [ProfileComponent, SettingsComponent, AdminModule, and 1 more]."
     );
 }
 
@@ -466,7 +466,7 @@ fn snapshot_interface_deleted_no_consumers() {
 
     assert_eq!(
         engine.render("deleted", &ctx).unwrap(),
-        "The interface LegacyConfig was removed with no remaining consumers"
+        "The interface LegacyConfig was removed with no remaining consumers."
     );
 }
 
@@ -492,6 +492,89 @@ fn snapshot_method_signature_change() {
     assert_eq!(
         engine.render("sig", &ctx).unwrap(),
         "The signature of getUser was changed, requiring updates in \
-         2 callers [ProfileController and AdminPanel]"
+         2 callers [ProfileController and AdminPanel]."
     );
+}
+
+// ── Batch rendering ─────────────────────────────────────────────────────
+
+#[test]
+fn batch_produces_periods_between_sentences() {
+    let mut engine = engine();
+    engine.register_template("simple", "{name|refer} was modified").unwrap();
+
+    let mut ctx1 = Context::new();
+    ctx1.insert("entity_type", Value::String("class".into()));
+    ctx1.insert("name", Value::String("Foo".into()));
+
+    let mut ctx2 = Context::new();
+    ctx2.insert("entity_type", Value::String("class".into()));
+    ctx2.insert("name", Value::String("Bar".into()));
+
+    let events: Vec<(&str, Context)> = vec![
+        ("simple", ctx1),
+        ("simple", ctx2),
+    ];
+
+    let result = engine.render_batch(&events).unwrap();
+
+    // Two sentences, both terminated
+    assert!(result.contains("."), "Expected periods in batch output, got: {result}");
+}
+
+#[test]
+fn batch_aggregates_same_action_different_subjects() {
+    let mut engine = engine();
+    engine.register_template(
+        "code.renamed",
+        "{old_name|refer} was renamed",
+    ).unwrap();
+
+    let mut ctx1 = Context::new();
+    ctx1.insert("entity_type", Value::String("class".into()));
+    ctx1.insert("old_name", Value::String("UserService".into()));
+
+    let mut ctx2 = Context::new();
+    ctx2.insert("entity_type", Value::String("class".into()));
+    ctx2.insert("old_name", Value::String("AuthService".into()));
+
+    let events: Vec<(&str, Context)> = vec![
+        ("code.renamed", ctx1),
+        ("code.renamed", ctx2),
+    ];
+
+    let result = engine.render_batch(&events).unwrap();
+
+    // Should aggregate into a single sentence with combined subjects
+    assert!(
+        result.contains("UserService and AuthService"),
+        "Expected aggregated subjects, got: {result}"
+    );
+}
+
+#[test]
+fn batch_sequential_when_entities_differ_across_actions() {
+    let mut engine = engine();
+    engine.register_template("code.renamed", "{name|refer} was renamed").unwrap();
+    engine.register_template("code.deleted", "{name|refer} was removed").unwrap();
+
+    let mut ctx1 = Context::new();
+    ctx1.insert("entity_type", Value::String("class".into()));
+    ctx1.insert("name", Value::String("Foo".into()));
+
+    let mut ctx2 = Context::new();
+    ctx2.insert("entity_type", Value::String("interface".into()));
+    ctx2.insert("name", Value::String("Bar".into()));
+
+    let events: Vec<(&str, Context)> = vec![
+        ("code.renamed", ctx1),
+        ("code.deleted", ctx2),
+    ];
+
+    let result = engine.render_batch(&events).unwrap();
+
+    // Different actions, different entities — sequential
+    // Periods should separate the sentences
+    let period_count = result.matches('.').count();
+    assert!(period_count >= 2, "Expected 2 periods for 2 sentences, got {period_count}: {result}");
 }

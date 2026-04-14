@@ -162,6 +162,10 @@ impl Engine {
             output = capitalize_first(&output);
         }
 
+        // Terminate the sentence with a period if it doesn't already end
+        // with sentence-ending punctuation.
+        output = terminate_sentence(&output);
+
         // Record entity mention in discourse state
         if let (Some(name), Some(etype)) = (&entity_name, &entity_type) {
             self.discourse
@@ -196,10 +200,14 @@ impl Engine {
 
     /// Render a batch of events as a cohesive paragraph.
     ///
-    /// Compared to calling `render()` sequentially, batch rendering can:
-    /// - Aggregate events with shared subjects ("was renamed and moved")
-    /// - Order events for narrative flow
-    /// - Insert discourse connectives between sentences
+    /// Each event is rendered sequentially through `render()`, which means
+    /// the discourse system produces natural cross-sentence flow via
+    /// referring expressions, connectives, template anti-repeat, and
+    /// list style cycling.
+    ///
+    /// Additionally, consecutive events sharing a template key but with
+    /// different entities are aggregated by combining subjects:
+    /// "UserService and AuthService were renamed" instead of two sentences.
     pub fn render_batch(
         &self,
         events: &[(&str, Context)],
@@ -208,75 +216,130 @@ impl Engine {
             return Ok(String::new());
         }
 
-        // Group events by entity name for potential aggregation
         let mut sentences: Vec<String> = Vec::new();
         let mut i = 0;
 
         while i < events.len() {
-            let (key, ref ctx) = events[i];
-            let entity_name = ctx
-                .get("name")
-                .or_else(|| ctx.get("old_name"))
-                .map(|v| v.as_display());
+            // Look for same-action-different-subject aggregation opportunity
+            let aggregation_end = self.find_same_action_run(events, i);
 
-            // Look ahead for aggregation: same entity, different action
-            let mut aggregated = vec![i];
-            if let Some(ref name) = entity_name {
-                let mut j = i + 1;
-                while j < events.len() {
-                    let (_, ref next_ctx) = events[j];
-                    let next_name = next_ctx
-                        .get("name")
-                        .or_else(|| next_ctx.get("old_name"))
-                        .map(|v| v.as_display());
-                    if next_name.as_deref() == Some(name.as_str()) {
-                        aggregated.push(j);
-                        j += 1;
-                    } else {
-                        break;
-                    }
-                }
-            }
-
-            if aggregated.len() > 1 {
-                // Render first event normally, then aggregate subsequent actions
-                let sentence = self.render(key, &events[aggregated[0]].1)?;
-
-                // Extract verb phrases from subsequent events and append with "and"
-                let mut additional_actions: Vec<String> = Vec::new();
-                for &idx in &aggregated[1..] {
-                    let (agg_key, ref agg_ctx) = events[idx];
-                    // Render the additional event and extract the action part
-                    let full = self.render(agg_key, agg_ctx)?;
-                    // Try to extract just the action (after "was " or similar)
-                    if let Some(action) = extract_action_phrase(&full) {
-                        additional_actions.push(action);
-                    } else {
-                        // Can't extract — render as separate sentence
-                        sentences.push(full);
-                    }
-                }
-
-                if additional_actions.is_empty() {
-                    sentences.push(sentence);
-                } else {
-                    // Append aggregated actions with "and"
-                    let combined = format!(
-                        "{} and {}",
-                        sentence.trim_end_matches('.'),
-                        additional_actions.join(" and ")
-                    );
-                    sentences.push(combined);
-                }
-
-                i += aggregated.len();
+            if aggregation_end > i + 1 {
+                // Multiple consecutive events with same template key but
+                // different entities — aggregate their subjects.
+                let sentence = self.render_aggregated_subjects(
+                    events[i].0,
+                    &events[i..aggregation_end],
+                )?;
+                sentences.push(sentence);
+                i = aggregation_end;
             } else {
-                sentences.push(self.render(key, &events[i].1)?);
+                // Single event — render normally with full discourse benefits
+                let (key, ref ctx) = events[i];
+                sentences.push(self.render(key, ctx)?);
                 i += 1;
             }
         }
 
         Ok(sentences.join(" "))
+    }
+
+    /// Find the end index (exclusive) of a run of consecutive events that
+    /// share the same template key AND matching non-subject context, but
+    /// have different entity names.
+    ///
+    /// Only aggregates when the surrounding context (everything except the
+    /// entity name) is identical — otherwise we'd lose information like
+    /// different new_name targets or different consumer counts.
+    ///
+    /// Returns `start + 1` if no aggregation opportunity exists.
+    fn find_same_action_run(
+        &self,
+        events: &[(&str, Context)],
+        start: usize,
+    ) -> usize {
+        if start >= events.len() {
+            return start;
+        }
+
+        let (first_key, ref first_ctx) = events[start];
+        let first_name = entity_name_from_context(first_ctx);
+
+        if first_name.is_none() {
+            return start + 1;
+        }
+
+        let mut end = start + 1;
+        let mut seen_names: std::collections::HashSet<String> = std::collections::HashSet::new();
+        seen_names.insert(first_name.unwrap());
+
+        while end < events.len() {
+            let (key, ref ctx) = events[end];
+            if key != first_key {
+                break;
+            }
+            let name = match entity_name_from_context(ctx) {
+                Some(n) => n,
+                None => break,
+            };
+            if seen_names.contains(&name) {
+                break;
+            }
+            // Only aggregate if the non-subject context matches.
+            // If new_name, consumer_count, consumers, or location differ,
+            // sequential rendering preserves more information.
+            if !contexts_compatible_for_aggregation(first_ctx, ctx) {
+                break;
+            }
+            seen_names.insert(name);
+            end += 1;
+        }
+
+        end
+    }
+
+    /// Render an aggregated sentence combining multiple subjects for the
+    /// same action: "UserService and AuthService were renamed."
+    fn render_aggregated_subjects(
+        &self,
+        key: &str,
+        events: &[(&str, Context)],
+    ) -> Result<String, NlgError> {
+        // Collect entity names
+        let names: Vec<String> = events
+            .iter()
+            .filter_map(|(_, ctx)| entity_name_from_context(ctx))
+            .collect();
+
+        if names.is_empty() {
+            // Fallback to sequential rendering
+            let mut sentences = Vec::new();
+            for (k, ctx) in events {
+                sentences.push(self.render(k, ctx)?);
+            }
+            return Ok(sentences.join(" "));
+        }
+
+        // Build a synthetic context that uses the combined name
+        // "UserService and AuthService" as the entity name
+        let refs: Vec<&str> = names.iter().map(|s| s.as_str()).collect();
+        let combined_name = self
+            .language
+            .join_list(&refs, crate::language::Conjunction::And);
+
+        // Use the first event's context as the base
+        let mut combined_ctx = events[0].1.clone();
+
+        // Override the name/old_name with the combined form
+        if combined_ctx.get("old_name").is_some() {
+            combined_ctx.insert("old_name", Value::String(combined_name.clone()));
+        }
+        if combined_ctx.get("name").is_some() {
+            combined_ctx.insert("name", Value::String(combined_name.clone()));
+        }
+
+        // Render with combined subject, then apply plural agreement
+        let rendered = self.render(key, combined_ctx)?;
+        Ok(pluralize_agreement(&rendered, &*self.language))
     }
 
     fn select_alternative_scored<'a>(
@@ -652,6 +715,39 @@ fn format_truncated_list(
     }
 }
 
+/// Append a period to the output if it appears to be a sentence without
+/// terminal punctuation. A sentence starts with a capital letter and has
+/// multiple words. Fragments (single words, lists) are not terminated.
+fn terminate_sentence(output: &str) -> String {
+    let trimmed_end = output.trim_end();
+    if trimmed_end.is_empty() {
+        return output.to_string();
+    }
+
+    // Already ends with sentence-ending punctuation? Leave alone.
+    let last = trimmed_end.chars().last().unwrap();
+    if matches!(last, '.' | '!' | '?') {
+        return output.to_string();
+    }
+
+    // Looks like a fragment (doesn't start with capital, or is short)?
+    let first = trimmed_end.chars().next().unwrap();
+    if !first.is_uppercase() {
+        return output.to_string();
+    }
+
+    // Count words — single words or very short outputs are likely fragments
+    let word_count = trimmed_end.split_whitespace().count();
+    if word_count < 3 {
+        return output.to_string();
+    }
+
+    // Add period (before trailing whitespace if any)
+    let mut s = output.trim_end().to_string();
+    s.push('.');
+    s
+}
+
 /// Check if a template's first segment is a `refer` pipe, meaning the
 /// rendered output may start with a lowercase word that needs capitalization.
 fn starts_with_refer_pipe(template: &Template) -> bool {
@@ -707,17 +803,74 @@ fn prepend_replacing_subject(output: &str, connective: &str) -> String {
     format!("{connective} {}", lowercase_first(output))
 }
 
-/// Try to extract the action phrase from a rendered sentence.
-/// e.g., from "The class Foo was renamed to Bar" → "renamed to Bar"
-fn extract_action_phrase(sentence: &str) -> Option<String> {
-    // Look for "was <past_participle> ..." pattern
-    if let Some(idx) = sentence.find(" was ") {
-        let after_was = &sentence[idx + 5..];
-        if !after_was.is_empty() {
-            return Some(after_was.to_string());
+/// Extract the primary entity name from a render context.
+/// Checks "name" first, falls back to "old_name".
+fn entity_name_from_context(context: &Context) -> Option<String> {
+    context
+        .get("name")
+        .or_else(|| context.get("old_name"))
+        .map(|v| v.as_display())
+}
+
+/// Check if two contexts match on all fields except the entity name.
+/// Used to decide whether events can be safely aggregated without losing
+/// information (different new_name targets, different consumer counts, etc.).
+fn contexts_compatible_for_aggregation(a: &Context, b: &Context) -> bool {
+    // Collect all keys from both contexts
+    let entity_keys = ["name", "old_name"];
+
+    // Get all keys that need to match
+    let a_keys: Vec<&String> = a.keys().filter(|k| !entity_keys.contains(&k.as_str())).collect();
+    let b_keys: Vec<&String> = b.keys().filter(|k| !entity_keys.contains(&k.as_str())).collect();
+
+    // Same set of keys?
+    if a_keys.len() != b_keys.len() {
+        return false;
+    }
+    for key in &a_keys {
+        if !b_keys.contains(key) {
+            return false;
+        }
+        if a.get(key) != b.get(key) {
+            return false;
         }
     }
-    None
+    true
+}
+
+/// Adjust rendered output for plural subject agreement.
+/// When aggregating multiple subjects, forms like "was" → "were" and
+/// singular entity types like "class" → "classes" need to change.
+fn pluralize_agreement(output: &str, lang: &dyn Language) -> String {
+    let mut result = output.to_string();
+
+    // "The class Foo, Bar, and Baz was" → "The classes Foo, Bar, and Baz were"
+    // Common singular-to-plural verb patterns
+    let verb_replacements = &[
+        (" was ", " were "),
+        (" has ", " have "),
+        (" is ", " are "),
+    ];
+    for (singular, plural) in verb_replacements {
+        result = result.replace(singular, plural);
+    }
+
+    // Pluralize entity type after "The": "The class UserService, Foo, and Bar"
+    // This is fragile — only apply when pattern matches exactly.
+    if let Some(rest) = result.strip_prefix("The ") {
+        if let Some(space_idx) = rest.find(' ') {
+            let type_word = &rest[..space_idx];
+            // Only pluralize if it's a known simple noun (lowercase word)
+            if type_word.chars().all(|c| c.is_lowercase()) && type_word.len() < 15 {
+                let plural = lang.pluralize(type_word, 2);
+                if plural != type_word {
+                    result = format!("The {} {}", plural, &rest[space_idx + 1..]);
+                }
+            }
+        }
+    }
+
+    result
 }
 
 /// Simple non-cryptographic hash for seeded variation.
@@ -1024,7 +1177,7 @@ mod tests {
 
         assert_eq!(
             engine.render("entity.renamed", &ctx).unwrap(),
-            "The class Foo was renamed to Foobar which impacts 6 direct consumers"
+            "The class Foo was renamed to Foobar which impacts 6 direct consumers."
         );
     }
 
@@ -1120,7 +1273,7 @@ mod tests {
         ctx.insert("name", Value::String("UserService".into()));
 
         let result = engine.render("t", &ctx).unwrap();
-        assert_eq!(result, "The class UserService was updated");
+        assert_eq!(result, "The class UserService was updated.");
     }
 
     #[test]
@@ -1140,7 +1293,7 @@ mod tests {
         let r1 = engine.render("first", &ctx).unwrap();
         let r2 = engine.render("second", &ctx).unwrap();
 
-        assert_eq!(r1, "The class Foo was modified");
+        assert_eq!(r1, "The class Foo was modified.");
         // Second render: pronoun + possibly a discourse connective prepended
         assert!(
             r2.contains("it now has new behavior") || r2.contains("It now has new behavior"),
@@ -1191,7 +1344,7 @@ mod tests {
         ctx.insert("name", Value::String("processOrder".into()));
 
         let result = engine.render("t", &ctx).unwrap();
-        assert_eq!(result, "The method processOrder was called");
+        assert_eq!(result, "The method processOrder was called.");
     }
 
     #[test]
@@ -1210,7 +1363,7 @@ mod tests {
 
         // After reset, should use full form again
         let result = engine.render("t", &ctx).unwrap();
-        assert_eq!(result, "The class Foo updated");
+        assert_eq!(result, "The class Foo updated.");
     }
 
     #[test]
@@ -1239,7 +1392,7 @@ mod tests {
 
         // Foo should be re-introduced with full form
         let result = engine.render("track", &ctx).unwrap();
-        assert_eq!(result, "The class Foo was tracked");
+        assert_eq!(result, "The class Foo was tracked.");
     }
 
     #[test]
@@ -1255,6 +1408,7 @@ mod tests {
 
         let result = engine.render("t", &ctx).unwrap();
         // Falls back to just the name, with sentence-start capitalization
+        // Note: "Something appeared" is 2 words so no period is added
         assert_eq!(result, "Something appeared");
     }
 }
