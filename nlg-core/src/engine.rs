@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::context::{Context, IntoContext, Value};
-use crate::discourse::{DiscourseState, ListStyle};
+use crate::discourse::{DiscourseState, ListStyle, ReferenceForm};
 use crate::error::NlgError;
 use crate::language::{Conjunction, Language};
 use crate::template::{Pipe, PipeArg, Segment, Template};
@@ -153,6 +153,13 @@ impl Engine {
             } else {
                 output = format!("{conn} {}", lowercase_first(&output));
             }
+        }
+
+        // If the output starts with a lowercase letter produced by the `refer` pipe,
+        // capitalize it. We detect this by checking if the first non-whitespace
+        // character is lowercase AND the template's first segment is a `refer` slot.
+        if starts_with_refer_pipe(template) {
+            output = capitalize_first(&output);
         }
 
         // Record entity mention in discourse state
@@ -427,11 +434,58 @@ impl Engine {
             "words" => self.pipe_words(value),
             "truncate" => self.pipe_truncate(pipe, value),
             "capitalize" => self.pipe_capitalize(value),
+            "refer" => self.pipe_refer(pipe, value, context),
             _ => Err(NlgError::InvalidPipe {
                 pipe: pipe.name.clone(),
                 reason: "unknown pipe".to_string(),
             }),
         }
+    }
+
+    /// Render a reference to a named entity based on discourse context.
+    ///
+    /// - First mention: "The {entity_type} {name}" (full form)
+    /// - Recent mention as non-focus: "{name}" (short form)
+    /// - Recent mention as focus with no ambiguity: "It" (pronoun)
+    /// - Distant mention (3+ renders ago): re-introduce with full form
+    ///
+    /// Usage: `{name|refer}` uses `entity_type` from context.
+    /// Usage: `{name|refer:class}` overrides the entity type explicitly.
+    fn pipe_refer(
+        &self,
+        pipe: &Pipe,
+        value: &Value,
+        context: &Context,
+    ) -> Result<Value, NlgError> {
+        let name = value.as_display();
+
+        // Determine entity type: explicit arg takes precedence, else context["entity_type"]
+        let entity_type = match &pipe.arg {
+            Some(PipeArg::String(t)) => t.clone(),
+            _ => context
+                .get("entity_type")
+                .map(|v| v.as_display())
+                .unwrap_or_default(),
+        };
+
+        let form = self.discourse.borrow().reference_form(&name);
+
+        // Produce lowercase form — the engine will capitalize the first
+        // character of the rendered output if needed. This handles both
+        // sentence-start and mid-sentence positions correctly.
+        let rendered = match form {
+            ReferenceForm::Full => {
+                if entity_type.is_empty() {
+                    name
+                } else {
+                    format!("the {} {}", entity_type.to_lowercase(), name)
+                }
+            }
+            ReferenceForm::ShortName => name,
+            ReferenceForm::Pronoun => "it".to_string(),
+        };
+
+        Ok(Value::String(rendered))
     }
 
     fn pipe_pluralize(
@@ -595,6 +649,17 @@ fn format_truncated_list(
             let all_joined = language.join_list(&refs, conjunction);
             format!("[{all_joined}]")
         }
+    }
+}
+
+/// Check if a template's first segment is a `refer` pipe, meaning the
+/// rendered output may start with a lowercase word that needs capitalization.
+fn starts_with_refer_pipe(template: &Template) -> bool {
+    match template.segments.first() {
+        Some(Segment::Slot { pipes, .. }) => {
+            pipes.iter().any(|p| p.name == "refer")
+        }
+        _ => false,
     }
 }
 
@@ -1039,5 +1104,157 @@ mod tests {
         let result = engine.render("t", &ctx).unwrap();
         assert!(result.starts_with('[') && result.ends_with(']'),
             "Expected bracketed format, got: {result}");
+    }
+
+    // ── Refer pipe tests ────────────────────────────────────────────────
+
+    #[test]
+    fn refer_first_mention_uses_full_form() {
+        let mut engine = test_engine();
+        engine
+            .register_template("t", "{name|refer} was updated")
+            .unwrap();
+
+        let mut ctx = Context::new();
+        ctx.insert("entity_type", Value::String("class".into()));
+        ctx.insert("name", Value::String("UserService".into()));
+
+        let result = engine.render("t", &ctx).unwrap();
+        assert_eq!(result, "The class UserService was updated");
+    }
+
+    #[test]
+    fn refer_second_mention_uses_pronoun() {
+        let mut engine = test_engine();
+        engine
+            .register_template("first", "{name|refer} was modified")
+            .unwrap();
+        engine
+            .register_template("second", "{name|refer} now has new behavior")
+            .unwrap();
+
+        let mut ctx = Context::new();
+        ctx.insert("entity_type", Value::String("class".into()));
+        ctx.insert("name", Value::String("Foo".into()));
+
+        let r1 = engine.render("first", &ctx).unwrap();
+        let r2 = engine.render("second", &ctx).unwrap();
+
+        assert_eq!(r1, "The class Foo was modified");
+        // Second render: pronoun + possibly a discourse connective prepended
+        assert!(
+            r2.contains("it now has new behavior") || r2.contains("It now has new behavior"),
+            "Expected pronoun reference, got: {r2}"
+        );
+    }
+
+    #[test]
+    fn refer_ambiguity_prevents_pronoun() {
+        let mut engine = test_engine();
+        engine
+            .register_template("t", "{name|refer} changed")
+            .unwrap();
+
+        // Render with entity A
+        let mut ctx_a = Context::new();
+        ctx_a.insert("entity_type", Value::String("class".into()));
+        ctx_a.insert("name", Value::String("ServiceA".into()));
+        engine.render("t", &ctx_a).unwrap();
+
+        // Render with entity B (ambiguity introduced)
+        let mut ctx_b = Context::new();
+        ctx_b.insert("entity_type", Value::String("class".into()));
+        ctx_b.insert("name", Value::String("ServiceB".into()));
+        engine.render("t", &ctx_b).unwrap();
+
+        // Back to entity A — ambiguous context, should not use "It"
+        let result = engine.render("t", &ctx_a).unwrap();
+        // May have a discourse connective prepended, but the key is NO pronoun
+        assert!(
+            result.contains("ServiceA changed") || result.contains("serviceA changed"),
+            "Expected short name (not pronoun), got: {result}"
+        );
+        assert!(
+            !result.contains("It changed") && !result.contains("it changed"),
+            "Should not use pronoun with ambiguity, got: {result}"
+        );
+    }
+
+    #[test]
+    fn refer_explicit_entity_type() {
+        let mut engine = test_engine();
+        engine
+            .register_template("t", "{name|refer:method} was called")
+            .unwrap();
+
+        let mut ctx = Context::new();
+        ctx.insert("name", Value::String("processOrder".into()));
+
+        let result = engine.render("t", &ctx).unwrap();
+        assert_eq!(result, "The method processOrder was called");
+    }
+
+    #[test]
+    fn refer_reset_reintroduces_full_form() {
+        let mut engine = test_engine();
+        engine
+            .register_template("t", "{name|refer} updated")
+            .unwrap();
+
+        let mut ctx = Context::new();
+        ctx.insert("entity_type", Value::String("class".into()));
+        ctx.insert("name", Value::String("Foo".into()));
+
+        engine.render("t", &ctx).unwrap();
+        engine.reset();
+
+        // After reset, should use full form again
+        let result = engine.render("t", &ctx).unwrap();
+        assert_eq!(result, "The class Foo updated");
+    }
+
+    #[test]
+    fn refer_distant_mention_reintroduces_full() {
+        let mut engine = test_engine();
+        engine
+            .register_template("track", "{name|refer} was tracked")
+            .unwrap();
+        engine.register_template("other", "Something else happened").unwrap();
+
+        let mut ctx = Context::new();
+        ctx.insert("entity_type", Value::String("class".into()));
+        ctx.insert("name", Value::String("Foo".into()));
+
+        let mut other_ctx = Context::new();
+        other_ctx.insert("entity_type", Value::String("method".into()));
+        other_ctx.insert("name", Value::String("bar".into()));
+
+        // Mention Foo
+        engine.render("track", &ctx).unwrap();
+
+        // Three unrelated renders
+        engine.render("other", &other_ctx).unwrap();
+        engine.render("other", &other_ctx).unwrap();
+        engine.render("other", &other_ctx).unwrap();
+
+        // Foo should be re-introduced with full form
+        let result = engine.render("track", &ctx).unwrap();
+        assert_eq!(result, "The class Foo was tracked");
+    }
+
+    #[test]
+    fn refer_no_entity_type_falls_back_to_name() {
+        let mut engine = test_engine();
+        engine
+            .register_template("t", "{name|refer} appeared")
+            .unwrap();
+
+        let mut ctx = Context::new();
+        // No entity_type provided
+        ctx.insert("name", Value::String("something".into()));
+
+        let result = engine.render("t", &ctx).unwrap();
+        // Falls back to just the name, with sentence-start capitalization
+        assert_eq!(result, "Something appeared");
     }
 }

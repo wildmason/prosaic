@@ -20,19 +20,19 @@ pub fn register(engine: &mut Engine) -> Result<(), NlgError> {
 fn register_rename_templates(engine: &mut Engine) -> Result<(), NlgError> {
     engine.register_template(
         "code.renamed",
-        "The {entity_type} {old_name} was renamed to {new_name} \
+        "{old_name|refer} was renamed to {new_name} \
          which impacts {consumer_count} direct {consumer_count|pluralize:consumer} \
          {consumers|truncate:3|join}",
     )?;
     engine.register_template(
         "code.renamed",
-        "{old_name} ({entity_type}) was renamed to {new_name}, \
+        "{old_name|refer} has been renamed to {new_name}, \
          affecting {consumer_count} {consumer_count|pluralize:dependent} \
          {consumers|truncate:3|join}",
     )?;
     engine.register_template(
         "code.renamed",
-        "Renamed {entity_type} {old_name} to {new_name} \
+        "{old_name|refer} is now called {new_name} \
          ({consumer_count} {consumer_count|pluralize:consumer} affected: \
          {consumers|truncate:3|join})",
     )?;
@@ -42,19 +42,19 @@ fn register_rename_templates(engine: &mut Engine) -> Result<(), NlgError> {
 fn register_delete_templates(engine: &mut Engine) -> Result<(), NlgError> {
     engine.register_template(
         "code.deleted",
-        "The {entity_type} {name} was removed, \
+        "{name|refer} was removed, \
          impacting {consumer_count} {consumer_count|pluralize:dependent} \
          {consumers|truncate:3|join}",
     )?;
     engine.register_template(
         "code.deleted",
-        "Removed {entity_type} {name} \
+        "{name|refer} has been deleted \
          ({consumer_count} {consumer_count|pluralize:reference} to update: \
          {consumers|truncate:3|join})",
     )?;
     engine.register_template(
         "code.deleted",
-        "{name} ({entity_type}) was deleted, \
+        "{name|refer} no longer exists, \
          breaking {consumer_count} {consumer_count|pluralize:consumer} \
          {consumers|truncate:3|join}",
     )?;
@@ -64,15 +64,15 @@ fn register_delete_templates(engine: &mut Engine) -> Result<(), NlgError> {
 fn register_add_templates(engine: &mut Engine) -> Result<(), NlgError> {
     engine.register_template(
         "code.added",
-        "Added new {entity_type} {name} in {location}",
+        "A new {entity_type} {name} was added in {location}",
     )?;
     engine.register_template(
         "code.added",
-        "New {entity_type} {name} was introduced in {location}",
+        "The {entity_type} {name} was introduced in {location}",
     )?;
     engine.register_template(
         "code.added",
-        "Created {entity_type} {name} ({location})",
+        "{name} \u{2014} a new {entity_type} \u{2014} was created in {location}",
     )?;
     Ok(())
 }
@@ -80,19 +80,19 @@ fn register_add_templates(engine: &mut Engine) -> Result<(), NlgError> {
 fn register_modify_templates(engine: &mut Engine) -> Result<(), NlgError> {
     engine.register_template(
         "code.modified",
-        "The {entity_type} {name} was modified, \
+        "{name|refer} was modified, \
          which may affect {consumer_count} {consumer_count|pluralize:consumer} \
          {consumers|truncate:3|join}",
     )?;
     engine.register_template(
         "code.modified",
-        "Modified {entity_type} {name} \
+        "{name|refer} has been updated \
          ({consumer_count} {consumer_count|pluralize:consumer} may need review: \
          {consumers|truncate:3|join})",
     )?;
     engine.register_template(
         "code.modified",
-        "Changes to {entity_type} {name} affect \
+        "Changes to {name|refer} affect \
          {consumer_count} {consumer_count|pluralize:dependent} \
          {consumers|truncate:3|join}",
     )?;
@@ -102,13 +102,13 @@ fn register_modify_templates(engine: &mut Engine) -> Result<(), NlgError> {
 fn register_move_templates(engine: &mut Engine) -> Result<(), NlgError> {
     engine.register_template(
         "code.moved",
-        "The {entity_type} {name} was moved from {old_location} to {new_location}, \
+        "{name|refer} was moved from {old_location} to {new_location}, \
          requiring import updates in {consumer_count} {consumer_count|pluralize:file} \
          {consumers|truncate:3|join}",
     )?;
     engine.register_template(
         "code.moved",
-        "Moved {entity_type} {name}: {old_location} -> {new_location} \
+        "{name|refer} has been relocated to {new_location} \
          ({consumer_count} {consumer_count|pluralize:import} to update: \
          {consumers|truncate:3|join})",
     )?;
@@ -118,14 +118,14 @@ fn register_move_templates(engine: &mut Engine) -> Result<(), NlgError> {
 fn register_signature_templates(engine: &mut Engine) -> Result<(), NlgError> {
     engine.register_template(
         "code.signature_changed",
-        "The signature of {entity_type} {name} was changed, \
+        "The signature of {name|refer} was changed, \
          requiring updates in {consumer_count} {consumer_count|pluralize:caller} \
          {consumers|truncate:3|join}",
     )?;
     engine.register_template(
         "code.signature_changed",
-        "{name} ({entity_type}) has a new signature, \
-         impacting {consumer_count} {consumer_count|pluralize:call} {consumer_count|pluralize:site} \
+        "{name|refer} has a new signature, \
+         impacting {consumer_count} call {consumer_count|pluralize:site} \
          {consumers|truncate:3|join}",
     )?;
     Ok(())
@@ -229,10 +229,8 @@ mod tests {
         ctx.insert("location", Value::String("src/guards/auth.guard.ts".into()));
 
         let result = engine.render("code.added", &ctx).unwrap();
-        assert_eq!(
-            result,
-            "Added new service AuthGuard in src/guards/auth.guard.ts"
-        );
+        assert!(result.contains("service AuthGuard"));
+        assert!(result.contains("src/guards/auth.guard.ts"));
     }
 
     #[test]

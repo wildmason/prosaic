@@ -7,6 +7,7 @@ use nlg_grammar_en::English;
 fn main() {
     println!("=== nlg crate demo ===\n");
 
+    referring_expression_demo();
     discourse_aware_demos();
     batch_rendering_demo();
     template_api_demos();
@@ -25,6 +26,60 @@ fn header(title: &str) {
 fn show(label: &str, result: &str) {
     println!("  {label}:");
     println!("    \"{result}\"\n");
+}
+
+// ── Referring Expressions ─────────────────────────────────────────────────
+
+fn referring_expression_demo() {
+    header("Referring Expressions (Entity Tracking)");
+
+    let mut engine = Engine::new(English::new())
+        .strictness(Strictness::Strict)
+        .variation(Variation::Fixed);
+    nlg_vocab_code::register(&mut engine).unwrap();
+
+    println!("  Four renders about the SAME entity (UserService):");
+    println!("  Watch how the engine refers to it differently each time.\n");
+
+    let mut ctx = Context::new();
+    ctx.insert("entity_type", Value::String("class".into()));
+    ctx.insert("old_name", Value::String("UserService".into()));
+    ctx.insert("name", Value::String("UserService".into()));
+    ctx.insert("new_name", Value::String("AccountService".into()));
+    ctx.insert("consumer_count", Value::Number(3));
+    ctx.insert("consumers", Value::List(vec![
+        "ProfilePage".into(), "SettingsPage".into(), "AuthModule".into(),
+    ]));
+
+    let r1 = engine.render("code.renamed", &ctx).unwrap();
+    println!("    1. \"{r1}\"");
+
+    // Update context to use new name going forward (though for demo we keep same entity)
+    ctx.insert("name", Value::String("UserService".into()));
+    let r2 = engine.render("code.modified", &ctx).unwrap();
+    println!("    2. \"{r2}\"");
+
+    let r3 = engine.render("code.modified", &ctx).unwrap();
+    println!("    3. \"{r3}\"");
+
+    // Introduce a different entity — should break pronoun chain
+    let mut other_ctx = Context::new();
+    other_ctx.insert("entity_type", Value::String("service".into()));
+    other_ctx.insert("name", Value::String("AuthGuard".into()));
+    other_ctx.insert("location", Value::String("src/guards/".into()));
+    let r4 = engine.render("code.added", &other_ctx).unwrap();
+    println!("    4. \"{r4}\"");
+
+    // Back to UserService — now there's ambiguity, so no pronoun
+    let r5 = engine.render("code.modified", &ctx).unwrap();
+    println!("    5. \"{r5}\"");
+
+    println!();
+    println!("  1st mention: full form \"The class UserService\"");
+    println!("  2nd mention (same focus): pronoun \"it\"");
+    println!("  3rd mention (continued focus): pronoun \"it\"");
+    println!("  4th: different entity introduced (full form)");
+    println!("  5th: back to UserService but ambiguity prevents pronoun\n");
 }
 
 // ── Discourse-Aware Rendering ─────────────────────────────────────────────
