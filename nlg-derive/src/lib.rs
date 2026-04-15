@@ -1,6 +1,11 @@
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{parse_macro_input, Data, DeriveInput, Fields, GenericArgument, PathArguments, Type};
+use syn::{
+    parse::{Parse, ParseStream},
+    parse_macro_input,
+    punctuated::Punctuated,
+    Data, DeriveInput, Fields, GenericArgument, Ident, LitStr, PathArguments, Token, Type,
+};
 
 /// Derive `IntoContext` for a struct, converting its fields into `Context` key-value pairs.
 ///
@@ -180,4 +185,206 @@ fn extract_option_inner(ty: &Type) -> Option<&Type> {
         return Some(inner);
     }
     None
+}
+
+// ── nlg_template! ──────────────────────────────────────────────────────────
+
+/// Pipe names that the NLG engine's `apply_pipe` dispatch recognises.
+/// Kept in sync with `engine.rs::apply_pipe`. Used by `nlg_template!` for
+/// compile-time pipe validation.
+const VALID_PIPES: &[&str] = &[
+    "pluralize",
+    "article",
+    "join",
+    "ordinal",
+    "words",
+    "truncate",
+    "capitalize",
+    "refer",
+    "verb",
+    "syn",
+    "relative",
+    "quantify",
+    "hedge",
+    "negated",
+];
+
+/// Compile-time-validated template string.
+///
+/// Parses the template, checks every slot reference against the declared
+/// `slots` list, and checks every pipe name against the engine's known-pipe
+/// set. On success, expands to the original template string literal (`&'static str`).
+/// On mismatch, emits a compile error pointing at the `template:` argument.
+///
+/// # Syntax
+///
+/// ```
+/// use nlg_derive::nlg_template;
+///
+/// let tpl: &'static str = nlg_template! {
+///     template: "The {entity_type} {name|refer} was renamed to {new_name}",
+///     slots: [entity_type, name, new_name],
+/// };
+/// assert!(tpl.contains("{name|refer}"));
+/// ```
+///
+/// The `slots:` list uses bare identifiers matching the slot keys in the
+/// template. Declaring extra slots that are not used in the template is
+/// allowed. Slots used by conditional guards (`{?key}`) must also be declared.
+///
+/// # Limitations (v1)
+///
+/// - Pipe *arguments* (`truncate:3`, `verb:past`, etc.) are not validated — only the pipe name.
+/// - Slots inside partial inclusions (`{>name}`) are not validated — partials
+///   are opaque at compile time and resolved by the engine at registration time.
+/// - Compile-fail tests require an external `trybuild` harness (deferred to v2).
+#[proc_macro]
+pub fn nlg_template(input: TokenStream) -> TokenStream {
+    let parsed = parse_macro_input!(input as NlgTemplateInput);
+
+    match validate_template(&parsed) {
+        Ok(()) => {
+            let lit = &parsed.template;
+            quote! { #lit }.into()
+        }
+        Err(e) => e.to_compile_error().into(),
+    }
+}
+
+struct NlgTemplateInput {
+    template: LitStr,
+    slots: Vec<Ident>,
+}
+
+impl Parse for NlgTemplateInput {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let mut template: Option<LitStr> = None;
+        let mut slots: Option<Vec<Ident>> = None;
+
+        while !input.is_empty() {
+            let key: Ident = input.parse()?;
+            input.parse::<Token![:]>()?;
+            match key.to_string().as_str() {
+                "template" => {
+                    template = Some(input.parse::<LitStr>()?);
+                }
+                "slots" => {
+                    let content;
+                    syn::bracketed!(content in input);
+                    let parsed_idents: Punctuated<Ident, Token![,]> =
+                        Punctuated::parse_terminated(&content)?;
+                    slots = Some(parsed_idents.into_iter().collect());
+                }
+                other => {
+                    return Err(syn::Error::new(
+                        key.span(),
+                        format!("unknown key `{other}` — expected `template` or `slots`"),
+                    ));
+                }
+            }
+            if !input.is_empty() {
+                input.parse::<Token![,]>()?;
+            }
+        }
+
+        let template = template.ok_or_else(|| {
+            syn::Error::new(input.span(), "missing `template: \"...\"` argument")
+        })?;
+        let slots = slots.unwrap_or_default();
+
+        Ok(NlgTemplateInput { template, slots })
+    }
+}
+
+fn validate_template(input: &NlgTemplateInput) -> syn::Result<()> {
+    let template_str = input.template.value();
+    let span = input.template.span();
+
+    let parsed = nlg_core::Template::parse(&template_str).map_err(|e| {
+        syn::Error::new(span, format!("invalid template: {e}"))
+    })?;
+
+    let declared: std::collections::HashSet<String> =
+        input.slots.iter().map(|i| i.to_string()).collect();
+
+    validate_slots(&parsed, &declared, span)?;
+    validate_pipes(&parsed, span)?;
+
+    Ok(())
+}
+
+fn validate_slots(
+    template: &nlg_core::Template,
+    declared: &std::collections::HashSet<String>,
+    span: proc_macro2::Span,
+) -> syn::Result<()> {
+    let used = template.slot_keys();
+    let mut undeclared: Vec<String> = used
+        .into_iter()
+        .filter(|k| !declared.contains(k))
+        .collect();
+    undeclared.sort();
+    undeclared.dedup();
+
+    if !undeclared.is_empty() {
+        let list = undeclared.join(", ");
+        let mut declared_sorted: Vec<_> = declared.iter().cloned().collect();
+        declared_sorted.sort();
+        let declared_list = declared_sorted.join(", ");
+        return Err(syn::Error::new(
+            span,
+            format!(
+                "template uses slot(s) not declared in `slots: [...]`: {list}\n  declared: [{declared_list}]",
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_pipes(
+    template: &nlg_core::Template,
+    span: proc_macro2::Span,
+) -> syn::Result<()> {
+    let used = template.pipe_names();
+    let mut unknown: Vec<String> = used
+        .into_iter()
+        .filter(|p| !VALID_PIPES.contains(&p.as_str()))
+        .collect();
+    unknown.sort();
+    unknown.dedup();
+
+    if !unknown.is_empty() {
+        let list = unknown
+            .iter()
+            .map(|p| match nearest_pipe(p) {
+                Some(s) => format!("`{p}` (did you mean `{s}`?)"),
+                None => format!("`{p}`"),
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Err(syn::Error::new(
+            span,
+            format!(
+                "template uses unknown pipe(s): {list}\n  known pipes: [{}]",
+                VALID_PIPES.join(", ")
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn nearest_pipe(unknown: &str) -> Option<&'static str> {
+    // Exact prefix / suffix match first (catches common truncations).
+    if let Some(&valid) = VALID_PIPES
+        .iter()
+        .find(|&&v| v.starts_with(unknown) || unknown.starts_with(v))
+    {
+        return Some(valid);
+    }
+    // Fallback: any pipe sharing the first three characters.
+    let prefix: String = unknown.chars().take(3).collect();
+    VALID_PIPES
+        .iter()
+        .find(|&&v| v.starts_with(prefix.as_str()))
+        .copied()
 }
