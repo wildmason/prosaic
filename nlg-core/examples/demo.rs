@@ -1,6 +1,6 @@
 use nlg_core::{
-    Clause, Context, DocumentPlan, Engine, Sentence, Strictness, Tense, Value, Variation, Voice,
-    entity, named,
+    entity, named, Clause, Context, DocumentPlan, Engine, EntityDescriptor, Sentence, Strictness,
+    Tense, Value, Variation, VerbForm, Voice,
 };
 use nlg_derive::IntoContext;
 use nlg_grammar_en::English;
@@ -9,12 +9,15 @@ fn main() {
     println!("=== nlg crate demo ===\n");
 
     referring_expression_demo();
+    reg_disambiguation_demo();
     salience_demo();
     document_planning_demo();
     discourse_aware_demos();
     batch_rendering_demo();
     template_api_demos();
     builder_api_demos();
+    tense_and_aspect_demo();
+    elegance_time_quantifier_demo();
     vocab_code_demos();
     variation_demos();
     strictness_demos();
@@ -32,6 +35,78 @@ fn show(label: &str, result: &str) {
 }
 
 // ── Referring Expressions ─────────────────────────────────────────────────
+
+// ── REG: Dale & Reiter disambiguation ────────────────────────────────────
+
+fn reg_disambiguation_demo() {
+    header("Referring Expression Generation (REG)");
+
+    println!("  Without REG, ambiguous same-type entities render with the bare type:");
+    println!("    \"The class UserService was modified. The class AuthService was modified.\"\n");
+    println!("  With entities registered, the Dale & Reiter incremental algorithm");
+    println!("  adds the shortest distinguisher that uniquely identifies each.\n");
+
+    let mut engine = Engine::new(English::new())
+        .strictness(Strictness::Strict)
+        .variation(Variation::Fixed)
+        .attribute_preference(vec!["layer".to_string()]);
+
+    engine.register_entity(
+        EntityDescriptor::new("UserService", "class").with_attribute("layer", "domain"),
+    );
+    engine.register_entity(
+        EntityDescriptor::new("AuthService", "class").with_attribute("layer", "infra"),
+    );
+
+    engine
+        .register_template("t", "{name|refer} was modified")
+        .unwrap();
+
+    let mut ctx = Context::new();
+    ctx.insert("entity_type", Value::String("class".into()));
+    ctx.insert("name", Value::String("UserService".into()));
+    show("First render", &engine.render("t", &ctx).unwrap());
+
+    let mut ctx2 = Context::new();
+    ctx2.insert("entity_type", Value::String("class".into()));
+    ctx2.insert("name", Value::String("AuthService".into()));
+    show("Second render", &engine.render("t", &ctx2).unwrap());
+
+    // A 3-way disambiguation: multiple attributes may be needed.
+    let mut engine3 = Engine::new(English::new())
+        .strictness(Strictness::Strict)
+        .variation(Variation::Fixed)
+        .attribute_preference(vec!["color".to_string(), "size".to_string()]);
+
+    engine3.register_entity(
+        EntityDescriptor::new("Alpha", "widget")
+            .with_attribute("color", "red")
+            .with_attribute("size", "small"),
+    );
+    engine3.register_entity(
+        EntityDescriptor::new("Bravo", "widget")
+            .with_attribute("color", "red")
+            .with_attribute("size", "large"),
+    );
+    engine3.register_entity(
+        EntityDescriptor::new("Charlie", "widget")
+            .with_attribute("color", "blue")
+            .with_attribute("size", "small"),
+    );
+
+    engine3
+        .register_template("t", "{name|refer} appeared on stage")
+        .unwrap();
+
+    println!("  Three widgets, each partially sharing attributes with the others:\n");
+    for name in ["Alpha", "Bravo", "Charlie"] {
+        let mut ctx = Context::new();
+        ctx.insert("entity_type", Value::String("widget".into()));
+        ctx.insert("name", Value::String(name.into()));
+        show(name, &engine3.render("t", &ctx).unwrap());
+        engine3.reset();
+    }
+}
 
 // ── Importance-Aware Verbosity ─────────────────────────────────────────
 
@@ -157,6 +232,22 @@ fn document_planning_demo() {
 
     let narrative = plan.render(&engine).unwrap();
     println!("  Final narrative:\n");
+    for line in narrative.lines() {
+        println!("    {line}");
+    }
+    println!();
+
+    // Second pass: same events, rhetorical grouping
+    println!("  With `GroupingStrategy::ByAction`, the same events become");
+    println!("  a section-style summary (removals → additions → modifications):\n");
+
+    engine.reset();
+    let plan = nlg_core::DocumentPlan::from_events_grouped(
+        &events,
+        &engine,
+        nlg_core::GroupingStrategy::ByAction,
+    );
+    let narrative = plan.render(&engine).unwrap();
     for line in narrative.lines() {
         println!("    {line}");
     }
@@ -379,6 +470,36 @@ fn batch_rendering_demo() {
     let aggregated = engine3.render_batch(&events).unwrap();
     println!("  True aggregation (3 deletions with matching context):\n");
     println!("    \"{aggregated}\"\n");
+
+    // Clause reduction: same entity, three different simple actions
+    let mut engine4 = Engine::new(English::new()).variation(Variation::Fixed);
+    // Tiny template set with no embedded clauses so reduction fires.
+    engine4
+        .register_template("code.renamed", "{old_name|refer} was renamed")
+        .unwrap();
+    engine4
+        .register_template("code.modified", "{name|refer} was modified")
+        .unwrap();
+    engine4
+        .register_template("code.moved", "{name|refer} was moved")
+        .unwrap();
+
+    let mut c1 = Context::new();
+    c1.insert("entity_type", Value::String("class".into()));
+    c1.insert("old_name", Value::String("UserService".into()));
+    c1.insert("name", Value::String("UserService".into()));
+    let c2 = c1.clone();
+    let c3 = c1.clone();
+
+    let events: Vec<(&str, Context)> = vec![
+        ("code.renamed", c1),
+        ("code.modified", c2),
+        ("code.moved", c3),
+    ];
+
+    let reduced = engine4.render_batch(&events).unwrap();
+    println!("  Clause reduction (same entity, simple predicates, matching voice):\n");
+    println!("    \"{reduced}\"\n");
 }
 
 // ── Template API ─────────────────────────────────────────────────────────
@@ -592,6 +713,133 @@ fn builder_api_demos() {
         .render(&engine)
         .unwrap();
     show("Present tense (3rd person)", &result);
+}
+
+// ── Tense & Aspect ───────────────────────────────────────────────────────
+
+fn tense_and_aspect_demo() {
+    header("Tense & Aspect Variation");
+
+    let engine = Engine::new(English::new())
+        .strictness(Strictness::Strict)
+        .variation(Variation::Fixed);
+
+    println!("  Templates can use the `verb` pipe to compose full verb phrases");
+    println!("  from any base verb + form + voice. Irregular English verbs");
+    println!("  (rename → renamed, write → written, break → broken) are handled.\n");
+
+    // Same event, six different verb forms — each one gives a different
+    // emphasis and tone. All driven by a single `{… |verb:<form>}` template.
+    let forms = [
+        ("past", "Simple past"),
+        ("present_perfect", "Present perfect"),
+        ("present_progressive", "Present progressive"),
+        ("future", "Simple future"),
+        ("conditional", "Conditional"),
+        ("conditional_perfect", "Conditional perfect"),
+    ];
+
+    for (form, label) in forms {
+        // A tiny inline template per variant so the label appears right alongside
+        let tpl = format!("The {{entity_type}} {{name}} {{action|verb:{form}}}");
+        let mut ctx = Context::new();
+        ctx.insert("entity_type", Value::String("class".into()));
+        ctx.insert("name", Value::String("UserService".into()));
+        ctx.insert("action", Value::String("rename".into()));
+        let rendered = engine.render_inline(&tpl, &ctx).unwrap();
+        show(label, &rendered);
+    }
+
+    println!("  The same machinery drives the builder via `.form(VerbForm::…)`:\n");
+
+    let sentences = [
+        (VerbForm::PresentPerfect, Voice::Passive, "break"),
+        (VerbForm::PresentProgressive, Voice::Passive, "write"),
+        (VerbForm::PastPerfect, Voice::Active, "ship"),
+        (VerbForm::Conditional, Voice::Passive, "deprecate"),
+    ];
+
+    for (form, voice, verb) in sentences {
+        let rendered = Sentence::new()
+            .subject(entity("module", "Core"))
+            .verb_word(verb)
+            .form(form)
+            .voice(voice)
+            .render(&engine)
+            .unwrap();
+        show(&format!("{form:?} / {voice:?} / {verb}"), &rendered);
+    }
+}
+
+// ── Elegant variation, time, quantifier naturalization ──────────────────
+
+fn elegance_time_quantifier_demo() {
+    header("Elegant Variation, Time, and Quantifiers");
+
+    // Synonym rotation across renders.
+    let mut engine = Engine::new(English::new())
+        .strictness(Strictness::Strict)
+        .variation(Variation::Fixed);
+    engine.register_synonyms(&["consumer", "dependent", "caller"]);
+    engine
+        .register_template("t", "{count} {word|syn} may need review")
+        .unwrap();
+
+    println!("  Same slot value across three renders, different synonym each time:\n");
+    for i in 0..3 {
+        let mut ctx = Context::new();
+        ctx.insert("count", Value::Number(3));
+        ctx.insert("word", Value::String("consumer".into()));
+        show(&format!("Render {}", i + 1), &engine.render("t", &ctx).unwrap());
+    }
+
+    // Relative time framing.
+    let now: i64 = 1_700_000_000;
+    let mut engine2 = Engine::new(English::new())
+        .variation(Variation::Fixed)
+        .reference_time(now);
+    engine2
+        .register_template("t", "The change landed {ts|relative}")
+        .unwrap();
+
+    println!("  Relative time (`reference_time` fixed for reproducibility):\n");
+    let timestamps = [
+        (now - 60, "1 minute ago"),
+        (now - 90_000, "yesterday"),
+        (now - 3 * 86400, "3 days ago"),
+        (now - 10 * 86400, "last week"),
+        (now + 10 * 86400, "next week"),
+    ];
+    for (ts, _expected) in timestamps {
+        let mut ctx = Context::new();
+        ctx.insert("ts", Value::Number(ts));
+        show(
+            &format!("ts={ts}"),
+            &engine2.render("t", &ctx).unwrap(),
+        );
+        engine2.reset();
+    }
+
+    // Quantifier naturalization.
+    let mut engine3 = Engine::new(English::new()).variation(Variation::Fixed);
+    engine3
+        .register_template(
+            "t",
+            "The class Foo affects {count|quantify} {count|pluralize:caller}",
+        )
+        .unwrap();
+
+    println!("  Quantifier naturalization (natural default — auto hedges large counts):\n");
+    let counts = [0_i64, 1, 3, 12, 47, 150, 473, 5_000];
+    for count in counts {
+        let mut ctx = Context::new();
+        ctx.insert("count", Value::Number(count));
+        show(
+            &format!("count={count}"),
+            &engine3.render("t", &ctx).unwrap(),
+        );
+        engine3.reset();
+    }
 }
 
 // ── Vocab Code module ────────────────────────────────────────────────────
