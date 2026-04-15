@@ -1,5 +1,35 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 
+use ahash::AHashMap;
+
+/// Private word interner. Maps lowercased words to stable `u32` ids.
+/// Lowercasing happens at intern time; callers must pass already-lowercased
+/// input to `intern`/`get`.
+#[derive(Debug, Clone, Default)]
+struct WordInterner {
+    /// Lowercased word → u32 id.
+    by_word: AHashMap<String, u32>,
+    /// Reverse map for debugging. Indexed by id.
+    by_id: Vec<String>,
+}
+
+impl WordInterner {
+    fn intern(&mut self, word: &str) -> u32 {
+        if let Some(&id) = self.by_word.get(word) {
+            return id;
+        }
+        let id = self.by_id.len() as u32;
+        let owned = word.to_string();
+        self.by_word.insert(owned.clone(), id);
+        self.by_id.push(owned);
+        id
+    }
+
+    fn get(&self, word: &str) -> Option<u32> {
+        self.by_word.get(word).copied()
+    }
+}
+
 /// Tracks discourse state across multiple render calls for natural output.
 ///
 /// This is the engine's internal memory — it knows what entities were recently
@@ -29,8 +59,17 @@ pub struct DiscourseState {
     last_entity_name: Option<String>,
 
     /// Non-stopword tokens from recent renders, with render_index.
+    /// Words are stored as interned `u32` ids — see `interner`.
     /// Kept for a window of the last 5 renders.
-    word_history: VecDeque<(usize, HashSet<String>)>,
+    word_history: VecDeque<(usize, HashSet<u32>)>,
+
+    /// Word interner shared across all render history. Lowercasing happens
+    /// once at intern time; all subsequent lookups use pre-lowercased ids.
+    interner: WordInterner,
+
+    /// Pre-interned ids for every stopword in `STOPWORDS`. Populated once
+    /// during construction so `record_output_words` never scans strings.
+    stopword_ids: HashSet<u32>,
 
     /// Last list style index used (for cycling).
     last_list_style: usize,
@@ -128,6 +167,13 @@ const CONTRAST_CONNECTIVES: &[&str] = &[
 
 impl DiscourseState {
     pub fn new() -> Self {
+        let mut interner = WordInterner::default();
+        // Pre-intern all stopwords so membership checks are O(1) u32 lookups.
+        let stopword_ids: HashSet<u32> = STOPWORDS
+            .iter()
+            .map(|&w| interner.intern(w))
+            .collect();
+
         Self {
             entities: HashMap::new(),
             render_index: 0,
@@ -137,6 +183,8 @@ impl DiscourseState {
             last_template_key: None,
             last_entity_name: None,
             word_history: VecDeque::new(),
+            interner,
+            stopword_ids,
             last_list_style: 0,
             focus_is_plural: false,
         }
@@ -304,14 +352,20 @@ impl DiscourseState {
 
     /// Record the words from a rendered output for repetition scoring.
     pub fn record_output_words(&mut self, output: &str) {
-        let words: HashSet<String> = output
-            .split_whitespace()
-            .map(|w| w.trim_matches(|c: char| !c.is_alphanumeric()).to_lowercase())
-            .filter(|w| w.len() > 2 && !STOPWORDS.contains(&w.as_str()))
-            .collect();
+        let mut ids: HashSet<u32> = HashSet::new();
+        for raw in output.split_whitespace() {
+            let w = raw.trim_matches(|c: char| !c.is_alphanumeric()).to_lowercase();
+            if w.len() <= 2 {
+                continue;
+            }
+            let id = self.interner.intern(&w);
+            if self.stopword_ids.contains(&id) {
+                continue;
+            }
+            ids.insert(id);
+        }
 
-        self.word_history
-            .push_back((self.render_index, words));
+        self.word_history.push_back((self.render_index, ids));
 
         // Trim to window
         while self.word_history.len() > WORD_HISTORY_WINDOW {
@@ -322,16 +376,28 @@ impl DiscourseState {
     /// Score a candidate output for repetition against recent history.
     /// Lower score = less repetition = better.
     pub fn repetition_score(&self, candidate: &str) -> f64 {
-        let candidate_words: HashSet<String> = candidate
+        // Collect candidate word ids; new words may not be in the interner
+        // yet, so use `get` (read-only) and skip unknowns — they have no
+        // history so they contribute zero to the score.
+        let candidate_ids: HashSet<u32> = candidate
             .split_whitespace()
-            .map(|w| w.trim_matches(|c: char| !c.is_alphanumeric()).to_lowercase())
-            .filter(|w| w.len() > 2 && !STOPWORDS.contains(&w.as_str()))
+            .filter_map(|raw| {
+                let w = raw.trim_matches(|c: char| !c.is_alphanumeric()).to_lowercase();
+                if w.len() <= 2 {
+                    return None;
+                }
+                let id = self.interner.get(&w)?;
+                if self.stopword_ids.contains(&id) {
+                    return None;
+                }
+                Some(id)
+            })
             .collect();
 
         let mut score = 0.0;
-        for (idx, words) in &self.word_history {
+        for (idx, ids) in &self.word_history {
             let distance = self.render_index.saturating_sub(*idx);
-            let overlap = candidate_words.intersection(words).count();
+            let overlap = candidate_ids.intersection(ids).count();
             // Closer renders penalized more heavily
             let weight = match distance {
                 0 | 1 => 3.0,
@@ -350,9 +416,15 @@ impl DiscourseState {
     /// group for elegant variation.
     pub fn word_frequency(&self, word: &str) -> f64 {
         let lower = word.to_lowercase();
+        // Word must already be interned; if it has never appeared in history
+        // its frequency is zero by definition.
+        let id = match self.interner.get(&lower) {
+            Some(id) => id,
+            None => return 0.0,
+        };
         let mut score = 0.0;
-        for (idx, words) in &self.word_history {
-            if !words.contains(&lower) {
+        for (idx, ids) in &self.word_history {
+            if !ids.contains(&id) {
                 continue;
             }
             let distance = self.render_index.saturating_sub(*idx);
