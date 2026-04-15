@@ -2,6 +2,8 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use crate::session::Session;
+
 use crate::context::{Context, IntoContext, Value};
 use crate::discourse::{DiscourseState, ListStyle, ReferenceForm};
 use crate::error::NlgError;
@@ -199,6 +201,749 @@ pub struct Engine {
     #[cfg(feature = "polish")]
     smart_quotes: bool,
     partials: HashMap<String, Template>,
+}
+
+/// Bundle of an immutable engine reference and mutable session state,
+/// used internally to thread session through all render helpers without
+/// duplicating parameters everywhere.
+struct RenderCtx<'e, 's> {
+    engine: &'e Engine,
+    session: &'s mut Session,
+}
+
+impl<'e, 's> RenderCtx<'e, 's> {
+    fn new(engine: &'e Engine, session: &'s mut Session) -> Self {
+        Self { engine, session }
+    }
+
+    /// The body of a render call, performed against live session state.
+    /// Callers snapshot state beforehand and restore on error.
+    fn render_tx(
+        &mut self,
+        key: &str,
+        all_alternatives: &[SalientTemplate],
+        context: &Context,
+    ) -> Result<String, NlgError> {
+        // Advance discourse state
+        self.session.discourse.begin_render();
+
+        // Extract entity info from context for discourse tracking
+        let entity_name = context
+            .get("name")
+            .or_else(|| context.get("old_name"))
+            .map(|v| v.as_display());
+        let entity_type = context.get("entity_type").map(|v| v.as_display());
+
+        // Detect discourse connective
+        let relation = self.session.discourse.detect_relation(key, entity_name.as_deref());
+        let connective = self.session.discourse.select_connective(&relation);
+
+        // Filter templates by salience level matching the context magnitude.
+        let target_salience = self.engine.context_salience(context);
+        let alternatives = filter_by_salience(all_alternatives, target_salience);
+
+        // Select template with choosebest scoring and anti-repeat
+        let (template, variant_index) =
+            self.select_alternative_scored(key, &alternatives, context)?;
+
+        // Record template choice
+        self.session.discourse.record_template_choice(key, variant_index);
+
+        // Render the selected template.
+        let mut output = self.render_template(key, template, context)?;
+
+        // Prepend discourse connective if applicable
+        if let Some(conn) = connective {
+            if conn.starts_with("It ") {
+                output = prepend_replacing_subject(&output, conn);
+            } else {
+                output = format!("{conn} {}", lowercase_first(&output));
+            }
+        }
+
+        // Capitalize if the template starts with a refer pipe
+        if starts_with_refer_pipe(template) {
+            output = capitalize_first(&output);
+        }
+
+        // Clean up whitespace and silent-mode gaps
+        output = cleanup_artifacts(&output, self.engine.strictness);
+
+        // Terminate the sentence
+        output = terminate_sentence(&output);
+
+        // Length budget
+        #[cfg(feature = "polish")]
+        if let Some(max_chars) = self.engine.max_sentence_length {
+            output = split_long(&output, max_chars);
+        }
+
+        // Typographic polish
+        #[cfg(feature = "polish")]
+        if self.engine.smart_quotes {
+            output = smart_quotes(&output);
+        }
+
+        // Record entity mention in discourse state
+        if let (Some(name), Some(etype)) = (&entity_name, &entity_type) {
+            self.session.discourse.mention_entity(name, etype);
+        }
+
+        // Record output words for future repetition scoring
+        self.session.discourse.record_output_words(&output);
+
+        Ok(output)
+    }
+
+    fn select_alternative_scored<'a>(
+        &mut self,
+        key: &str,
+        alternatives: &'a [Template],
+        context: &Context,
+    ) -> Result<(&'a Template, usize), NlgError> {
+        if alternatives.len() == 1 {
+            return Ok((&alternatives[0], 0));
+        }
+
+        let allow_choose_best = matches!(
+            self.engine.variation,
+            Variation::Seeded(_) | Variation::Random
+        );
+
+        if !allow_choose_best {
+            let index = self.select_variant_index(key, alternatives.len());
+            return Ok((&alternatives[index], index));
+        }
+
+        let last_variant = self.session.discourse.last_template_variant(key);
+        let is_first = self.session.discourse.is_first_render();
+
+        if is_first {
+            let index = self.select_variant_index(key, alternatives.len());
+            return Ok((&alternatives[index], index));
+        }
+
+        // Snapshot-and-restore around candidate rendering so state
+        // is untouched by alternatives that aren't emitted.
+        let snapshot = self.session.clone();
+
+        let mut candidates: Vec<(usize, String)> = Vec::new();
+        for (i, template) in alternatives.iter().enumerate() {
+            if Some(i) == last_variant {
+                continue;
+            }
+            let candidate = match self.render_template(key, template, context) {
+                Ok(s) => s,
+                Err(e) => {
+                    *self.session = snapshot;
+                    return Err(e);
+                }
+            };
+            candidates.push((i, candidate));
+        }
+
+        *self.session = snapshot;
+
+        if candidates.is_empty() {
+            let index = last_variant.unwrap_or(0).min(alternatives.len() - 1);
+            return Ok((&alternatives[index], index));
+        }
+
+        // Score against discourse history (immutable access only)
+        let mut best_index = candidates[0].0;
+        let mut best_score = f64::MAX;
+
+        for (i, candidate) in &candidates {
+            let score = self.session.discourse.repetition_score(candidate);
+            if score < best_score {
+                best_score = score;
+                best_index = *i;
+            }
+        }
+
+        Ok((&alternatives[best_index], best_index))
+    }
+
+    fn select_variant_index(&mut self, key: &str, count: usize) -> usize {
+        match self.engine.variation {
+            Variation::Fixed => 0,
+            Variation::Seeded(seed) => {
+                let hash = simple_hash(key, seed);
+                hash as usize % count
+            }
+            Variation::RoundRobin => {
+                let counter = self
+                    .session
+                    .round_robin_counters
+                    .entry(key.to_string())
+                    .or_insert_with(|| AtomicUsize::new(0))
+                    .fetch_add(1, Ordering::Relaxed);
+                counter % count
+            }
+            Variation::Random => {
+                let nanos = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .subsec_nanos() as usize;
+                nanos % count
+            }
+        }
+    }
+
+    fn render_template(
+        &mut self,
+        key: &str,
+        template: &Template,
+        context: &Context,
+    ) -> Result<String, NlgError> {
+        self.render_segments(key, &template.segments, context)
+    }
+
+    fn render_segments(
+        &mut self,
+        key: &str,
+        segments: &[Segment],
+        context: &Context,
+    ) -> Result<String, NlgError> {
+        let mut output = String::new();
+
+        for segment in segments {
+            match segment {
+                Segment::Literal(text) => output.push_str(text),
+                Segment::Slot {
+                    key: slot_key,
+                    pipes,
+                } => {
+                    let rendered = self.render_slot(key, slot_key, pipes, context)?;
+                    output.push_str(&rendered);
+                }
+                Segment::Conditional {
+                    condition_key,
+                    inner,
+                } => {
+                    if is_truthy(context.get(condition_key)) {
+                        let rendered = self.render_segments(key, inner, context)?;
+                        output.push_str(&rendered);
+                    }
+                }
+                Segment::Partial { name } => {
+                    // Clone the partial segments to avoid borrow conflicts
+                    let partial_segments = self.engine.partials.get(name).ok_or_else(|| {
+                        NlgError::TemplateParseError {
+                            template: key.to_string(),
+                            position: 0,
+                            reason: format!(
+                                "unknown partial `{name}` — register it with `engine.register_partial`"
+                            ),
+                        }
+                    })?.segments.clone();
+                    let rendered = self.render_segments(key, &partial_segments, context)?;
+                    output.push_str(&rendered);
+                }
+            }
+        }
+
+        Ok(output)
+    }
+
+    fn render_slot(
+        &mut self,
+        template_key: &str,
+        slot_key: &str,
+        pipes: &[Pipe],
+        context: &Context,
+    ) -> Result<String, NlgError> {
+        let value = match context.get(slot_key) {
+            Some(v) => v.clone(),
+            None => return self.handle_missing_slot(template_key, slot_key),
+        };
+
+        if pipes.is_empty() {
+            return Ok(value.as_display());
+        }
+
+        let mut current = value;
+        for pipe in pipes {
+            current = self.apply_pipe(pipe, &current, context)?;
+        }
+
+        Ok(current.as_display())
+    }
+
+    fn handle_missing_slot(
+        &self,
+        template_key: &str,
+        slot_key: &str,
+    ) -> Result<String, NlgError> {
+        match self.engine.strictness {
+            Strictness::Strict => Err(NlgError::MissingSlot {
+                template: template_key.to_string(),
+                slot: slot_key.to_string(),
+            }),
+            Strictness::Lenient => Ok(format!("[missing: {slot_key}]")),
+            Strictness::Silent => Ok(String::new()),
+        }
+    }
+
+    fn apply_pipe(
+        &mut self,
+        pipe: &Pipe,
+        value: &Value,
+        context: &Context,
+    ) -> Result<Value, NlgError> {
+        match pipe.name.as_str() {
+            "pluralize" => self.pipe_pluralize(pipe, value, context),
+            "article" => self.pipe_article(value),
+            "join" => self.pipe_join(pipe, value),
+            "ordinal" => self.pipe_ordinal(value),
+            "words" => self.pipe_words(value),
+            "truncate" => self.pipe_truncate(pipe, value),
+            "capitalize" => self.pipe_capitalize(value),
+            "refer" => self.pipe_refer(pipe, value, context),
+            "verb" => self.pipe_verb(pipe, value),
+            "syn" => self.pipe_syn(value),
+            #[cfg(feature = "time")]
+            "relative" => self.pipe_relative(value),
+            "quantify" => self.pipe_quantify(pipe, value),
+            "demonstrative" => self.pipe_demonstrative(value),
+            "hedge" => self.pipe_hedge(pipe, value),
+            "negated" => self.pipe_negated(value),
+            _ => Err(NlgError::InvalidPipe {
+                pipe: pipe.name.clone(),
+                reason: "unknown pipe".to_string(),
+            }),
+        }
+    }
+
+    fn pipe_refer(
+        &self,
+        pipe: &Pipe,
+        value: &Value,
+        context: &Context,
+    ) -> Result<Value, NlgError> {
+        let name = value.as_display();
+
+        let entity_type = match &pipe.arg {
+            Some(PipeArg::String(t)) => t.clone(),
+            _ => context
+                .get("entity_type")
+                .map(|v| v.as_display())
+                .unwrap_or_default(),
+        };
+
+        let form = self.session.discourse.reference_form(&name);
+
+        let rendered = match form {
+            ReferenceForm::Full => self.engine.render_full_reference(&name, &entity_type),
+            ReferenceForm::ShortName => name,
+            ReferenceForm::Pronoun => {
+                if self.session.discourse.focus_is_plural() {
+                    "they".to_string()
+                } else {
+                    "it".to_string()
+                }
+            }
+        };
+
+        Ok(Value::String(rendered))
+    }
+
+    fn pipe_demonstrative(&self, value: &Value) -> Result<Value, NlgError> {
+        let noun = value.as_display();
+        if noun.is_empty() {
+            return Ok(Value::String(noun));
+        }
+
+        let determiner = if self.session.discourse.has_prior_render() {
+            "this"
+        } else {
+            "the"
+        };
+
+        Ok(Value::String(format!("{determiner} {noun}")))
+    }
+
+    fn pipe_syn(&self, value: &Value) -> Result<Value, NlgError> {
+        let word = value.as_display();
+        let synonyms = match self.engine.synonyms.synonyms_for(&word) {
+            Some(s) => s,
+            None => return Ok(Value::String(word)),
+        };
+
+        if synonyms.is_empty() {
+            return Ok(Value::String(word));
+        }
+
+        let mut best = &synonyms[0];
+        let mut best_score = self.session.discourse.word_frequency(&synonyms[0]);
+        for syn in &synonyms[1..] {
+            let score = self.session.discourse.word_frequency(syn);
+            if score < best_score {
+                best_score = score;
+                best = syn;
+            }
+        }
+
+        let result = if word
+            .chars()
+            .next()
+            .map(|c| c.is_uppercase())
+            .unwrap_or(false)
+        {
+            capitalize_first(best)
+        } else {
+            best.clone()
+        };
+
+        Ok(Value::String(result))
+    }
+
+    fn pipe_join(&mut self, pipe: &Pipe, value: &Value) -> Result<Value, NlgError> {
+        let items = value.as_list().ok_or_else(|| NlgError::InvalidPipe {
+            pipe: "join".to_string(),
+            reason: "value must be a list".to_string(),
+        })?;
+
+        let forced_style = match &pipe.arg {
+            Some(PipeArg::String(s)) if s == "bracketed" => Some(ListStyle::Bracketed),
+            Some(PipeArg::String(s)) if s == "including" => Some(ListStyle::Including),
+            Some(PipeArg::String(s)) if s == "such_as" => Some(ListStyle::SuchAs),
+            Some(PipeArg::String(s)) if s == "dash" => Some(ListStyle::Dash),
+            _ => None,
+        };
+
+        let conjunction = match &pipe.arg {
+            Some(PipeArg::String(s)) if s == "or" => Conjunction::Or,
+            _ => Conjunction::And,
+        };
+
+        let style = forced_style.unwrap_or_else(|| {
+            self.session.discourse.next_list_style()
+        });
+
+        let refs: Vec<&str> = items.iter().map(|s| s.as_str()).collect();
+
+        let has_truncation = items.last().is_some_and(|last| {
+            last.ends_with(" more")
+                && last.split_whitespace().next().is_some_and(|w| w.parse::<usize>().is_ok())
+        });
+
+        if has_truncation && items.len() >= 2 {
+            let shown = &refs[..refs.len() - 1];
+            let remainder = &items[items.len() - 1];
+            Ok(Value::String(format_truncated_list(
+                shown,
+                remainder,
+                style,
+                conjunction,
+                &*self.engine.language,
+            )))
+        } else {
+            let joined = self.engine.language.join_list(&refs, conjunction);
+            Ok(Value::String(joined))
+        }
+    }
+
+    fn pipe_pluralize(
+        &self,
+        pipe: &Pipe,
+        value: &Value,
+        _context: &Context,
+    ) -> Result<Value, NlgError> {
+        let word = match &pipe.arg {
+            Some(PipeArg::String(w)) => w.as_str(),
+            _ => {
+                return Err(NlgError::InvalidPipe {
+                    pipe: "pluralize".to_string(),
+                    reason: "requires a word argument, e.g., {count|pluralize:item}".to_string(),
+                });
+            }
+        };
+
+        let count = value.as_number().ok_or_else(|| NlgError::InvalidPipe {
+            pipe: "pluralize".to_string(),
+            reason: "value must be a number".to_string(),
+        })? as usize;
+
+        Ok(Value::String(self.engine.language.pluralize(word, count)))
+    }
+
+    fn pipe_article(&self, value: &Value) -> Result<Value, NlgError> {
+        let word = value.as_display();
+        let article = self.engine.language.article(&word);
+        Ok(Value::String(format!("{article} {word}")))
+    }
+
+    fn pipe_ordinal(&self, value: &Value) -> Result<Value, NlgError> {
+        let n = value.as_number().ok_or_else(|| NlgError::InvalidPipe {
+            pipe: "ordinal".to_string(),
+            reason: "value must be a number".to_string(),
+        })? as usize;
+
+        Ok(Value::String(self.engine.language.ordinal(n)))
+    }
+
+    fn pipe_words(&self, value: &Value) -> Result<Value, NlgError> {
+        let n = value.as_number().ok_or_else(|| NlgError::InvalidPipe {
+            pipe: "words".to_string(),
+            reason: "value must be a number".to_string(),
+        })? as usize;
+
+        Ok(Value::String(self.engine.language.number_to_words(n)))
+    }
+
+    fn pipe_truncate(&self, pipe: &Pipe, value: &Value) -> Result<Value, NlgError> {
+        let max = match &pipe.arg {
+            Some(PipeArg::Number(n)) => *n,
+            _ => {
+                return Err(NlgError::InvalidPipe {
+                    pipe: "truncate".to_string(),
+                    reason: "requires a numeric argument, e.g., {items|truncate:3}".to_string(),
+                });
+            }
+        };
+
+        let items = value.as_list().ok_or_else(|| NlgError::InvalidPipe {
+            pipe: "truncate".to_string(),
+            reason: "value must be a list".to_string(),
+        })?;
+
+        if items.len() <= max {
+            return Ok(value.clone());
+        }
+
+        let remaining = items.len() - max;
+        let mut truncated: Vec<String> = items[..max].to_vec();
+        let suffix = format!("{remaining} more");
+        truncated.push(suffix);
+
+        Ok(Value::List(truncated))
+    }
+
+    fn pipe_capitalize(&self, value: &Value) -> Result<Value, NlgError> {
+        let s = value.as_display();
+        let capitalized = capitalize_first(&s);
+        Ok(Value::String(capitalized))
+    }
+
+    fn pipe_negated(&self, value: &Value) -> Result<Value, NlgError> {
+        let phrase = value.as_display();
+        if let Some(positive) = self.engine.antonyms.lookup(&phrase) {
+            return Ok(Value::String(positive.to_string()));
+        }
+        Ok(Value::String(insert_not(&phrase)))
+    }
+
+    fn pipe_hedge(&self, pipe: &Pipe, value: &Value) -> Result<Value, NlgError> {
+        let score = value.as_number().ok_or_else(|| NlgError::InvalidPipe {
+            pipe: "hedge".to_string(),
+            reason: "value must be a 0..=100 integer confidence score".to_string(),
+        })?;
+
+        let mode = match &pipe.arg {
+            None => HedgeMode::Adverb,
+            Some(PipeArg::String(s)) => {
+                parse_hedge_mode(s).ok_or_else(|| NlgError::InvalidPipe {
+                    pipe: "hedge".to_string(),
+                    reason: format!(
+                        "unknown hedge mode `{s}` — expected one of adverb, modal, prefix"
+                    ),
+                })?
+            }
+            Some(PipeArg::Number(_)) => {
+                return Err(NlgError::InvalidPipe {
+                    pipe: "hedge".to_string(),
+                    reason: "hedge argument must be a mode name, not a number".to_string(),
+                });
+            }
+        };
+
+        Ok(Value::String(hedge_fn(score, mode).to_string()))
+    }
+
+    fn pipe_quantify(&self, pipe: &Pipe, value: &Value) -> Result<Value, NlgError> {
+        let count = value.as_number().ok_or_else(|| NlgError::InvalidPipe {
+            pipe: "quantify".to_string(),
+            reason: "value must be a number".to_string(),
+        })?;
+
+        let mode = match &pipe.arg {
+            None => QuantifyMode::Natural,
+            Some(PipeArg::String(s)) => {
+                parse_quantify_mode(s).ok_or_else(|| NlgError::InvalidPipe {
+                    pipe: "quantify".to_string(),
+                    reason: format!(
+                        "unknown quantify mode `{s}` — expected one of natural, exact, hedged"
+                    ),
+                })?
+            }
+            Some(PipeArg::Number(_)) => {
+                return Err(NlgError::InvalidPipe {
+                    pipe: "quantify".to_string(),
+                    reason: "quantify argument must be a mode name, not a number".to_string(),
+                });
+            }
+        };
+
+        Ok(Value::String(quantify_fn(count, mode, &*self.engine.language)))
+    }
+
+    fn pipe_verb(&self, pipe: &Pipe, value: &Value) -> Result<Value, NlgError> {
+        let spec = match &pipe.arg {
+            Some(PipeArg::String(s)) => s.as_str(),
+            _ => {
+                return Err(NlgError::InvalidPipe {
+                    pipe: "verb".to_string(),
+                    reason: "requires a form spec argument, e.g., \
+                             {rename|verb:present_perfect}"
+                        .to_string(),
+                });
+            }
+        };
+
+        let (form, voice) = VerbForm::parse_spec(spec).ok_or_else(|| NlgError::InvalidPipe {
+            pipe: "verb".to_string(),
+            reason: format!(
+                "unknown verb form spec `{spec}` — expected one of past, present, future, \
+                 present_perfect, past_perfect, future_perfect, present_progressive, \
+                 past_progressive, conditional, conditional_perfect \
+                 (optionally prefixed with `active_` or `passive_`)"
+            ),
+        })?;
+
+        let verb = value.as_display();
+        let phrase = self.engine.language.verb_phrase(&verb, form, voice, Person::Third);
+        Ok(Value::String(phrase))
+    }
+
+    #[cfg(feature = "time")]
+    fn pipe_relative(&self, value: &Value) -> Result<Value, NlgError> {
+        let ts = value.as_number().ok_or_else(|| NlgError::InvalidPipe {
+            pipe: "relative".to_string(),
+            reason: "value must be a Unix-epoch integer (seconds)".to_string(),
+        })?;
+
+        let now = match self.engine.reference_time {
+            Some(n) => n,
+            None => {
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_secs() as i64)
+                        .unwrap_or(0)
+                }
+                #[cfg(target_arch = "wasm32")]
+                {
+                    return Err(NlgError::InvalidPipe {
+                        pipe: "relative".to_string(),
+                        reason: "on wasm32 targets the engine needs an \
+                                 explicit reference time — call \
+                                 `engine.reference_time(unix_secs)` before \
+                                 rendering"
+                            .to_string(),
+                    });
+                }
+            }
+        };
+
+        let diff = now - ts;
+        Ok(Value::String(format_relative(diff)))
+    }
+
+    /// Score every variant for a key using this session state (for diagnostics).
+    fn score_all_variants(
+        &mut self,
+        key: &str,
+        all: &[SalientTemplate],
+        ctx: &Context,
+    ) -> Result<Vec<VariantScore>, NlgError> {
+        let target_salience = self.engine.context_salience(ctx);
+        let alternatives = filter_by_salience(all, target_salience);
+
+        // Snapshot so candidate renders leave no residue.
+        let snapshot = self.session.clone();
+
+        let last_variant = self.session.discourse.last_template_variant(key);
+        let mut scores: Vec<VariantScore> = Vec::with_capacity(alternatives.len());
+
+        for (i, template) in alternatives.iter().enumerate() {
+            let candidate = match self.render_template(key, template, ctx) {
+                Ok(s) => s,
+                Err(e) => {
+                    *self.session = snapshot;
+                    return Err(e);
+                }
+            };
+            scores.push(VariantScore {
+                index: i,
+                source: template.source.clone(),
+                rendered: candidate,
+                score: 0.0,
+                salience: target_salience,
+                is_last_selected: Some(i) == last_variant,
+                selected: false,
+            });
+        }
+
+        for s in scores.iter_mut() {
+            s.score = self.session.discourse.repetition_score(&s.rendered);
+        }
+
+        // Determine the selected variant
+        let selected_idx = self.pick_variant_index(
+            key,
+            &alternatives,
+            last_variant,
+            &scores,
+        );
+        if let Some(idx) = selected_idx
+            && let Some(s) = scores.get_mut(idx)
+        {
+            s.selected = true;
+        }
+
+        *self.session = snapshot;
+        Ok(scores)
+    }
+
+    fn pick_variant_index(
+        &self,
+        key: &str,
+        alternatives: &[Template],
+        last_variant: Option<usize>,
+        scores: &[VariantScore],
+    ) -> Option<usize> {
+        if alternatives.is_empty() {
+            return None;
+        }
+        if alternatives.len() == 1 {
+            return Some(0);
+        }
+
+        let allow_choose_best = matches!(
+            self.engine.variation,
+            Variation::Seeded(_) | Variation::Random
+        );
+
+        let is_first = self.session.discourse.is_first_render();
+        if !allow_choose_best || is_first {
+            return Some(self.engine.pick_variant_index_static(key, alternatives.len()));
+        }
+
+        let mut best_idx: Option<usize> = None;
+        let mut best_score = f64::MAX;
+        for (i, s) in scores.iter().enumerate() {
+            if Some(i) == last_variant && scores.len() > 1 {
+                continue;
+            }
+            if s.score < best_score {
+                best_score = s.score;
+                best_idx = Some(i);
+            }
+        }
+        best_idx.or(Some(0))
+    }
 }
 
 impl Engine {
@@ -520,132 +1265,23 @@ impl Engine {
             .templates
             .get(key)
             .ok_or_else(|| NlgError::UnknownTemplate(key.to_string()))?;
-
         let context = context.into_context();
 
-        // Snapshot discourse state. If any step below fails, we restore this
-        // snapshot so the failed render leaves no trace.
-        let snapshot = self.discourse.borrow().clone();
+        // Bridge: build session from RefCell state, run, write back.
+        let mut session = self.session_from_refcell();
+        let snapshot = session.clone();
 
-        // Snapshot the RoundRobin counter for this key as well. The
-        // selection path increments it eagerly (during variant index
-        // computation), so a failure mid-render would otherwise skip an
-        // alternative on the next successful render.
-        let rr_snapshot = self
-            .round_robin_counters
-            .get(key)
-            .map(|c| c.load(Ordering::Relaxed));
-
-        match self.render_tx(key, all_alternatives, &context) {
-            Ok(output) => Ok(output),
+        match RenderCtx::new(self, &mut session).render_tx(key, all_alternatives, &context) {
+            Ok(output) => {
+                self.refcell_from_session(&session);
+                Ok(output)
+            }
             Err(e) => {
-                *self.discourse.borrow_mut() = snapshot;
-                if let (Some(counter), Some(val)) =
-                    (self.round_robin_counters.get(key), rr_snapshot)
-                {
-                    counter.store(val, Ordering::Relaxed);
-                }
+                // Restore snapshot on failure.
+                self.refcell_from_session(&snapshot);
                 Err(e)
             }
         }
-    }
-
-    /// The body of a render call, performed against live discourse state.
-    /// Callers (`render`) snapshot state beforehand and restore on error.
-    fn render_tx(
-        &self,
-        key: &str,
-        all_alternatives: &[SalientTemplate],
-        context: &Context,
-    ) -> Result<String, NlgError> {
-        // Advance discourse state
-        self.discourse.borrow_mut().begin_render();
-
-        // Extract entity info from context for discourse tracking
-        let entity_name = context
-            .get("name")
-            .or_else(|| context.get("old_name"))
-            .map(|v| v.as_display());
-        let entity_type = context.get("entity_type").map(|v| v.as_display());
-
-        // Detect discourse connective
-        let connective = {
-            let mut discourse = self.discourse.borrow_mut();
-            let relation = discourse.detect_relation(key, entity_name.as_deref());
-            discourse.select_connective(&relation)
-        };
-
-        // Filter templates by salience level matching the context magnitude.
-        // Falls back to Medium, then any available template if the target
-        // salience has no registered templates.
-        let target_salience = self.context_salience(context);
-        let alternatives = filter_by_salience(all_alternatives, target_salience);
-
-        // Select template with choosebest scoring and anti-repeat
-        let (template, variant_index) =
-            self.select_alternative_scored(key, &alternatives, context)?;
-
-        // Record template choice
-        self.discourse
-            .borrow_mut()
-            .record_template_choice(key, variant_index);
-
-        // Render the selected template. Any error here is caught by the
-        // snapshot/restore in the outer `render` and cannot corrupt state.
-        let mut output = self.render_template(key, template, context)?;
-
-        // Prepend discourse connective if applicable
-        if let Some(conn) = connective {
-            // "It also" needs to replace the subject, others prepend
-            if conn.starts_with("It ") {
-                // Replace "The {type} {name}" at the start with the connective
-                output = prepend_replacing_subject(&output, conn);
-            } else {
-                output = format!("{conn} {}", lowercase_first(&output));
-            }
-        }
-
-        // If the output starts with a lowercase letter produced by the `refer` pipe,
-        // capitalize it. We detect this by checking if the first non-whitespace
-        // character is lowercase AND the template's first segment is a `refer` slot.
-        if starts_with_refer_pipe(template) {
-            output = capitalize_first(&output);
-        }
-
-        // Clean up whitespace and silent-mode gaps (dangling prepositions
-        // and orphan connectives left behind when slots were omitted).
-        output = cleanup_artifacts(&output, self.strictness);
-
-        // Terminate the sentence with a period if it doesn't already end
-        // with sentence-ending punctuation.
-        output = terminate_sentence(&output);
-
-        // If a sentence-length budget is configured, split long output
-        // at natural boundaries into multiple follow-up sentences.
-        #[cfg(feature = "polish")]
-        if let Some(max_chars) = self.max_sentence_length {
-            output = split_long(&output, max_chars);
-        }
-
-        // Typographic polish (opt-in).
-        #[cfg(feature = "polish")]
-        if self.smart_quotes {
-            output = smart_quotes(&output);
-        }
-
-        // Record entity mention in discourse state
-        if let (Some(name), Some(etype)) = (&entity_name, &entity_type) {
-            self.discourse
-                .borrow_mut()
-                .mention_entity(name, etype);
-        }
-
-        // Record output words for future repetition scoring
-        self.discourse
-            .borrow_mut()
-            .record_output_words(&output);
-
-        Ok(output)
     }
 
     /// Score every registered variant for `key` against `context`, without
@@ -669,105 +1305,9 @@ impl Engine {
             .ok_or_else(|| NlgError::UnknownTemplate(key.to_string()))?;
 
         let ctx = context.into_context();
-        let target_salience = self.context_salience(&ctx);
-        let alternatives = filter_by_salience(all, target_salience);
-
-        // Snapshot discourse so candidate renders leave no residue.
-        let snapshot = self.discourse.borrow().clone();
-
-        // Track which variant index within the filtered set corresponds
-        // to which original template, by content source.
-        let mut scores: Vec<VariantScore> = Vec::with_capacity(alternatives.len());
-        let last_variant = self
-            .discourse
-            .borrow()
-            .last_template_variant(key);
-
-        for (i, template) in alternatives.iter().enumerate() {
-            let candidate = match self.render_template(key, template, &ctx) {
-                Ok(s) => s,
-                Err(e) => {
-                    *self.discourse.borrow_mut() = snapshot;
-                    return Err(e);
-                }
-            };
-            scores.push(VariantScore {
-                index: i,
-                source: template.source.clone(),
-                rendered: candidate,
-                score: 0.0,
-                salience: target_salience,
-                is_last_selected: Some(i) == last_variant,
-                selected: false,
-            });
-        }
-
-        // Apply the same scoring logic as select_alternative_scored.
-        let discourse = self.discourse.borrow();
-        for s in scores.iter_mut() {
-            s.score = discourse.repetition_score(&s.rendered);
-        }
-        drop(discourse);
-
-        // Determine which variant the engine would pick right now.
-        let selected_idx = self.pick_variant_index(
-            key,
-            &alternatives,
-            last_variant,
-            &scores,
-        );
-        if let Some(idx) = selected_idx
-            && let Some(s) = scores.get_mut(idx)
-        {
-            s.selected = true;
-        }
-
-        *self.discourse.borrow_mut() = snapshot;
-        Ok(scores)
-    }
-
-    /// Mirror of the selection logic in `select_alternative_scored` — kept
-    /// as a pure helper so `score_variants` and `select_alternative_scored`
-    /// stay in sync without duplicating state mutation.
-    fn pick_variant_index(
-        &self,
-        key: &str,
-        alternatives: &[Template],
-        last_variant: Option<usize>,
-        scores: &[VariantScore],
-    ) -> Option<usize> {
-        if alternatives.is_empty() {
-            return None;
-        }
-        if alternatives.len() == 1 {
-            return Some(0);
-        }
-
-        let allow_choose_best = matches!(
-            self.variation,
-            Variation::Seeded(_) | Variation::Random
-        );
-
-        let is_first = self.discourse.borrow().is_first_render();
-        if !allow_choose_best || is_first {
-            return Some(self.select_variant_index(key, alternatives.len()));
-        }
-
-        // Simulate the scored pick: skip last_variant when possible, pick
-        // the lowest-score remaining candidate, ties break toward lower
-        // index.
-        let mut best_idx: Option<usize> = None;
-        let mut best_score = f64::MAX;
-        for (i, s) in scores.iter().enumerate() {
-            if Some(i) == last_variant && scores.len() > 1 {
-                continue;
-            }
-            if s.score < best_score {
-                best_score = s.score;
-                best_idx = Some(i);
-            }
-        }
-        best_idx.or(Some(0))
+        let mut session = self.session_from_refcell();
+        // State is always restored by score_all_variants internally; no need to write back.
+        RenderCtx::new(self, &mut session).score_all_variants(key, all, &ctx)
     }
 
     /// Render a one-off template string (not registered) with the given context.
@@ -780,10 +1320,10 @@ impl Engine {
     ) -> Result<String, NlgError> {
         let template = Template::parse(source)?;
         let context = context.into_context();
-        let output = self.render_template("<inline>", &template, &context)?;
-        self.discourse
-            .borrow_mut()
-            .record_output_words(&output);
+        let mut session = self.session_from_refcell();
+        let output = RenderCtx::new(self, &mut session).render_template("<inline>", &template, &context)?;
+        session.discourse.record_output_words(&output);
+        self.refcell_from_session(&session);
         Ok(output)
     }
 
@@ -946,24 +1486,24 @@ impl Engine {
         let alternatives = filter_by_salience(all_alternatives, target_salience);
 
         // Pre-compute candidate scores for diagnostics when choose-best
-        // would apply. We run this in a snapshot/restore bubble so the
-        // diagnostics don't alter discourse state.
+        // would apply. Run in a snapshot/restore bubble via RenderCtx.
         let candidate_scores = {
             let allow_choose_best = matches!(
                 self.variation,
                 Variation::Seeded(_) | Variation::Random
             );
-            let is_first = self.discourse.borrow().is_first_render();
+            let mut scoring_session = self.session_from_refcell();
+            let is_first = scoring_session.discourse.is_first_render();
             if !allow_choose_best || is_first || alternatives.len() < 2 {
                 None
             } else {
-                let snapshot = self.discourse.borrow().clone();
+                let snapshot = scoring_session.clone();
                 let mut scored: Vec<f64> = Vec::with_capacity(alternatives.len());
                 let mut scoring_failed = false;
                 for template in &alternatives {
-                    match self.render_template(key, template, &context) {
+                    match RenderCtx::new(self, &mut scoring_session).render_template(key, template, &context) {
                         Ok(candidate) => {
-                            let score = self.discourse.borrow().repetition_score(&candidate);
+                            let score = scoring_session.discourse.repetition_score(&candidate);
                             scored.push(score);
                         }
                         Err(_) => {
@@ -971,13 +1511,9 @@ impl Engine {
                             break;
                         }
                     }
+                    scoring_session = snapshot.clone();
                 }
-                *self.discourse.borrow_mut() = snapshot;
-                if scoring_failed {
-                    None
-                } else {
-                    Some(scored)
-                }
+                if scoring_failed { None } else { Some(scored) }
             }
         };
 
@@ -993,7 +1529,7 @@ impl Engine {
         // Run the real render. Discourse state advances normally.
         let output = self.render(key, &context)?;
 
-        // Recover the selected variant index from the discourse history.
+        // Recover diagnostic info from the (now-advanced) discourse state.
         let variant_index = self
             .discourse
             .borrow()
@@ -1007,9 +1543,6 @@ impl Engine {
 
         let focus_is_plural = self.discourse.borrow().focus_is_plural();
 
-        // Length-budget detection: the split transform adds ". " to the
-        // middle of long outputs. If a budget is set and the output
-        // contains a mid-sentence terminator, the split fired.
         #[cfg(feature = "polish")]
         let length_split_applied = self
             .max_sentence_length
@@ -1157,110 +1690,20 @@ impl Engine {
 
         // Mark the discourse focus as plural so any subsequent pronoun
         // reference uses "they" instead of "it".
+        // Bridge: directly mutate RefCell state post-render.
         self.discourse.borrow_mut().set_focus_plural(true);
 
         Ok(pluralize_agreement(&rendered, &*self.language))
     }
 
-    fn select_alternative_scored<'a>(
-        &self,
-        key: &str,
-        alternatives: &'a [Template],
-        context: &Context,
-    ) -> Result<(&'a Template, usize), NlgError> {
-        if alternatives.len() == 1 {
-            return Ok((&alternatives[0], 0));
-        }
-
-        // Only Seeded and Random variation strategies are layered with
-        // choose-best scoring. Fixed and RoundRobin are literal by contract:
-        // Fixed always returns index 0; RoundRobin strictly rotates.
-        let allow_choose_best = matches!(
-            self.variation,
-            Variation::Seeded(_) | Variation::Random
-        );
-
-        if !allow_choose_best {
-            let index = self.select_variant_index(key, alternatives.len());
-            return Ok((&alternatives[index], index));
-        }
-
-        // Extract what we need from discourse, then drop the borrow
-        // so render_template can borrow_mut for list style selection.
-        let (last_variant, is_first) = {
-            let discourse = self.discourse.borrow();
-            (
-                discourse.last_template_variant(key),
-                discourse.is_first_render(),
-            )
-        };
-
-        // On the very first render there is no discourse history to score
-        // against; fall through to the variation strategy's own selection.
-        if is_first {
-            let index = self.select_variant_index(key, alternatives.len());
-            return Ok((&alternatives[index], index));
-        }
-
-        // Rendering candidates mutates discourse state (e.g., list style
-        // cycling). Snapshot-and-restore around candidate rendering so state
-        // is untouched by alternatives that aren't emitted.
-        let snapshot = self.discourse.borrow().clone();
-
-        let mut candidates: Vec<(usize, String)> = Vec::new();
-        for (i, template) in alternatives.iter().enumerate() {
-            if Some(i) == last_variant {
-                continue;
-            }
-            let candidate = match self.render_template(key, template, context) {
-                Ok(s) => s,
-                Err(e) => {
-                    *self.discourse.borrow_mut() = snapshot;
-                    return Err(e);
-                }
-            };
-            candidates.push((i, candidate));
-        }
-
-        *self.discourse.borrow_mut() = snapshot;
-
-        // If filtering left us with no candidates (e.g., the last-used index
-        // was the only one matching salience), fall back to using it anyway.
-        if candidates.is_empty() {
-            let index = last_variant.unwrap_or(0).min(alternatives.len() - 1);
-            return Ok((&alternatives[index], index));
-        }
-
-        // Score against discourse history (immutable borrow only)
-        let discourse = self.discourse.borrow();
-        let mut best_index = candidates[0].0;
-        let mut best_score = f64::MAX;
-
-        for (i, candidate) in &candidates {
-            let score = discourse.repetition_score(candidate);
-            if score < best_score {
-                best_score = score;
-                best_index = *i;
-            }
-        }
-
-        Ok((&alternatives[best_index], best_index))
-    }
-
-    fn select_variant_index(&self, key: &str, count: usize) -> usize {
+    /// Pure stateless variant index selection (no session needed).
+    /// Used by RenderCtx::pick_variant_index for the non-scored path.
+    fn pick_variant_index_static(&self, key: &str, count: usize) -> usize {
         match self.variation {
             Variation::Fixed => 0,
             Variation::Seeded(seed) => {
                 let hash = simple_hash(key, seed);
                 hash as usize % count
-            }
-            Variation::RoundRobin => {
-                let counter = self
-                    .round_robin_counters
-                    .get(key)
-                    .map(|c| c.fetch_add(1, Ordering::Relaxed))
-                    .unwrap_or(0);
-                counter % count
             }
             Variation::Random => {
                 let nanos = std::time::SystemTime::now()
@@ -1269,178 +1712,34 @@ impl Engine {
                     .subsec_nanos() as usize;
                 nanos % count
             }
+            // RoundRobin requires mutable state — callers that need RoundRobin
+            // must go through RenderCtx::select_variant_index instead.
+            Variation::RoundRobin => 0,
         }
     }
 
-    fn render_template(
-        &self,
-        key: &str,
-        template: &Template,
-        context: &Context,
-    ) -> Result<String, NlgError> {
-        self.render_segments(key, &template.segments, context)
+    /// Phase-2 bridge: build a `Session` from the engine's current RefCell
+    /// state so it can be threaded through `RenderCtx`.
+    fn session_from_refcell(&self) -> Session {
+        let discourse = self.discourse.borrow().clone();
+        let mut counters = HashMap::with_capacity(self.round_robin_counters.len());
+        for (k, v) in &self.round_robin_counters {
+            counters.insert(k.clone(), AtomicUsize::new(v.load(Ordering::Relaxed)));
+        }
+        Session {
+            discourse,
+            round_robin_counters: counters,
+        }
     }
 
-    fn render_segments(
-        &self,
-        key: &str,
-        segments: &[Segment],
-        context: &Context,
-    ) -> Result<String, NlgError> {
-        let mut output = String::new();
-
-        for segment in segments {
-            match segment {
-                Segment::Literal(text) => output.push_str(text),
-                Segment::Slot {
-                    key: slot_key,
-                    pipes,
-                } => {
-                    let rendered = self.render_slot(key, slot_key, pipes, context)?;
-                    output.push_str(&rendered);
-                }
-                Segment::Conditional {
-                    condition_key,
-                    inner,
-                } => {
-                    // Only render inner segments if the condition is truthy
-                    if is_truthy(context.get(condition_key)) {
-                        let rendered = self.render_segments(key, inner, context)?;
-                        output.push_str(&rendered);
-                    }
-                }
-                Segment::Partial { name } => {
-                    let partial = self.partials.get(name).ok_or_else(|| {
-                        NlgError::TemplateParseError {
-                            template: key.to_string(),
-                            position: 0,
-                            reason: format!(
-                                "unknown partial `{name}` — register it with `engine.register_partial`"
-                            ),
-                        }
-                    })?;
-                    let rendered = self.render_segments(key, &partial.segments, context)?;
-                    output.push_str(&rendered);
-                }
+    /// Phase-2 bridge: write session state back into the engine's RefCell.
+    fn refcell_from_session(&self, session: &Session) {
+        *self.discourse.borrow_mut() = session.discourse.clone();
+        for (k, v) in &session.round_robin_counters {
+            if let Some(c) = self.round_robin_counters.get(k) {
+                c.store(v.load(Ordering::Relaxed), Ordering::Relaxed);
             }
         }
-
-        Ok(output)
-    }
-
-    fn render_slot(
-        &self,
-        template_key: &str,
-        slot_key: &str,
-        pipes: &[Pipe],
-        context: &Context,
-    ) -> Result<String, NlgError> {
-        let value = match context.get(slot_key) {
-            Some(v) => v.clone(),
-            None => return self.handle_missing_slot(template_key, slot_key),
-        };
-
-        if pipes.is_empty() {
-            return Ok(value.as_display());
-        }
-
-        let mut current = value;
-        for pipe in pipes {
-            current = self.apply_pipe(pipe, &current, context)?;
-        }
-
-        Ok(current.as_display())
-    }
-
-    fn handle_missing_slot(
-        &self,
-        template_key: &str,
-        slot_key: &str,
-    ) -> Result<String, NlgError> {
-        match self.strictness {
-            Strictness::Strict => Err(NlgError::MissingSlot {
-                template: template_key.to_string(),
-                slot: slot_key.to_string(),
-            }),
-            Strictness::Lenient => Ok(format!("[missing: {slot_key}]")),
-            Strictness::Silent => Ok(String::new()),
-        }
-    }
-
-    fn apply_pipe(
-        &self,
-        pipe: &Pipe,
-        value: &Value,
-        context: &Context,
-    ) -> Result<Value, NlgError> {
-        match pipe.name.as_str() {
-            "pluralize" => self.pipe_pluralize(pipe, value, context),
-            "article" => self.pipe_article(value),
-            "join" => self.pipe_join(pipe, value),
-            "ordinal" => self.pipe_ordinal(value),
-            "words" => self.pipe_words(value),
-            "truncate" => self.pipe_truncate(pipe, value),
-            "capitalize" => self.pipe_capitalize(value),
-            "refer" => self.pipe_refer(pipe, value, context),
-            "verb" => self.pipe_verb(pipe, value),
-            "syn" => self.pipe_syn(value),
-            #[cfg(feature = "time")]
-            "relative" => self.pipe_relative(value),
-            "quantify" => self.pipe_quantify(pipe, value),
-            "demonstrative" => self.pipe_demonstrative(value),
-            "hedge" => self.pipe_hedge(pipe, value),
-            "negated" => self.pipe_negated(value),
-            _ => Err(NlgError::InvalidPipe {
-                pipe: pipe.name.clone(),
-                reason: "unknown pipe".to_string(),
-            }),
-        }
-    }
-
-    /// Render a reference to a named entity based on discourse context.
-    ///
-    /// - First mention: "The {entity_type} {name}" (full form)
-    /// - Recent mention as non-focus: "{name}" (short form)
-    /// - Recent mention as focus with no ambiguity: "It" (pronoun)
-    /// - Distant mention (3+ renders ago): re-introduce with full form
-    ///
-    /// Usage: `{name|refer}` uses `entity_type` from context.
-    /// Usage: `{name|refer:class}` overrides the entity type explicitly.
-    fn pipe_refer(
-        &self,
-        pipe: &Pipe,
-        value: &Value,
-        context: &Context,
-    ) -> Result<Value, NlgError> {
-        let name = value.as_display();
-
-        // Determine entity type: explicit arg takes precedence, else context["entity_type"]
-        let entity_type = match &pipe.arg {
-            Some(PipeArg::String(t)) => t.clone(),
-            _ => context
-                .get("entity_type")
-                .map(|v| v.as_display())
-                .unwrap_or_default(),
-        };
-
-        let form = self.discourse.borrow().reference_form(&name);
-
-        // Produce lowercase form — the engine will capitalize the first
-        // character of the rendered output if needed. This handles both
-        // sentence-start and mid-sentence positions correctly.
-        let rendered = match form {
-            ReferenceForm::Full => self.render_full_reference(&name, &entity_type),
-            ReferenceForm::ShortName => name,
-            ReferenceForm::Pronoun => {
-                if self.discourse.borrow().focus_is_plural() {
-                    "they".to_string()
-                } else {
-                    "it".to_string()
-                }
-            }
-        };
-
-        Ok(Value::String(rendered))
     }
 
     /// Build a *Full form* reference. If the entity is in the registry,
@@ -1515,375 +1814,6 @@ impl Engine {
         }
     }
 
-    fn pipe_pluralize(
-        &self,
-        pipe: &Pipe,
-        value: &Value,
-        _context: &Context,
-    ) -> Result<Value, NlgError> {
-        let word = match &pipe.arg {
-            Some(PipeArg::String(w)) => w.as_str(),
-            _ => {
-                return Err(NlgError::InvalidPipe {
-                    pipe: "pluralize".to_string(),
-                    reason: "requires a word argument, e.g., {count|pluralize:item}".to_string(),
-                });
-            }
-        };
-
-        let count = value.as_number().ok_or_else(|| NlgError::InvalidPipe {
-            pipe: "pluralize".to_string(),
-            reason: "value must be a number".to_string(),
-        })? as usize;
-
-        Ok(Value::String(self.language.pluralize(word, count)))
-    }
-
-    fn pipe_article(&self, value: &Value) -> Result<Value, NlgError> {
-        let word = value.as_display();
-        let article = self.language.article(&word);
-        Ok(Value::String(format!("{article} {word}")))
-    }
-
-    fn pipe_join(&self, pipe: &Pipe, value: &Value) -> Result<Value, NlgError> {
-        let items = value.as_list().ok_or_else(|| NlgError::InvalidPipe {
-            pipe: "join".to_string(),
-            reason: "value must be a list".to_string(),
-        })?;
-
-        // Check for explicit style override
-        let forced_style = match &pipe.arg {
-            Some(PipeArg::String(s)) if s == "bracketed" => Some(ListStyle::Bracketed),
-            Some(PipeArg::String(s)) if s == "including" => Some(ListStyle::Including),
-            Some(PipeArg::String(s)) if s == "such_as" => Some(ListStyle::SuchAs),
-            Some(PipeArg::String(s)) if s == "dash" => Some(ListStyle::Dash),
-            _ => None,
-        };
-
-        let conjunction = match &pipe.arg {
-            Some(PipeArg::String(s)) if s == "or" => Conjunction::Or,
-            _ => Conjunction::And,
-        };
-
-        // Determine list style
-        let style = forced_style.unwrap_or_else(|| {
-            self.discourse.borrow_mut().next_list_style()
-        });
-
-        let refs: Vec<&str> = items.iter().map(|s| s.as_str()).collect();
-
-        // Check if the list was truncated (last item matches "N more" pattern)
-        let has_truncation = items.last().is_some_and(|last| {
-            last.ends_with(" more")
-                && last.split_whitespace().next().is_some_and(|w| w.parse::<usize>().is_ok())
-        });
-
-        if has_truncation && items.len() >= 2 {
-            let shown = &refs[..refs.len() - 1];
-            let remainder = &items[items.len() - 1]; // e.g., "3 more"
-            Ok(Value::String(format_truncated_list(
-                shown,
-                remainder,
-                style,
-                conjunction,
-                &*self.language,
-            )))
-        } else {
-            // No truncation — use standard join, but apply list style wrapper
-            let joined = self.language.join_list(&refs, conjunction);
-            Ok(Value::String(joined))
-        }
-    }
-
-    fn pipe_ordinal(&self, value: &Value) -> Result<Value, NlgError> {
-        let n = value.as_number().ok_or_else(|| NlgError::InvalidPipe {
-            pipe: "ordinal".to_string(),
-            reason: "value must be a number".to_string(),
-        })? as usize;
-
-        Ok(Value::String(self.language.ordinal(n)))
-    }
-
-    fn pipe_words(&self, value: &Value) -> Result<Value, NlgError> {
-        let n = value.as_number().ok_or_else(|| NlgError::InvalidPipe {
-            pipe: "words".to_string(),
-            reason: "value must be a number".to_string(),
-        })? as usize;
-
-        Ok(Value::String(self.language.number_to_words(n)))
-    }
-
-    fn pipe_truncate(&self, pipe: &Pipe, value: &Value) -> Result<Value, NlgError> {
-        let max = match &pipe.arg {
-            Some(PipeArg::Number(n)) => *n,
-            _ => {
-                return Err(NlgError::InvalidPipe {
-                    pipe: "truncate".to_string(),
-                    reason: "requires a numeric argument, e.g., {items|truncate:3}".to_string(),
-                });
-            }
-        };
-
-        let items = value.as_list().ok_or_else(|| NlgError::InvalidPipe {
-            pipe: "truncate".to_string(),
-            reason: "value must be a list".to_string(),
-        })?;
-
-        if items.len() <= max {
-            return Ok(value.clone());
-        }
-
-        let remaining = items.len() - max;
-        let mut truncated: Vec<String> = items[..max].to_vec();
-        let suffix = format!("{remaining} more");
-        truncated.push(suffix);
-
-        Ok(Value::List(truncated))
-    }
-
-    /// Render a verb phrase in its negated form.
-    ///
-    /// Lookup order:
-    /// 1. If a positive-framing antonym is registered for the phrase
-    ///    (`engine.register_antonym(...)`), emit it: e.g. "was modified"
-    ///    → "remained unchanged".
-    /// 2. Otherwise insert "not" after the phrase's auxiliary: "was
-    ///    modified" → "was not modified", "has been renamed" → "has not
-    ///    been renamed", "will break" → "will not break".
-    /// 3. If there's no recognizable aux, prepend "not ". Callers who
-    ///    hit this fallback should register an antonym to avoid
-    ///    ungrammatical output.
-    fn pipe_negated(&self, value: &Value) -> Result<Value, NlgError> {
-        let phrase = value.as_display();
-        if let Some(positive) = self.antonyms.lookup(&phrase) {
-            return Ok(Value::String(positive.to_string()));
-        }
-        Ok(Value::String(insert_not(&phrase)))
-    }
-
-    /// Render a 0..=100 confidence score as a hedge word reflecting its
-    /// certainty level. Accepts optional `:adverb` (default), `:modal`,
-    /// or `:prefix` flavour.
-    ///
-    /// Example: `{conf|hedge} broke the build` → "possibly broke the build".
-    fn pipe_hedge(&self, pipe: &Pipe, value: &Value) -> Result<Value, NlgError> {
-        let score = value.as_number().ok_or_else(|| NlgError::InvalidPipe {
-            pipe: "hedge".to_string(),
-            reason: "value must be a 0..=100 integer confidence score".to_string(),
-        })?;
-
-        let mode = match &pipe.arg {
-            None => HedgeMode::Adverb,
-            Some(PipeArg::String(s)) => {
-                parse_hedge_mode(s).ok_or_else(|| NlgError::InvalidPipe {
-                    pipe: "hedge".to_string(),
-                    reason: format!(
-                        "unknown hedge mode `{s}` — expected one of adverb, modal, prefix"
-                    ),
-                })?
-            }
-            Some(PipeArg::Number(_)) => {
-                return Err(NlgError::InvalidPipe {
-                    pipe: "hedge".to_string(),
-                    reason: "hedge argument must be a mode name, not a number".to_string(),
-                });
-            }
-        };
-
-        Ok(Value::String(hedge_fn(score, mode).to_string()))
-    }
-
-    /// Render a count as a natural-language quantifier ("no consumers",
-    /// "a single caller", "over a hundred callers", "thousands of deps").
-    /// Accepts optional `:natural` (default), `:exact`, or `:hedged`
-    /// flavour argument.
-    fn pipe_quantify(&self, pipe: &Pipe, value: &Value) -> Result<Value, NlgError> {
-        let count = value.as_number().ok_or_else(|| NlgError::InvalidPipe {
-            pipe: "quantify".to_string(),
-            reason: "value must be a number".to_string(),
-        })?;
-
-        let mode = match &pipe.arg {
-            None => QuantifyMode::Natural,
-            Some(PipeArg::String(s)) => {
-                parse_quantify_mode(s).ok_or_else(|| NlgError::InvalidPipe {
-                    pipe: "quantify".to_string(),
-                    reason: format!(
-                        "unknown quantify mode `{s}` — expected one of natural, exact, hedged"
-                    ),
-                })?
-            }
-            Some(PipeArg::Number(_)) => {
-                return Err(NlgError::InvalidPipe {
-                    pipe: "quantify".to_string(),
-                    reason: "quantify argument must be a mode name, not a number".to_string(),
-                });
-            }
-        };
-
-        Ok(Value::String(quantify_fn(count, mode, &*self.language)))
-    }
-
-    /// Emit a demonstrative reference to a previously-mentioned action:
-    /// `{rename|demonstrative}` → "this rename" when a prior render has
-    /// happened in the current discourse scope, "the rename" otherwise.
-    ///
-    /// Intended for continuation templates like
-    /// `"{change|demonstrative} affects {n} consumers"`, which reads as
-    /// "this change affects 6 consumers" when following a primary render
-    /// about the change itself. A fresh discourse (after `engine.reset()`
-    /// or on the very first render) falls back to "the X" since there's
-    /// nothing to point back to.
-    fn pipe_demonstrative(&self, value: &Value) -> Result<Value, NlgError> {
-        let noun = value.as_display();
-        if noun.is_empty() {
-            return Ok(Value::String(noun));
-        }
-
-        let determiner = if self.discourse.borrow().has_prior_render() {
-            "this"
-        } else {
-            "the"
-        };
-
-        Ok(Value::String(format!("{determiner} {noun}")))
-    }
-
-    /// Render a timestamp as a relative phrase ("yesterday", "3 weeks ago",
-    /// "in 2 months"). Input is Unix seconds; the engine's reference
-    /// time (set via `reference_time()` or defaulting to system now) is
-    /// used as "now".
-    #[cfg(feature = "time")]
-    fn pipe_relative(&self, value: &Value) -> Result<Value, NlgError> {
-        let ts = value.as_number().ok_or_else(|| NlgError::InvalidPipe {
-            pipe: "relative".to_string(),
-            reason: "value must be a Unix-epoch integer (seconds)".to_string(),
-        })?;
-
-        let now = match self.reference_time {
-            Some(n) => n,
-            None => {
-                // Outside wasm32 we fall through to system time. On
-                // wasm32-unknown-unknown `SystemTime::now()` panics at
-                // runtime, so we surface a clear error instead — WASM
-                // callers should always call `engine.reference_time()`
-                // (or disable the `time` feature entirely).
-                #[cfg(not(target_arch = "wasm32"))]
-                {
-                    std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .map(|d| d.as_secs() as i64)
-                        .unwrap_or(0)
-                }
-                #[cfg(target_arch = "wasm32")]
-                {
-                    return Err(NlgError::InvalidPipe {
-                        pipe: "relative".to_string(),
-                        reason: "on wasm32 targets the engine needs an \
-                                 explicit reference time — call \
-                                 `engine.reference_time(unix_secs)` before \
-                                 rendering"
-                            .to_string(),
-                    });
-                }
-            }
-        };
-
-        let diff = now - ts;
-        Ok(Value::String(format_relative(diff)))
-    }
-
-    /// Render the value through the synonym registry for elegant variation.
-    ///
-    /// If the input word is in a registered group, pick whichever synonym
-    /// has been used the least in recent output (falling back to
-    /// registration order on ties). If the word isn't registered, pass
-    /// it through unchanged.
-    ///
-    /// Capitalization of the first character is preserved from the input.
-    fn pipe_syn(&self, value: &Value) -> Result<Value, NlgError> {
-        let word = value.as_display();
-        let synonyms = match self.synonyms.synonyms_for(&word) {
-            Some(s) => s,
-            None => return Ok(Value::String(word)),
-        };
-
-        if synonyms.is_empty() {
-            return Ok(Value::String(word));
-        }
-
-        // Pick the synonym with the lowest recent word-frequency score.
-        // First-registered wins on ties for determinism.
-        let discourse = self.discourse.borrow();
-        let mut best = &synonyms[0];
-        let mut best_score = discourse.word_frequency(&synonyms[0]);
-        for syn in &synonyms[1..] {
-            let score = discourse.word_frequency(syn);
-            if score < best_score {
-                best_score = score;
-                best = syn;
-            }
-        }
-
-        // Preserve input capitalization: if the caller passed "Class" we
-        // return "Type", not "type".
-        let result = if word
-            .chars()
-            .next()
-            .map(|c| c.is_uppercase())
-            .unwrap_or(false)
-        {
-            capitalize_first(best)
-        } else {
-            best.clone()
-        };
-
-        Ok(Value::String(result))
-    }
-
-    fn pipe_capitalize(&self, value: &Value) -> Result<Value, NlgError> {
-        let s = value.as_display();
-        let capitalized = capitalize_first(&s);
-        Ok(Value::String(capitalized))
-    }
-
-    /// Render a full verb phrase from the value (the base verb) using a
-    /// spec like `past`, `present_perfect`, or `active_present_progressive`.
-    ///
-    /// Defaults: passive voice, third person.
-    ///
-    /// Examples:
-    /// - `{rename|verb:past}` → "was renamed"
-    /// - `{rename|verb:present_perfect}` → "has been renamed"
-    /// - `{rename|verb:active_present_progressive}` → "is renaming"
-    /// - `{rename|verb:conditional}` → "would be renamed"
-    fn pipe_verb(&self, pipe: &Pipe, value: &Value) -> Result<Value, NlgError> {
-        let spec = match &pipe.arg {
-            Some(PipeArg::String(s)) => s.as_str(),
-            _ => {
-                return Err(NlgError::InvalidPipe {
-                    pipe: "verb".to_string(),
-                    reason: "requires a form spec argument, e.g., \
-                             {rename|verb:present_perfect}"
-                        .to_string(),
-                });
-            }
-        };
-
-        let (form, voice) = VerbForm::parse_spec(spec).ok_or_else(|| NlgError::InvalidPipe {
-            pipe: "verb".to_string(),
-            reason: format!(
-                "unknown verb form spec `{spec}` — expected one of past, present, future, \
-                 present_perfect, past_perfect, future_perfect, present_progressive, \
-                 past_progressive, conditional, conditional_perfect \
-                 (optionally prefixed with `active_` or `passive_`)"
-            ),
-        })?;
-
-        let verb = value.as_display();
-        let phrase = self.language.verb_phrase(&verb, form, voice, Person::Third);
-        Ok(Value::String(phrase))
-    }
 }
 
 /// Format a truncated list with natural style.
