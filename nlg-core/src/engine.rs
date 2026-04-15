@@ -548,10 +548,63 @@ impl<'e, 's> RenderCtx<'e, 's> {
             "demonstrative" => self.pipe_demonstrative(value),
             "hedge" => self.pipe_hedge(pipe, value),
             "negated" => self.pipe_negated(value),
+            "choose" => self.pipe_choose(pipe, value),
             _ => Err(NlgError::InvalidPipe {
                 pipe: pipe.name.clone(),
                 reason: "unknown pipe".to_string(),
             }),
+        }
+    }
+
+    fn pipe_choose(&self, pipe: &Pipe, value: &Value) -> Result<Value, NlgError> {
+        let arg_str = match &pipe.arg {
+            Some(PipeArg::String(s)) => s.as_str(),
+            Some(PipeArg::Number(_)) | None => {
+                return Err(NlgError::InvalidPipe {
+                    pipe: "choose".to_string(),
+                    reason: "choose requires an argument of the form \
+                             'key=value,key=value,default=value'"
+                        .to_string(),
+                });
+            }
+        };
+
+        let pairs = parse_choose_pairs(arg_str)?;
+        if pairs.is_empty() {
+            return Err(NlgError::InvalidPipe {
+                pipe: "choose".to_string(),
+                reason: "choose argument is empty".to_string(),
+            });
+        }
+
+        let display = value.as_display();
+        let normalized = display.trim().to_lowercase();
+
+        for (k, v) in &pairs {
+            if k.to_lowercase() == normalized {
+                return Ok(Value::String(v.clone()));
+            }
+        }
+
+        // Fallback to default key
+        for (k, v) in &pairs {
+            if k.eq_ignore_ascii_case("default") {
+                return Ok(Value::String(v.clone()));
+            }
+        }
+
+        // No match, no default — dispatch on strictness
+        match self.engine.strictness {
+            Strictness::Strict => Err(NlgError::InvalidPipe {
+                pipe: "choose".to_string(),
+                reason: format!(
+                    "no matching key for value `{display}` and no default"
+                ),
+            }),
+            Strictness::Lenient => Ok(Value::String(format!(
+                "[choose: no match for {display}]"
+            ))),
+            Strictness::Silent => Ok(Value::String(String::new())),
         }
     }
 
@@ -2490,6 +2543,38 @@ fn simple_hash(key: &str, seed: u64) -> u64 {
         hash = hash.wrapping_mul(31).wrapping_add(byte as u64);
     }
     hash
+}
+
+/// Parse the argument string of a `|choose` pipe into an ordered list of
+/// `(key, value)` pairs.
+///
+/// Grammar: `pair ("," pair)*` where `pair ::= key "=" value`.
+/// Keys and values are trimmed of surrounding whitespace.
+/// Empty segments (e.g. trailing comma) are silently skipped.
+/// A pair missing `=` returns [`NlgError::InvalidPipe`].
+/// A pair whose key is empty after trimming returns [`NlgError::InvalidPipe`].
+fn parse_choose_pairs(arg: &str) -> Result<Vec<(String, String)>, NlgError> {
+    let mut out = Vec::new();
+    for raw_pair in arg.split(',') {
+        let pair = raw_pair.trim();
+        if pair.is_empty() {
+            continue;
+        }
+        let eq = pair.find('=').ok_or_else(|| NlgError::InvalidPipe {
+            pipe: "choose".to_string(),
+            reason: format!("pair `{pair}` is missing `=` separator"),
+        })?;
+        let key = pair[..eq].trim().to_string();
+        let value = pair[eq + 1..].trim().to_string();
+        if key.is_empty() {
+            return Err(NlgError::InvalidPipe {
+                pipe: "choose".to_string(),
+                reason: format!("pair `{pair}` has empty key"),
+            });
+        }
+        out.push((key, value));
+    }
+    Ok(out)
 }
 
 #[cfg(test)]
