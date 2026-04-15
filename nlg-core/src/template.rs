@@ -75,6 +75,32 @@ impl Template {
         collect_literals(&self.segments, &mut out);
         out
     }
+
+    /// Every slot key referenced by this template, including condition keys
+    /// from conditional sections (`{?key}...{/?}`).
+    ///
+    /// Walks the segment tree recursively. Partial nodes are skipped — their
+    /// slot keys are only reachable after the engine expands them at render time.
+    /// The returned list may contain duplicates (e.g. when a key appears in both
+    /// a conditional guard and its body). Used by the `nlg_template!` proc macro
+    /// for compile-time slot validation.
+    pub fn slot_keys(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        collect_slot_keys(&self.segments, &mut out);
+        out
+    }
+
+    /// Every pipe name referenced by any slot in this template.
+    ///
+    /// Walks the segment tree recursively. Returns the pipe name only (not any
+    /// argument, e.g. `"pluralize"` for `{count|pluralize:item}`). May contain
+    /// duplicates if the same pipe appears more than once. Used by the
+    /// `nlg_template!` proc macro for compile-time pipe validation.
+    pub fn pipe_names(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        collect_pipe_names(&self.segments, &mut out);
+        out
+    }
 }
 
 /// Recursively collect literal text from a segment list into `out`.
@@ -86,6 +112,37 @@ fn collect_literals<'a>(segments: &'a [Segment], out: &mut Vec<&'a str>) {
             Segment::Slot { .. } => {}
             Segment::Conditional { inner, .. } => collect_literals(inner, out),
             Segment::Partial { .. } => {}
+        }
+    }
+}
+
+/// Recursively collect slot keys (and conditional condition keys) from a segment
+/// list into `out`. `Segment::Partial` nodes are skipped (opaque at parse time).
+fn collect_slot_keys(segments: &[Segment], out: &mut Vec<String>) {
+    for seg in segments {
+        match seg {
+            Segment::Slot { key, .. } => out.push(key.clone()),
+            Segment::Conditional { condition_key, inner } => {
+                out.push(condition_key.clone());
+                collect_slot_keys(inner, out);
+            }
+            Segment::Literal(_) | Segment::Partial { .. } => {}
+        }
+    }
+}
+
+/// Recursively collect pipe names from all slot segments into `out`.
+/// `Segment::Partial` nodes are skipped (opaque at parse time).
+fn collect_pipe_names(segments: &[Segment], out: &mut Vec<String>) {
+    for seg in segments {
+        match seg {
+            Segment::Slot { pipes, .. } => {
+                for pipe in pipes {
+                    out.push(pipe.name.clone());
+                }
+            }
+            Segment::Conditional { inner, .. } => collect_pipe_names(inner, out),
+            Segment::Literal(_) | Segment::Partial { .. } => {}
         }
     }
 }
@@ -567,5 +624,82 @@ mod tests {
         let lits = t.literal_tokens();
         assert!(lits.iter().any(|l| l.contains("outer")));
         assert!(lits.iter().any(|l| l.contains("inner")));
+    }
+
+    // ── slot_keys tests ─────────────────────────────────────────────────
+
+    #[test]
+    fn slot_keys_simple() {
+        let t = Template::parse("{a} and {b}").unwrap();
+        let mut keys = t.slot_keys();
+        keys.sort();
+        assert_eq!(keys, vec!["a", "b"]);
+    }
+
+    #[test]
+    fn slot_keys_includes_condition_key() {
+        let t = Template::parse("{name}{?count}, {count} items{/?}").unwrap();
+        let keys = t.slot_keys();
+        assert!(keys.contains(&"name".to_string()));
+        // count appears as condition key and as inner slot key
+        assert!(keys.iter().filter(|k| k.as_str() == "count").count() >= 2);
+    }
+
+    #[test]
+    fn slot_keys_skips_partials() {
+        let t = Template::parse("start {>partial_name} {slot} end").unwrap();
+        let keys = t.slot_keys();
+        assert_eq!(keys, vec!["slot"]);
+        assert!(!keys.contains(&"partial_name".to_string()));
+    }
+
+    #[test]
+    fn slot_keys_empty_for_literal_only() {
+        let t = Template::parse("just a string").unwrap();
+        assert!(t.slot_keys().is_empty());
+    }
+
+    #[test]
+    fn slot_keys_nested_conditional() {
+        let t = Template::parse("{?a}outer{?b} inner{/?}{/?}").unwrap();
+        let mut keys = t.slot_keys();
+        keys.sort();
+        keys.dedup();
+        assert_eq!(keys, vec!["a", "b"]);
+    }
+
+    // ── pipe_names tests ─────────────────────────────────────────────────
+
+    #[test]
+    fn pipe_names_simple() {
+        let t = Template::parse("{count|pluralize:item}").unwrap();
+        assert_eq!(t.pipe_names(), vec!["pluralize"]);
+    }
+
+    #[test]
+    fn pipe_names_chained() {
+        let t = Template::parse("{items|truncate:3|join}").unwrap();
+        assert_eq!(t.pipe_names(), vec!["truncate", "join"]);
+    }
+
+    #[test]
+    fn pipe_names_empty_when_no_pipes() {
+        let t = Template::parse("{name} and {other}").unwrap();
+        assert!(t.pipe_names().is_empty());
+    }
+
+    #[test]
+    fn pipe_names_inside_conditional() {
+        let t = Template::parse("{?count}{count|pluralize:item}{/?}").unwrap();
+        assert_eq!(t.pipe_names(), vec!["pluralize"]);
+    }
+
+    #[test]
+    fn pipe_names_arg_not_included_in_name() {
+        // pipe name is "truncate", not "truncate:3"
+        let t = Template::parse("{items|truncate:3}").unwrap();
+        let names = t.pipe_names();
+        assert_eq!(names, vec!["truncate"]);
+        assert!(!names.iter().any(|n| n.contains(':')));
     }
 }
