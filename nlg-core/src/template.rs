@@ -61,8 +61,8 @@ impl Template {
     /// Return the text of every literal segment in this template.
     ///
     /// Walks the segment tree recursively, collecting text from
-    /// [`Segment::Literal`] nodes at every nesting depth (including
-    /// inside conditional sections). [`Segment::Partial`] nodes are
+    /// literal nodes at every nesting depth (including
+    /// inside conditional sections). Partial-inclusion nodes are
     /// treated as opaque — their literals are only reachable after the
     /// engine expands them at render time. Callers that need partial
     /// content to contribute to faithfulness scoring should pre-expand

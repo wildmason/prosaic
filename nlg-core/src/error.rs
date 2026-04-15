@@ -1,6 +1,6 @@
 use thiserror::Error;
 
-#[derive(Debug, Error, PartialEq, Eq)]
+#[derive(Debug, Error, PartialEq)]
 pub enum NlgError {
     #[error("missing slot `{slot}` in template `{template}`")]
     MissingSlot { template: String, slot: String },
@@ -19,5 +19,14 @@ pub enum NlgError {
         template: String,
         position: usize,
         reason: String,
+    },
+
+    /// Returned when the faithfulness gate is enabled and the rendered output
+    /// fails the precision threshold or has a polarity mismatch. The session
+    /// state is rolled back as if the render had not occurred.
+    #[error("faithfulness rejected: precision {precision:.3}, polarity_match {polarity_match}")]
+    FaithfulnessRejection {
+        precision: f32,
+        polarity_match: bool,
     },
 }

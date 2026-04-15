@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use crate::faithfulness::score_faithfulness;
 use crate::session::Session;
 
 use crate::context::{Context, IntoContext, Value};
@@ -204,6 +205,11 @@ pub struct Engine {
     #[cfg(feature = "polish")]
     smart_quotes: bool,
     partials: HashMap<String, Template>,
+    /// Optional faithfulness gate. When `Some(threshold)`, each rendered output
+    /// is scored via PARENT precision + polarity check. If the score does not
+    /// pass the threshold or polarity mismatches, the render returns
+    /// `NlgError::FaithfulnessRejection` and session state is restored.
+    faithfulness_threshold: Option<f32>,
 }
 
 /// Bundle of an immutable engine reference and mutable session state,
@@ -291,6 +297,20 @@ impl<'e, 's> RenderCtx<'e, 's> {
         #[cfg(feature = "polish")]
         if self.engine.smart_quotes {
             smart_quotes_in_place(&mut output);
+        }
+
+        // Faithfulness gate — checked against the fully-polished output.
+        // If the gate is active and the output fails, propagate the error;
+        // the caller's snapshot/restore in `render()` will undo session state.
+        if let Some(threshold) = self.engine.faithfulness_threshold {
+            let literals = template.literal_tokens();
+            let score = score_faithfulness(&output, context, &literals, &*self.engine.language);
+            if !score.passes(threshold) {
+                return Err(NlgError::FaithfulnessRejection {
+                    precision: score.precision,
+                    polarity_match: score.polarity_match,
+                });
+            }
         }
 
         // Record entity mention in discourse state
@@ -988,6 +1008,7 @@ impl Engine {
             #[cfg(feature = "polish")]
             smart_quotes: false,
             partials: HashMap::new(),
+            faithfulness_threshold: None,
         }
     }
 
@@ -1196,6 +1217,45 @@ impl Engine {
     /// ```
     pub fn register_synonyms(&mut self, group: &[&str]) {
         self.synonyms.register_group(group);
+    }
+
+    /// Enable a runtime faithfulness gate on every `render*` call.
+    ///
+    /// When set, each rendered output is scored against its input Context
+    /// and the selected template's literal tokens using PARENT-style
+    /// precision + polarity checking. If the score's precision falls below
+    /// `threshold` OR polarity tokens mismatch between source and output,
+    /// the render returns [`NlgError::FaithfulnessRejection`] and the
+    /// session state is restored as if the render had not occurred.
+    ///
+    /// `threshold` is typically `1.0` (strict: every content token in the
+    /// output must be sourced from the context or template literals).
+    /// Values below `1.0` tolerate a fraction of unentailed tokens — useful
+    /// when the engine legitimately emits hedged phrasings that introduce
+    /// words not present in the input (e.g. "approximately", "likely").
+    ///
+    /// Default: no gate (all renders pass).
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use nlg_core::{Context, Engine, NlgError, Value};
+    /// use nlg_grammar_en::English;
+    ///
+    /// let mut engine = Engine::new(English::new())
+    ///     .with_faithfulness_gate(1.0);
+    ///
+    /// engine.register_template("t", "{name} was modified").unwrap();
+    ///
+    /// let mut ctx = Context::new();
+    /// ctx.insert("name", Value::String("UserService".into()));
+    /// let mut session = nlg_core::Session::new();
+    /// // "modified" is in the template literal — renders faithfully.
+    /// assert!(engine.render(&mut session, "t", &ctx).is_ok());
+    /// ```
+    pub fn with_faithfulness_gate(mut self, threshold: f32) -> Self {
+        self.faithfulness_threshold = Some(threshold);
+        self
     }
 
     /// Get a reference to the language implementation.
