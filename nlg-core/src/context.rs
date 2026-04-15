@@ -143,6 +143,39 @@ impl<const N: usize> IntoValue for [String; N] {
     }
 }
 
+/// Build a [`Context`] from key/value pairs. Values may be any type that
+/// implements [`IntoValue`] — `&str`, `String`, integer types, `bool`,
+/// `Vec<&str>`, `[&str; N]`, or an explicit `Value::*`.
+///
+/// Trailing commas are allowed. Empty `ctx! {}` produces an empty context.
+///
+/// # Example
+///
+/// ```
+/// use nlg_core::{ctx, Context, Value};
+///
+/// let c: Context = ctx! {
+///     entity_type: "class",
+///     name: "UserService",
+///     consumer_count: 3,
+///     consumers: ["ProfileComponent", "SettingsComponent", "AdminModule"],
+/// };
+///
+/// assert_eq!(c.get("entity_type"), Some(&Value::String("class".into())));
+/// assert_eq!(c.get("consumer_count"), Some(&Value::Number(3)));
+/// ```
+#[macro_export]
+macro_rules! ctx {
+    () => { $crate::Context::new() };
+    ( $( $key:ident : $value:expr ),* $(,)? ) => {{
+        let mut c = $crate::Context::new();
+        $(
+            $crate::Context::insert(&mut c, stringify!($key), $crate::IntoValue::into_value($value));
+        )*
+        c
+    }};
+}
+
 /// Convenience trait for converting types into `Context`.
 pub trait IntoContext {
     fn into_context(self) -> Context;
@@ -226,5 +259,63 @@ mod into_value_tests {
     fn value_passes_through_identity() {
         let v = Value::Number(99);
         assert_eq!(v.clone().into_value(), v);
+    }
+}
+
+#[cfg(test)]
+mod ctx_macro_tests {
+    use crate::{ctx, Context, Value};
+
+    #[test]
+    fn empty_ctx_is_empty() {
+        let c: Context = ctx! {};
+        assert_eq!(c.get("anything"), None);
+    }
+
+    #[test]
+    fn single_slot() {
+        let c = ctx! { name: "Foo" };
+        assert_eq!(c.get("name"), Some(&Value::String("Foo".into())));
+    }
+
+    #[test]
+    fn multiple_slots_mixed_types() {
+        let c = ctx! {
+            name: "Foo",
+            count: 3,
+            flag: true,
+        };
+        assert_eq!(c.get("name"), Some(&Value::String("Foo".into())));
+        assert_eq!(c.get("count"), Some(&Value::Number(3)));
+        assert_eq!(c.get("flag"), Some(&Value::Number(1)));
+    }
+
+    #[test]
+    fn list_slot_from_array() {
+        let c = ctx! { items: ["a", "b", "c"] };
+        assert_eq!(
+            c.get("items"),
+            Some(&Value::List(vec!["a".into(), "b".into(), "c".into()]))
+        );
+    }
+
+    #[test]
+    fn trailing_comma_allowed() {
+        let c = ctx! { a: 1, b: 2, };
+        assert_eq!(c.get("a"), Some(&Value::Number(1)));
+        assert_eq!(c.get("b"), Some(&Value::Number(2)));
+    }
+
+    #[test]
+    fn expression_values_are_evaluated() {
+        let s = String::from("dynamic");
+        let c = ctx! { name: s };
+        assert_eq!(c.get("name"), Some(&Value::String("dynamic".into())));
+    }
+
+    #[test]
+    fn value_literal_passes_through() {
+        let c = ctx! { x: Value::Number(7) };
+        assert_eq!(c.get("x"), Some(&Value::Number(7)));
     }
 }
