@@ -10,9 +10,9 @@ use crate::language::{Conjunction, Language, Person, VerbForm};
 use crate::antonyms::{insert_not, AntonymRegistry};
 use crate::hedge::{hedge as hedge_fn, parse_mode as parse_hedge_mode, HedgeMode};
 #[cfg(feature = "polish")]
-use crate::length::split_long;
+use crate::length::split_long_in_place;
 #[cfg(feature = "polish")]
-use crate::punctuation::smart_quotes;
+use crate::punctuation::smart_quotes_in_place;
 use crate::quantify::{parse_mode as parse_quantify_mode, quantify as quantify_fn, QuantifyMode};
 #[cfg(feature = "reg")]
 use crate::reg::{distinguishing_attributes, EntityDescriptor, EntityRegistry};
@@ -278,13 +278,13 @@ impl<'e, 's> RenderCtx<'e, 's> {
         // Length budget
         #[cfg(feature = "polish")]
         if let Some(max_chars) = self.engine.max_sentence_length {
-            output = split_long(&output, max_chars);
+            split_long_in_place(&mut output, max_chars);
         }
 
         // Typographic polish
         #[cfg(feature = "polish")]
         if self.engine.smart_quotes {
-            output = smart_quotes(&output);
+            smart_quotes_in_place(&mut output);
         }
 
         // Record entity mention in discourse state

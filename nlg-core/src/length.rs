@@ -13,14 +13,22 @@
 /// joins fragments with `" "`, so downstream sentence-termination and
 /// cleanup still work.
 pub fn split_long(sentence: &str, max_chars: usize) -> String {
-    if sentence.chars().count() <= max_chars {
-        return sentence.to_string();
+    let mut s = sentence.to_string();
+    split_long_in_place(&mut s, max_chars);
+    s
+}
+
+/// In-place version of [`split_long`]. Mutates `output` so each piece fits
+/// within `max_chars`, splicing tail sentences back onto the buffer.
+pub(crate) fn split_long_in_place(output: &mut String, max_chars: usize) {
+    if output.chars().count() <= max_chars {
+        return;
     }
 
     // Upper bound on where we'll look for a split — allow slight
     // overflow rather than aggressively shrinking below budget.
-    let search_end = (max_chars + 40).min(sentence.len());
-    let window = &sentence[..search_end];
+    let search_end = (max_chars + 40).min(output.len());
+    let window = &output[..search_end];
 
     // Ordered by priority: longer/more-specific markers first.
     let candidates: &[(&str, ContinuationKind)] = &[
@@ -53,18 +61,25 @@ pub fn split_long(sentence: &str, max_chars: usize) -> String {
 
     let (split_at, tail_start, kind) = match best {
         Some(b) => b,
-        None => return sentence.to_string(),
+        None => return,
     };
 
-    let head = sentence[..split_at].trim_end_matches([',', ' ']).to_string();
-    let tail = sentence[tail_start..].trim_start();
+    // Split the tail off the buffer.
+    let tail_raw = output[tail_start..].trim_start().to_string();
+    // Trim the head.
+    let head_end = output[..split_at].trim_end_matches([',', ' ']).len();
+    output.truncate(head_end);
 
-    let tail_sentence = rewrite_tail(tail, kind);
+    // Rewrite the tail so it stands alone grammatically.
+    let mut tail_buf = rewrite_tail(&tail_raw, kind);
 
-    // Recursively split the tail sentence too, in case it's still too long.
-    let tail_final = split_long(&tail_sentence, max_chars);
+    // Recursively split the tail in case it's still too long.
+    split_long_in_place(&mut tail_buf, max_chars);
 
-    format!("{head}. {tail_final}")
+    // Append ". " + tail onto the head.
+    output.push('.');
+    output.push(' ');
+    output.push_str(&tail_buf);
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

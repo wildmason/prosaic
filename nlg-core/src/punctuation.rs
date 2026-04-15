@@ -14,20 +14,28 @@
 ///   — but a `'` wedged between two alphanumerics is treated as an
 ///   apostrophe and rendered as U+2019 ("it's", "Alice's")
 pub fn smart_quotes(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
+    let mut out = s.to_string();
+    smart_quotes_in_place(&mut out);
+    out
+}
+
+/// In-place version of [`smart_quotes`]. Replaces the buffer contents with
+/// the typographically polished form via a scratch-and-swap.
+pub(crate) fn smart_quotes_in_place(output: &mut String) {
+    let mut scratch = String::with_capacity(output.len());
     let mut in_double = false;
     let mut in_single = false;
 
-    let chars: Vec<char> = s.chars().collect();
+    let chars: Vec<char> = output.chars().collect();
     for i in 0..chars.len() {
         let c = chars[i];
         match c {
             '"' => {
                 if in_double {
-                    out.push('\u{201D}');
+                    scratch.push('\u{201D}');
                     in_double = false;
                 } else {
-                    out.push('\u{201C}');
+                    scratch.push('\u{201C}');
                     in_double = true;
                 }
             }
@@ -41,20 +49,20 @@ pub fn smart_quotes(s: &str) -> String {
                     .unwrap_or(false)
                     && next.map(|n| n.is_alphanumeric()).unwrap_or(false);
                 if is_apostrophe {
-                    out.push('\u{2019}');
+                    scratch.push('\u{2019}');
                 } else if in_single {
-                    out.push('\u{2019}');
+                    scratch.push('\u{2019}');
                     in_single = false;
                 } else {
-                    out.push('\u{2018}');
+                    scratch.push('\u{2018}');
                     in_single = true;
                 }
             }
-            _ => out.push(c),
+            _ => scratch.push(c),
         }
     }
 
-    out
+    std::mem::swap(output, &mut scratch);
 }
 
 /// Promote comma-bounded parentheticals whose inner clause itself contains
