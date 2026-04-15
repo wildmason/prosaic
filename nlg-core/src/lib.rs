@@ -37,6 +37,7 @@ mod template;
 mod engine;
 mod builder;
 mod discourse;
+mod session;
 mod salience;
 mod document;
 #[cfg(feature = "reg")]
@@ -59,6 +60,7 @@ pub use context::{Context, Value};
 pub use error::NlgError;
 pub use template::{Template, Pipe, PipeArg};
 pub use engine::{Engine, RenderExplanation, RenderIter, Strictness, VariantScore, Variation};
+pub use session::Session;
 pub use builder::{Sentence, Clause, Subject, entity, named};
 pub use context::IntoContext;
 pub use discourse::{ListStyle, ReferenceForm};
