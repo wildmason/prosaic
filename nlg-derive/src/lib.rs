@@ -207,6 +207,7 @@ const VALID_PIPES: &[&str] = &[
     "quantify",
     "hedge",
     "negated",
+    "choose",
 ];
 
 /// Compile-time-validated template string.

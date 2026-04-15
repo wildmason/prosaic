@@ -131,3 +131,14 @@ fn slots_omitted_defaults_to_empty_for_literal_template() {
     };
     assert_eq!(tpl, "No slots here.");
 }
+
+// ── Phase 4: choose pipe ─────────────────────────────────────────────────────
+
+#[test]
+fn choose_pipe_accepted_by_whitelist() {
+    let tpl = nlg_template! {
+        template: "{level|choose: critical=URGENT, warn=WARN, default=INFO}",
+        slots: [level],
+    };
+    assert!(tpl.contains("|choose"));
+}

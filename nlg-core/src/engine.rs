@@ -4373,6 +4373,155 @@ mod tests {
             "Expected three distinct list styles across three renders, got: {r1} / {r2} / {r3}"
         );
     }
+
+    // ── choose pipe ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn choose_pipe_exact_match() {
+        let engine = test_engine();
+        let mut session = test_session();
+        let mut ctx = Context::new();
+        ctx.insert("level", Value::String("critical".into()));
+        let out = engine
+            .render_inline(
+                &mut session,
+                "{level|choose: critical=URGENT, warn=WARN, default=INFO}",
+                &ctx,
+            )
+            .unwrap();
+        assert_eq!(out, "URGENT");
+    }
+
+    #[test]
+    fn choose_pipe_case_insensitive_match() {
+        let engine = test_engine();
+        let mut session = test_session();
+        let mut ctx = Context::new();
+        ctx.insert("level", Value::String("CRITICAL".into()));
+        let out = engine
+            .render_inline(
+                &mut session,
+                "{level|choose: critical=URGENT, default=INFO}",
+                &ctx,
+            )
+            .unwrap();
+        assert_eq!(out, "URGENT");
+    }
+
+    #[test]
+    fn choose_pipe_default_fallback() {
+        let engine = test_engine();
+        let mut session = test_session();
+        let mut ctx = Context::new();
+        ctx.insert("level", Value::String("info".into()));
+        let out = engine
+            .render_inline(
+                &mut session,
+                "{level|choose: critical=URGENT, default=INFO}",
+                &ctx,
+            )
+            .unwrap();
+        assert_eq!(out, "INFO");
+    }
+
+    #[test]
+    fn choose_pipe_number_slot() {
+        let engine = test_engine();
+        let mut session = test_session();
+        let mut ctx = Context::new();
+        ctx.insert("count", Value::Number(1));
+        let out = engine
+            .render_inline(&mut session, "{count|choose: 1=is, default=are}", &ctx)
+            .unwrap();
+        assert_eq!(out, "is");
+
+        let mut session2 = test_session();
+        let mut ctx2 = Context::new();
+        ctx2.insert("count", Value::Number(5));
+        let out2 = engine
+            .render_inline(&mut session2, "{count|choose: 1=is, default=are}", &ctx2)
+            .unwrap();
+        assert_eq!(out2, "are");
+    }
+
+    #[test]
+    fn choose_pipe_chains_with_other_pipes() {
+        let engine = test_engine();
+        let mut session = test_session();
+        let mut ctx = Context::new();
+        ctx.insert("action", Value::String("modify".into()));
+        let out = engine
+            .render_inline(
+                &mut session,
+                "{action|choose: rename=renamed, modify=modified, default=changed|capitalize}",
+                &ctx,
+            )
+            .unwrap();
+        assert!(out.contains("Modified"), "got: {out}");
+    }
+
+    #[test]
+    fn choose_pipe_strict_no_match_no_default_errors() {
+        let engine = test_engine().strictness(Strictness::Strict);
+        let mut session = test_session();
+        let mut ctx = Context::new();
+        ctx.insert("level", Value::String("info".into()));
+        let err = engine
+            .render_inline(&mut session, "{level|choose: critical=URGENT}", &ctx)
+            .unwrap_err();
+        assert!(matches!(err, NlgError::InvalidPipe { .. }));
+    }
+
+    #[test]
+    fn choose_pipe_lenient_no_match_returns_placeholder() {
+        let engine = test_engine().strictness(Strictness::Lenient);
+        let mut session = test_session();
+        let mut ctx = Context::new();
+        ctx.insert("level", Value::String("info".into()));
+        let out = engine
+            .render_inline(&mut session, "{level|choose: critical=URGENT}", &ctx)
+            .unwrap();
+        assert!(
+            out.contains("[choose: no match for info]"),
+            "got: {out}"
+        );
+    }
+
+    #[test]
+    fn choose_pipe_silent_no_match_returns_empty() {
+        let engine = test_engine().strictness(Strictness::Silent);
+        let mut session = test_session();
+        let mut ctx = Context::new();
+        ctx.insert("level", Value::String("info".into()));
+        let out = engine
+            .render_inline(&mut session, "{level|choose: critical=URGENT}", &ctx)
+            .unwrap();
+        assert_eq!(out, "");
+    }
+
+    #[test]
+    fn choose_pipe_missing_arg_errors() {
+        let engine = test_engine().strictness(Strictness::Strict);
+        let mut session = test_session();
+        let mut ctx = Context::new();
+        ctx.insert("level", Value::String("info".into()));
+        let err = engine
+            .render_inline(&mut session, "{level|choose}", &ctx)
+            .unwrap_err();
+        assert!(matches!(err, NlgError::InvalidPipe { .. }));
+    }
+
+    #[test]
+    fn choose_pipe_malformed_arg_errors() {
+        let engine = test_engine().strictness(Strictness::Strict);
+        let mut session = test_session();
+        let mut ctx = Context::new();
+        ctx.insert("level", Value::String("info".into()));
+        let err = engine
+            .render_inline(&mut session, "{level|choose: no_equals_here}", &ctx)
+            .unwrap_err();
+        assert!(matches!(err, NlgError::InvalidPipe { .. }));
+    }
 }
 
 #[cfg(test)]
