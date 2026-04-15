@@ -36,6 +36,7 @@ mod context;
 mod error;
 mod template;
 mod engine;
+mod faithfulness;
 mod builder;
 mod discourse;
 mod session;
@@ -58,6 +59,8 @@ pub use language::{
     english_verb_phrase, Aspect, Conjunction, Language, Mood, Person, Tense, VerbForm, Voice,
 };
 pub use context::{Context, IntoValue, Value};
+pub use faithfulness::{score_faithfulness, FaithfulnessScore, PolarityDrift};
+// assert_faithful! is exported via #[macro_export] in faithfulness.rs
 pub use error::NlgError;
 pub use template::{Template, Pipe, PipeArg};
 pub use engine::{Engine, RenderExplanation, RenderIter, Strictness, VariantScore, Variation};

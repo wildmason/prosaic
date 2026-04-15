@@ -25,20 +25,34 @@ const UNCOUNTABLE: &[&str] = &[
 ];
 
 /// Irregular plural forms: (singular, plural).
+///
+/// Also includes English words ending in `-ice` whose plurals end in `-ices`
+/// (e.g. "service → services"). Without explicit entries these would be
+/// mis-singularised by the Latin `ices → ex` rule designed for "index/indices".
 const IRREGULARS: &[(&str, &str)] = &[
     ("child", "children"),
     ("criterion", "criteria"),
+    ("device", "devices"),
     ("die", "dice"),
     ("foot", "feet"),
     ("goose", "geese"),
+    ("invoice", "invoices"),
+    ("justice", "justices"),
     ("louse", "lice"),
     ("man", "men"),
     ("mouse", "mice"),
     ("move", "moves"),
+    ("notice", "notices"),
+    ("office", "offices"),
     ("ox", "oxen"),
     ("person", "people"),
+    ("practice", "practices"),
+    ("price", "prices"),
+    ("service", "services"),
     ("sex", "sexes"),
+    ("slice", "slices"),
     ("tooth", "teeth"),
+    ("voice", "voices"),
     ("woman", "women"),
 ];
 
@@ -165,7 +179,7 @@ pub fn singularize(word: &str) -> String {
         return format!("{}fe", &word[..word.len() - 3]);
     }
     if lower.ends_with("ices") && lower.len() > 5 {
-        // indices -> index
+        // indices -> index, vertices -> vertex (Latin ix/ex plurals)
         return format!("{}ex", &word[..word.len() - 4]);
     }
     if lower.ends_with("ses") || lower.ends_with("xes") || lower.ends_with("zes")
@@ -353,3 +367,4 @@ mod tests {
         assert_eq!(singularize("child"), "child");
     }
 }
+

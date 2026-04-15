@@ -63,6 +63,11 @@ impl Context {
     pub fn keys(&self) -> impl Iterator<Item = &String> {
         self.values.keys()
     }
+
+    /// Iterate over all key-value pairs in the context.
+    pub fn iter(&self) -> impl Iterator<Item = (&str, &Value)> {
+        self.values.iter().map(|(k, v)| (k.as_str(), v))
+    }
 }
 
 /// Convert a host value into a [`Value`]. Used by the [`ctx!`] macro to
