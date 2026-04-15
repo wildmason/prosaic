@@ -77,6 +77,17 @@ pub struct DiscourseState {
     /// Whether the current focus is a compound/plural subject, so pronoun
     /// continuations should use "they/them" instead of "it".
     focus_is_plural: bool,
+
+    /// Backward-looking center for the NEXT render. Updated at the end of each
+    /// successful render via `advance_cb`. `None` before the first render, after
+    /// a reset, or when no coherent transition is available (Rough Shift).
+    cb: Option<String>,
+
+    /// Focus entity of the render immediately before the current one. Used to
+    /// compute Cb transitions. Different from `focus_entity`: that tracks the
+    /// current render's focus; this tracks what `focus_entity` was at the point
+    /// `advance_cb` was last called.
+    previous_focus: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -187,6 +198,8 @@ impl DiscourseState {
             stopword_ids,
             last_list_style: 0,
             focus_is_plural: false,
+            cb: None,
+            previous_focus: None,
         }
     }
 
@@ -460,6 +473,64 @@ impl DiscourseState {
         // render contributed to discourse state.
         self.render_index > 1
     }
+
+    /// Advance Cb tracking for the next render. Call this after all mutations
+    /// from the current render (`mention_entity`, `record_output_words`) have
+    /// completed and the render has committed. On render failure the
+    /// `Session` snapshot/restore path will roll back `cb` and `previous_focus`
+    /// along with all other fields via `Clone`.
+    ///
+    /// Called by `Engine::render_tx` at the end of each successful render.
+    // `advance_cb` is called from engine.rs (added in Phase 2). The allow
+    // suppresses the Phase 1 dead-code lint; removed once the engine call lands.
+    #[allow(dead_code)]
+    pub fn advance_cb(&mut self) {
+        self.compute_cb_transition();
+    }
+
+    /// Compute and store the Cb for the **next** render, based on the entity
+    /// just focused in the current render.
+    ///
+    /// Cb transition rules (v1 — no grammatical role ranking):
+    ///
+    /// - **First render / post-reset** (`previous_focus` is None): Cb = current focus.
+    /// - **Continue** (same entity as last render): Cb stays on that entity.
+    /// - **Retain** (different entity, but it has been seen before):
+    ///   Cb shifts to the newly-focused entity.
+    /// - **Smooth Shift** (new entity introduced for first time): Cb stays on
+    ///   prior focus for one more utterance to preserve coherence.
+    /// - **No current entity**: Cb carries the prior focus forward.
+    fn compute_cb_transition(&mut self) {
+        let current = self.focus_entity.as_deref();
+        let prev = self.previous_focus.as_deref();
+
+        self.cb = match (current, prev) {
+            // First render ever, or immediately after reset.
+            (_, None) => current.map(str::to_string),
+
+            // Continue: same entity as last time — Cb stays.
+            (Some(c), Some(p)) if c == p => Some(c.to_string()),
+
+            // Shift: different entity.
+            (Some(c), Some(p)) => {
+                if self.entities.get(c).is_some_and(|m| m.mention_count > 1) {
+                    // Re-focusing on a previously-seen entity: Retain — Cb
+                    // shifts to the newly-focused entity.
+                    Some(c.to_string())
+                } else {
+                    // Brand-new entity introduced: Smooth Shift — prior focus
+                    // stays as Cb for one more utterance.
+                    Some(p.to_string())
+                }
+            }
+
+            // No named entity in this render: Cb carries prior focus forward.
+            (None, Some(p)) => Some(p.to_string()),
+        };
+
+        // Shift previous_focus forward so the next call sees the current render's focus.
+        self.previous_focus = current.map(str::to_string);
+    }
 }
 
 impl Default for DiscourseState {
@@ -684,6 +755,77 @@ mod tests {
         );
 
         assert!(score_high > score_low);
+    }
+
+    // --- Cb tracking tests (Phase 1) ---
+
+    #[test]
+    fn cb_none_before_first_render() {
+        let state = DiscourseState::new();
+        assert_eq!(state.cb, None);
+    }
+
+    #[test]
+    fn cb_becomes_focus_after_first_render() {
+        let mut state = DiscourseState::new();
+        state.begin_render();
+        state.mention_entity("Foo", "class");
+        state.advance_cb();
+        assert_eq!(state.cb.as_deref(), Some("Foo"));
+    }
+
+    #[test]
+    fn cb_stays_on_continue_transition() {
+        let mut state = DiscourseState::new();
+        state.begin_render();
+        state.mention_entity("Foo", "class");
+        state.advance_cb();
+        state.begin_render();
+        state.mention_entity("Foo", "class");
+        state.advance_cb();
+        assert_eq!(state.cb.as_deref(), Some("Foo"));
+    }
+
+    #[test]
+    fn cb_shifts_to_prior_focus_on_new_entity_intro() {
+        // Render 1: Foo → Cb becomes Foo (first render, no prev).
+        // Render 2: Bar (new entity, mention_count == 1 so Smooth Shift) → Cb stays Foo.
+        let mut state = DiscourseState::new();
+        state.begin_render();
+        state.mention_entity("Foo", "class");
+        state.advance_cb();
+        state.begin_render();
+        state.mention_entity("Bar", "class");
+        state.advance_cb();
+        assert_eq!(state.cb.as_deref(), Some("Foo"));
+    }
+
+    #[test]
+    fn cb_shifts_to_current_on_retain() {
+        // Render 1: Foo
+        // Render 2: Foo (continue)
+        // Render 3: Foo (continue)
+        // Render 4: Bar (new entity; Smooth Shift → Cb=Foo)
+        // Render 5: Foo (re-focus on previously-seen entity; Retain → Cb=Foo)
+        let mut state = DiscourseState::new();
+        for name in ["Foo", "Foo", "Foo", "Bar", "Foo"] {
+            state.begin_render();
+            state.mention_entity(name, "class");
+            state.advance_cb();
+        }
+        // Foo has mention_count >= 2 by render 5 → Retain → Cb=Foo
+        assert_eq!(state.cb.as_deref(), Some("Foo"));
+    }
+
+    #[test]
+    fn cb_reset_clears_state() {
+        let mut state = DiscourseState::new();
+        state.begin_render();
+        state.mention_entity("Foo", "class");
+        state.advance_cb();
+        state.reset();
+        assert_eq!(state.cb, None);
+        assert_eq!(state.previous_focus, None);
     }
 
     #[test]
