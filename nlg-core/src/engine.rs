@@ -301,11 +301,11 @@ impl<'e, 's> RenderCtx<'e, 's> {
     fn select_alternative_scored<'a>(
         &mut self,
         key: &str,
-        alternatives: &'a [Template],
+        alternatives: &[&'a Template],
         context: &Context,
     ) -> Result<(&'a Template, usize), NlgError> {
         if alternatives.len() == 1 {
-            return Ok((&alternatives[0], 0));
+            return Ok((alternatives[0], 0));
         }
 
         let allow_choose_best = matches!(
@@ -315,7 +315,7 @@ impl<'e, 's> RenderCtx<'e, 's> {
 
         if !allow_choose_best {
             let index = self.select_variant_index(key, alternatives.len());
-            return Ok((&alternatives[index], index));
+            return Ok((alternatives[index], index));
         }
 
         let last_variant = self.session.discourse.last_template_variant(key);
@@ -323,7 +323,7 @@ impl<'e, 's> RenderCtx<'e, 's> {
 
         if is_first {
             let index = self.select_variant_index(key, alternatives.len());
-            return Ok((&alternatives[index], index));
+            return Ok((alternatives[index], index));
         }
 
         // Snapshot-and-restore around candidate rendering so state
@@ -349,7 +349,7 @@ impl<'e, 's> RenderCtx<'e, 's> {
 
         if candidates.is_empty() {
             let index = last_variant.unwrap_or(0).min(alternatives.len() - 1);
-            return Ok((&alternatives[index], index));
+            return Ok((alternatives[index], index));
         }
 
         // Score against discourse history (immutable access only)
@@ -364,7 +364,7 @@ impl<'e, 's> RenderCtx<'e, 's> {
             }
         }
 
-        Ok((&alternatives[best_index], best_index))
+        Ok((alternatives[best_index], best_index))
     }
 
     fn select_variant_index(&mut self, key: &str, count: usize) -> usize {
@@ -913,7 +913,7 @@ impl<'e, 's> RenderCtx<'e, 's> {
     fn pick_variant_index(
         &self,
         key: &str,
-        alternatives: &[Template],
+        alternatives: &[&Template],
         last_variant: Option<usize>,
         scores: &[VariantScore],
     ) -> Option<usize> {
@@ -2298,29 +2298,29 @@ fn prepend_replacing_subject(output: &str, connective: &str) -> String {
 /// 1. Templates registered at the exact target salience.
 /// 2. Templates registered at Medium salience (the default).
 /// 3. All registered templates (degrades gracefully).
-fn filter_by_salience(
-    alternatives: &[SalientTemplate],
+fn filter_by_salience<'a>(
+    alternatives: &'a [SalientTemplate],
     target: Salience,
-) -> Vec<Template> {
-    let exact: Vec<Template> = alternatives
+) -> Vec<&'a Template> {
+    let exact: Vec<&'a Template> = alternatives
         .iter()
         .filter(|(s, _)| *s == target)
-        .map(|(_, t)| t.clone())
+        .map(|(_, t)| t)
         .collect();
     if !exact.is_empty() {
         return exact;
     }
 
-    let medium: Vec<Template> = alternatives
+    let medium: Vec<&'a Template> = alternatives
         .iter()
         .filter(|(s, _)| *s == Salience::Medium)
-        .map(|(_, t)| t.clone())
+        .map(|(_, t)| t)
         .collect();
     if !medium.is_empty() {
         return medium;
     }
 
-    alternatives.iter().map(|(_, t)| t.clone()).collect()
+    alternatives.iter().map(|(_, t)| t).collect()
 }
 
 /// Determine if a value is "truthy" for conditional rendering.
