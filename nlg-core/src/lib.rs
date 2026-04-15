@@ -57,7 +57,7 @@ mod punctuation;
 pub use language::{
     english_verb_phrase, Aspect, Conjunction, Language, Mood, Person, Tense, VerbForm, Voice,
 };
-pub use context::{Context, Value};
+pub use context::{Context, IntoValue, Value};
 pub use error::NlgError;
 pub use template::{Template, Pipe, PipeArg};
 pub use engine::{Engine, RenderExplanation, RenderIter, Strictness, VariantScore, Variation};
