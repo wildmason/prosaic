@@ -1,11 +1,10 @@
-use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::session::Session;
 
 use crate::context::{Context, IntoContext, Value};
-use crate::discourse::{DiscourseState, ListStyle, ReferenceForm};
+use crate::discourse::{ListStyle, ReferenceForm};
 use crate::error::NlgError;
 use crate::language::{Conjunction, Language, Person, VerbForm};
 use crate::antonyms::{insert_not, AntonymRegistry};
@@ -103,6 +102,7 @@ pub struct RenderExplanation {
 /// without waiting for the full batch to complete.
 pub struct RenderIter<'a> {
     engine: &'a Engine,
+    session: &'a mut Session,
     events: &'a [(&'a str, Context)],
     i: usize,
 }
@@ -121,7 +121,7 @@ impl<'a> Iterator for RenderIter<'a> {
         if action_end > self.i + 1 {
             let key = self.events[self.i].0;
             let run = &self.events[self.i..action_end];
-            let sentence = match self.engine.render_aggregated_subjects(key, run) {
+            let sentence = match self.engine.render_aggregated_subjects(self.session, key, run) {
                 Ok(s) => s,
                 Err(e) => return Some(Err(e)),
             };
@@ -133,7 +133,7 @@ impl<'a> Iterator for RenderIter<'a> {
         if entity_end > self.i + 1 {
             let mut run_rendered: Vec<String> = Vec::with_capacity(entity_end - self.i);
             for (key, ctx) in &self.events[self.i..entity_end] {
-                match self.engine.render(key, ctx) {
+                match self.engine.render(self.session, key, ctx) {
                     Ok(s) => run_rendered.push(s),
                     Err(e) => return Some(Err(e)),
                 }
@@ -150,7 +150,7 @@ impl<'a> Iterator for RenderIter<'a> {
 
         let (key, ctx) = &self.events[self.i];
         self.i += 1;
-        Some(self.engine.render(key, ctx))
+        Some(self.engine.render(self.session, key, ctx))
     }
 }
 
@@ -179,15 +179,18 @@ pub struct VariantScore {
 }
 
 /// The core NLG engine. Holds a language implementation, template registry,
-/// configuration, and discourse state for natural cross-sentence rendering.
+/// and immutable configuration. All per-render mutable state lives in
+/// [`Session`], which callers pass into render methods.
 pub struct Engine {
     language: Box<dyn Language>,
     templates: HashMap<String, Vec<SalientTemplate>>,
     strictness: Strictness,
     variation: Variation,
     salience_thresholds: SalienceThresholds,
-    round_robin_counters: HashMap<String, AtomicUsize>,
-    discourse: RefCell<DiscourseState>,
+    /// Per-key initial counters for RoundRobin variation. These are
+    /// initialized at `register_template` time and read-only thereafter;
+    /// the live counter lives in `Session::round_robin_counters`.
+    rr_initial: HashMap<String, usize>,
     #[cfg(feature = "reg")]
     entity_registry: EntityRegistry,
     #[cfg(feature = "reg")]
@@ -955,8 +958,7 @@ impl Engine {
             strictness: Strictness::default(),
             variation: Variation::default(),
             salience_thresholds: SalienceThresholds::default(),
-            round_robin_counters: HashMap::new(),
-            discourse: RefCell::new(DiscourseState::new()),
+            rr_initial: HashMap::new(),
             #[cfg(feature = "reg")]
             entity_registry: EntityRegistry::new(),
             #[cfg(feature = "reg")]
@@ -1021,8 +1023,9 @@ impl Engine {
     /// ctx.insert("entity_type", Value::String("class".into()));
     /// ctx.insert("name", Value::String("UserService".into()));
     ///
+    /// let mut session = nlg_core::Session::new();
     /// assert_eq!(
-    ///     engine.render("t", &ctx).unwrap(),
+    ///     engine.render(&mut session, "t", &ctx).unwrap(),
     ///     "The domain class UserService was modified."
     /// );
     /// ```
@@ -1063,7 +1066,8 @@ impl Engine {
     ///
     /// let mut ctx = Context::new();
     /// ctx.insert("ts", Value::Number(now - 86400 - 3600));
-    /// assert_eq!(engine.render("t", &ctx).unwrap(), "The change landed yesterday.");
+    /// let mut session = nlg_core::Session::new();
+    /// assert_eq!(engine.render(&mut session, "t", &ctx).unwrap(), "The change landed yesterday.");
     /// ```
     #[cfg(feature = "time")]
     pub fn reference_time(mut self, unix_secs: i64) -> Self {
@@ -1108,7 +1112,8 @@ impl Engine {
     ///
     /// let mut engine = Engine::new(English::new()).smart_quotes(true);
     /// engine.register_template("t", r#"Alice said "hello""#).unwrap();
-    /// let out = engine.render("t", Context::new()).unwrap();
+    /// let mut session = nlg_core::Session::new();
+    /// let out = engine.render(&mut session, "t", Context::new()).unwrap();
     /// assert!(out.contains('\u{201C}'));
     /// assert!(out.contains('\u{201D}'));
     /// ```
@@ -1141,7 +1146,8 @@ impl Engine {
     ///      which impacts 6 consumers",
     /// ).unwrap();
     ///
-    /// let out = engine.render("t", Context::new()).unwrap();
+    /// let mut session = nlg_core::Session::new();
+    /// let out = engine.render(&mut session, "t", Context::new()).unwrap();
     /// assert!(out.contains("This impacts 6 consumers"));
     /// ```
     #[cfg(feature = "polish")]
@@ -1181,11 +1187,6 @@ impl Engine {
         &*self.language
     }
 
-    /// Clear all discourse state. Call this between unrelated rendering contexts.
-    pub fn reset(&self) {
-        self.discourse.borrow_mut().reset();
-    }
-
     /// Register a template string under a key with Medium salience.
     /// Multiple templates registered under the same key become alternatives
     /// for variation at that salience level.
@@ -1193,7 +1194,7 @@ impl Engine {
     /// # Example
     ///
     /// ```
-    /// use nlg_core::{Context, Engine, Value};
+    /// use nlg_core::{Context, Engine, Session, Value};
     /// use nlg_grammar_en::English;
     ///
     /// let mut engine = Engine::new(English::new());
@@ -1204,7 +1205,8 @@ impl Engine {
     ///
     /// let mut ctx = Context::new();
     /// ctx.insert("n", Value::Number(3));
-    /// assert_eq!(engine.render("count.items", &ctx).unwrap(), "You have 3 items.");
+    /// let mut session = Session::new();
+    /// assert_eq!(engine.render(&mut session, "count.items", &ctx).unwrap(), "You have 3 items.");
     /// ```
     pub fn register_template(&mut self, key: &str, source: &str) -> Result<(), NlgError> {
         self.register_template_at(key, source, Salience::Medium)
@@ -1223,11 +1225,9 @@ impl Engine {
             .entry(key.to_string())
             .or_default()
             .push((salience, template));
-        // Ensure the RoundRobin counter exists for this key so select_variant_index
-        // can rotate without needing mutable access to the map.
-        self.round_robin_counters
-            .entry(key.to_string())
-            .or_insert_with(|| AtomicUsize::new(0));
+        // Track that this key exists so new Sessions can be pre-populated
+        // with the correct initial counter value.
+        self.rr_initial.entry(key.to_string()).or_insert(0);
         Ok(())
     }
 
@@ -1238,9 +1238,10 @@ impl Engine {
 
     /// Render a registered template with the given context.
     ///
-    /// The engine tracks discourse state across calls: entity mentions,
+    /// The session tracks discourse state across calls: entity mentions,
     /// template history, word frequency. Each call benefits from context
-    /// established by previous calls. Use `reset()` between unrelated sequences.
+    /// established by previous calls. Use `session.reset()` between unrelated
+    /// sequences.
     ///
     /// Render is transactional: if any step fails (missing slot in Strict mode,
     /// unknown pipe, etc.), the discourse state is rolled back to what it was
@@ -1250,35 +1251,34 @@ impl Engine {
     /// # Example
     ///
     /// ```
-    /// use nlg_core::{Context, Engine, Value, Variation};
+    /// use nlg_core::{Context, Engine, Session, Value, Variation};
     /// use nlg_grammar_en::English;
     ///
     /// let mut engine = Engine::new(English::new()).variation(Variation::Fixed);
     /// engine.register_template("greet", "Hello {name}").unwrap();
     ///
+    /// let mut session = Session::new();
     /// let mut ctx = Context::new();
     /// ctx.insert("name", Value::String("world".into()));
-    /// assert_eq!(engine.render("greet", &ctx).unwrap(), "Hello world");
+    /// assert_eq!(engine.render(&mut session, "greet", &ctx).unwrap(), "Hello world");
     /// ```
-    pub fn render(&self, key: &str, context: impl IntoContext) -> Result<String, NlgError> {
+    pub fn render(
+        &self,
+        session: &mut Session,
+        key: &str,
+        context: impl IntoContext,
+    ) -> Result<String, NlgError> {
         let all_alternatives = self
             .templates
             .get(key)
             .ok_or_else(|| NlgError::UnknownTemplate(key.to_string()))?;
         let context = context.into_context();
 
-        // Bridge: build session from RefCell state, run, write back.
-        let mut session = self.session_from_refcell();
         let snapshot = session.clone();
-
-        match RenderCtx::new(self, &mut session).render_tx(key, all_alternatives, &context) {
-            Ok(output) => {
-                self.refcell_from_session(&session);
-                Ok(output)
-            }
+        match RenderCtx::new(self, session).render_tx(key, all_alternatives, &context) {
+            Ok(output) => Ok(output),
             Err(e) => {
-                // Restore snapshot on failure.
-                self.refcell_from_session(&snapshot);
+                *session = snapshot;
                 Err(e)
             }
         }
@@ -1296,6 +1296,7 @@ impl Engine {
     /// rendering.
     pub fn score_variants(
         &self,
+        session: &mut Session,
         key: &str,
         context: impl IntoContext,
     ) -> Result<Vec<VariantScore>, NlgError> {
@@ -1305,9 +1306,8 @@ impl Engine {
             .ok_or_else(|| NlgError::UnknownTemplate(key.to_string()))?;
 
         let ctx = context.into_context();
-        let mut session = self.session_from_refcell();
-        // State is always restored by score_all_variants internally; no need to write back.
-        RenderCtx::new(self, &mut session).score_all_variants(key, all, &ctx)
+        // State is always restored by score_all_variants internally.
+        RenderCtx::new(self, session).score_all_variants(key, all, &ctx)
     }
 
     /// Render a one-off template string (not registered) with the given context.
@@ -1315,15 +1315,14 @@ impl Engine {
     /// no entity tracking) but do record output words for repetition scoring.
     pub fn render_inline(
         &self,
+        session: &mut Session,
         source: &str,
         context: impl IntoContext,
     ) -> Result<String, NlgError> {
         let template = Template::parse(source)?;
         let context = context.into_context();
-        let mut session = self.session_from_refcell();
-        let output = RenderCtx::new(self, &mut session).render_template("<inline>", &template, &context)?;
+        let output = RenderCtx::new(self, session).render_template("<inline>", &template, &context)?;
         session.discourse.record_output_words(&output);
-        self.refcell_from_session(&session);
         Ok(output)
     }
 
@@ -1358,7 +1357,8 @@ impl Engine {
     ///     ("moved", ctx.clone()),
     /// ];
     ///
-    /// let out = engine.render_batch(&events).unwrap();
+    /// let mut session = nlg_core::Session::new();
+    /// let out = engine.render_batch(&mut session, &events).unwrap();
     /// assert_eq!(
     ///     out,
     ///     "The class UserService was renamed, modified, and moved."
@@ -1366,6 +1366,7 @@ impl Engine {
     /// ```
     pub fn render_batch(
         &self,
+        session: &mut Session,
         events: &[(&str, Context)],
     ) -> Result<String, NlgError> {
         if events.is_empty() {
@@ -1383,6 +1384,7 @@ impl Engine {
                 // Multiple consecutive events with same template key but
                 // different entities — aggregate their subjects.
                 let sentence = self.render_aggregated_subjects(
+                    session,
                     events[i].0,
                     &events[i..action_end],
                 )?;
@@ -1399,7 +1401,7 @@ impl Engine {
             if entity_end > i + 1 {
                 let mut run_rendered: Vec<String> = Vec::with_capacity(entity_end - i);
                 for (key, ctx) in &events[i..entity_end] {
-                    run_rendered.push(self.render(key, ctx)?);
+                    run_rendered.push(self.render(session, key, ctx)?);
                 }
 
                 if let Some(reduced) = reduce_same_entity_clauses(&run_rendered) {
@@ -1413,7 +1415,7 @@ impl Engine {
 
             // Single event — render normally with full discourse benefits.
             let (key, ref ctx) = events[i];
-            sentences.push(self.render(key, ctx)?);
+            sentences.push(self.render(session, key, ctx)?);
             i += 1;
         }
 
@@ -1473,6 +1475,7 @@ impl Engine {
     /// output?".
     pub fn render_explained(
         &self,
+        session: &mut Session,
         key: &str,
         context: impl IntoContext,
     ) -> Result<RenderExplanation, NlgError> {
@@ -1486,17 +1489,18 @@ impl Engine {
         let alternatives = filter_by_salience(all_alternatives, target_salience);
 
         // Pre-compute candidate scores for diagnostics when choose-best
-        // would apply. Run in a snapshot/restore bubble via RenderCtx.
+        // would apply. Run in a snapshot/restore bubble so main session is
+        // untouched until the real render below.
         let candidate_scores = {
             let allow_choose_best = matches!(
                 self.variation,
                 Variation::Seeded(_) | Variation::Random
             );
-            let mut scoring_session = self.session_from_refcell();
-            let is_first = scoring_session.discourse.is_first_render();
+            let is_first = session.discourse.is_first_render();
             if !allow_choose_best || is_first || alternatives.len() < 2 {
                 None
             } else {
+                let mut scoring_session = session.clone();
                 let snapshot = scoring_session.clone();
                 let mut scored: Vec<f64> = Vec::with_capacity(alternatives.len());
                 let mut scoring_failed = false;
@@ -1524,15 +1528,14 @@ impl Engine {
             .map(|v| v.as_display());
         let reference_form = entity_name
             .as_ref()
-            .map(|n| self.discourse.borrow().reference_form(n));
+            .map(|n| session.discourse.reference_form(n));
 
         // Run the real render. Discourse state advances normally.
-        let output = self.render(key, &context)?;
+        let output = self.render(session, key, &context)?;
 
         // Recover diagnostic info from the (now-advanced) discourse state.
-        let variant_index = self
+        let variant_index = session
             .discourse
-            .borrow()
             .last_template_variant(key)
             .unwrap_or(0)
             .min(alternatives.len().saturating_sub(1));
@@ -1541,7 +1544,7 @@ impl Engine {
             .map(|t| t.source.clone())
             .unwrap_or_default();
 
-        let focus_is_plural = self.discourse.borrow().focus_is_plural();
+        let focus_is_plural = session.discourse.focus_is_plural();
 
         #[cfg(feature = "polish")]
         let length_split_applied = self
@@ -1582,10 +1585,12 @@ impl Engine {
     /// error).
     pub fn render_iter<'a>(
         &'a self,
+        session: &'a mut Session,
         events: &'a [(&'a str, Context)],
     ) -> RenderIter<'a> {
         RenderIter {
             engine: self,
+            session,
             events,
             i: 0,
         }
@@ -1649,6 +1654,7 @@ impl Engine {
     /// same action: "UserService and AuthService were renamed."
     fn render_aggregated_subjects(
         &self,
+        session: &mut Session,
         key: &str,
         events: &[(&str, Context)],
     ) -> Result<String, NlgError> {
@@ -1662,7 +1668,7 @@ impl Engine {
             // Fallback to sequential rendering
             let mut sentences = Vec::new();
             for (k, ctx) in events {
-                sentences.push(self.render(k, ctx)?);
+                sentences.push(self.render(session, k, ctx)?);
             }
             return Ok(sentences.join(" "));
         }
@@ -1686,12 +1692,11 @@ impl Engine {
         }
 
         // Render with combined subject, then apply plural agreement
-        let rendered = self.render(key, combined_ctx)?;
+        let rendered = self.render(session, key, combined_ctx)?;
 
         // Mark the discourse focus as plural so any subsequent pronoun
         // reference uses "they" instead of "it".
-        // Bridge: directly mutate RefCell state post-render.
-        self.discourse.borrow_mut().set_focus_plural(true);
+        session.discourse.set_focus_plural(true);
 
         Ok(pluralize_agreement(&rendered, &*self.language))
     }
@@ -1715,30 +1720,6 @@ impl Engine {
             // RoundRobin requires mutable state — callers that need RoundRobin
             // must go through RenderCtx::select_variant_index instead.
             Variation::RoundRobin => 0,
-        }
-    }
-
-    /// Phase-2 bridge: build a `Session` from the engine's current RefCell
-    /// state so it can be threaded through `RenderCtx`.
-    fn session_from_refcell(&self) -> Session {
-        let discourse = self.discourse.borrow().clone();
-        let mut counters = HashMap::with_capacity(self.round_robin_counters.len());
-        for (k, v) in &self.round_robin_counters {
-            counters.insert(k.clone(), AtomicUsize::new(v.load(Ordering::Relaxed)));
-        }
-        Session {
-            discourse,
-            round_robin_counters: counters,
-        }
-    }
-
-    /// Phase-2 bridge: write session state back into the engine's RefCell.
-    fn refcell_from_session(&self, session: &Session) {
-        *self.discourse.borrow_mut() = session.discourse.clone();
-        for (k, v) in &session.round_robin_counters {
-            if let Some(c) = self.round_robin_counters.get(k) {
-                c.store(v.load(Ordering::Relaxed), Ordering::Relaxed);
-            }
         }
     }
 
@@ -1812,6 +1793,29 @@ impl Engine {
         } else {
             format!("the {} {lower_type} {name}", attrs.join(" "))
         }
+    }
+
+    /// Create a new [`Session`] compatible with this engine.
+    ///
+    /// Sugar for `Session::new()`. Equivalent, but clarifies intent at call
+    /// sites where a reader might wonder which session type to construct.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use nlg_core::{Context, Engine, Value};
+    /// use nlg_grammar_en::English;
+    ///
+    /// let mut engine = Engine::new(English::new());
+    /// engine.register_template("hello", "Hello {name}!").unwrap();
+    ///
+    /// let mut session = engine.new_session();
+    /// let mut ctx = Context::new();
+    /// ctx.insert("name", Value::String("world".into()));
+    /// assert_eq!(engine.render(&mut session, "hello", &ctx).unwrap(), "Hello world!");
+    /// ```
+    pub fn new_session(&self) -> Session {
+        Session::new()
     }
 
 }
@@ -2487,6 +2491,10 @@ mod tests {
         Engine::new(TestLang)
     }
 
+    fn test_session() -> Session {
+        Session::new()
+    }
+
     // ── Basic rendering (backward compatibility) ─────────────────────────
 
     #[test]
@@ -2497,7 +2505,8 @@ mod tests {
         let mut ctx = Context::new();
         ctx.insert("name", Value::String("world".into()));
 
-        assert_eq!(engine.render("greet", &ctx).unwrap(), "Hello world!");
+        let mut session = test_session();
+        assert_eq!(engine.render(&mut session, "greet", &ctx).unwrap(), "Hello world!");
     }
 
     #[test]
@@ -2506,7 +2515,8 @@ mod tests {
         engine.register_template("greet", "Hello {name}!").unwrap();
         let ctx = Context::new();
 
-        let result = engine.render("greet", &ctx);
+        let mut session = test_session();
+        let result = engine.render(&mut session, "greet", &ctx);
         assert!(matches!(result, Err(NlgError::MissingSlot { .. })));
     }
 
@@ -2516,8 +2526,9 @@ mod tests {
         engine.register_template("greet", "Hello {name}!").unwrap();
         let ctx = Context::new();
 
+        let mut session = test_session();
         assert_eq!(
-            engine.render("greet", &ctx).unwrap(),
+            engine.render(&mut session, "greet", &ctx).unwrap(),
             "Hello [missing: name]!"
         );
     }
@@ -2528,9 +2539,10 @@ mod tests {
         engine.register_template("greet", "Hello {name}!").unwrap();
         let ctx = Context::new();
 
+        let mut session = test_session();
         // Silent-mode cleanup collapses the " " before "!" produced by
         // the omitted slot.
-        assert_eq!(engine.render("greet", &ctx).unwrap(), "Hello!");
+        assert_eq!(engine.render(&mut session, "greet", &ctx).unwrap(), "Hello!");
     }
 
     #[test]
@@ -2538,7 +2550,8 @@ mod tests {
         let engine = test_engine();
         let ctx = Context::new();
 
-        let result = engine.render("nonexistent", &ctx);
+        let mut session = test_session();
+        let result = engine.render(&mut session, "nonexistent", &ctx);
         assert!(matches!(result, Err(NlgError::UnknownTemplate(_))));
     }
 
@@ -2549,13 +2562,14 @@ mod tests {
             .register_template("count", "{n} {n|pluralize:item}")
             .unwrap();
 
+        let mut session = test_session();
         let mut ctx = Context::new();
         ctx.insert("n", Value::Number(1));
-        assert_eq!(engine.render("count", &ctx).unwrap(), "1 item");
+        assert_eq!(engine.render(&mut session, "count", &ctx).unwrap(), "1 item");
 
-        engine.reset();
+        session.reset();
         ctx.insert("n", Value::Number(5));
-        assert_eq!(engine.render("count", &ctx).unwrap(), "5 items");
+        assert_eq!(engine.render(&mut session, "count", &ctx).unwrap(), "5 items");
     }
 
     #[test]
@@ -2565,13 +2579,14 @@ mod tests {
             .register_template("a", "{thing|article}")
             .unwrap();
 
+        let mut session = test_session();
         let mut ctx = Context::new();
         ctx.insert("thing", Value::String("apple".into()));
-        assert_eq!(engine.render("a", &ctx).unwrap(), "an apple");
+        assert_eq!(engine.render(&mut session, "a", &ctx).unwrap(), "an apple");
 
-        engine.reset();
+        session.reset();
         ctx.insert("thing", Value::String("banana".into()));
-        assert_eq!(engine.render("a", &ctx).unwrap(), "a banana");
+        assert_eq!(engine.render(&mut session, "a", &ctx).unwrap(), "a banana");
     }
 
     #[test]
@@ -2581,12 +2596,13 @@ mod tests {
             .register_template("list", "{items|join}")
             .unwrap();
 
+        let mut session = test_session();
         let mut ctx = Context::new();
         ctx.insert(
             "items",
             Value::List(vec!["a".into(), "b".into(), "c".into()]),
         );
-        assert_eq!(engine.render("list", &ctx).unwrap(), "a, b, and c");
+        assert_eq!(engine.render(&mut session, "list", &ctx).unwrap(), "a, b, and c");
     }
 
     #[test]
@@ -2596,12 +2612,13 @@ mod tests {
             .register_template("list", "{items|join:or}")
             .unwrap();
 
+        let mut session = test_session();
         let mut ctx = Context::new();
         ctx.insert(
             "items",
             Value::List(vec!["a".into(), "b".into(), "c".into()]),
         );
-        assert_eq!(engine.render("list", &ctx).unwrap(), "a, b, or c");
+        assert_eq!(engine.render(&mut session, "list", &ctx).unwrap(), "a, b, or c");
     }
 
     #[test]
@@ -2611,6 +2628,7 @@ mod tests {
             .register_template("t", "{items|truncate:2|join:bracketed}")
             .unwrap();
 
+        let mut session = test_session();
         let mut ctx = Context::new();
         ctx.insert(
             "items",
@@ -2622,7 +2640,7 @@ mod tests {
                 "e".into(),
             ]),
         );
-        assert_eq!(engine.render("t", &ctx).unwrap(), "[a, b, and 3 more]");
+        assert_eq!(engine.render(&mut session, "t", &ctx).unwrap(), "[a, b, and 3 more]");
     }
 
     #[test]
@@ -2632,9 +2650,10 @@ mod tests {
             .register_template("cap", "{word|capitalize}")
             .unwrap();
 
+        let mut session = test_session();
         let mut ctx = Context::new();
         ctx.insert("word", Value::String("hello".into()));
-        assert_eq!(engine.render("cap", &ctx).unwrap(), "Hello");
+        assert_eq!(engine.render(&mut session, "cap", &ctx).unwrap(), "Hello");
     }
 
     #[test]
@@ -2642,19 +2661,21 @@ mod tests {
         let mut engine = test_engine();
         engine.register_template("o", "{n|ordinal}").unwrap();
 
+        let mut session = test_session();
         let mut ctx = Context::new();
         ctx.insert("n", Value::Number(3));
-        assert_eq!(engine.render("o", &ctx).unwrap(), "3rd");
+        assert_eq!(engine.render(&mut session, "o", &ctx).unwrap(), "3rd");
     }
 
     #[test]
     fn render_inline_template() {
         let engine = test_engine();
+        let mut session = test_session();
         let mut ctx = Context::new();
         ctx.insert("name", Value::String("world".into()));
 
         assert_eq!(
-            engine.render_inline("Hello {name}!", &ctx).unwrap(),
+            engine.render_inline(&mut session, "Hello {name}!", &ctx).unwrap(),
             "Hello world!"
         );
     }
@@ -2665,9 +2686,10 @@ mod tests {
         engine.register_template("t", "first").unwrap();
         engine.register_template("t", "second").unwrap();
 
+        let mut session = test_session();
         let ctx = Context::new();
         // First render always picks first (no discourse history yet)
-        let result = engine.render("t", &ctx).unwrap();
+        let result = engine.render(&mut session, "t", &ctx).unwrap();
         assert_eq!(result, "first");
     }
 
@@ -2678,9 +2700,10 @@ mod tests {
         engine.register_template("t", "second").unwrap();
 
         let ctx = Context::new();
-        let result1 = engine.render("t", &ctx).unwrap();
-        engine.reset();
-        let result2 = engine.render("t", &ctx).unwrap();
+        let mut session1 = test_session();
+        let result1 = engine.render(&mut session1, "t", &ctx).unwrap();
+        let mut session2 = test_session();
+        let result2 = engine.render(&mut session2, "t", &ctx).unwrap();
         assert_eq!(result1, result2);
     }
 
@@ -2689,10 +2712,11 @@ mod tests {
         let mut engine = test_engine();
         engine.register_template("t", "{name|nonexistent}").unwrap();
 
+        let mut session = test_session();
         let mut ctx = Context::new();
         ctx.insert("name", Value::String("test".into()));
 
-        let result = engine.render("t", &ctx);
+        let result = engine.render(&mut session, "t", &ctx);
         assert!(matches!(result, Err(NlgError::InvalidPipe { .. })));
     }
 
@@ -2707,6 +2731,7 @@ mod tests {
             )
             .unwrap();
 
+        let mut session = test_session();
         let mut ctx = Context::new();
         ctx.insert("entity_type", Value::String("class".into()));
         ctx.insert("old_name", Value::String("Foo".into()));
@@ -2714,7 +2739,7 @@ mod tests {
         ctx.insert("count", Value::Number(6));
 
         assert_eq!(
-            engine.render("entity.renamed", &ctx).unwrap(),
+            engine.render(&mut session, "entity.renamed", &ctx).unwrap(),
             "The class Foo was renamed to Foobar which impacts 6 direct consumers."
         );
     }
@@ -2732,11 +2757,12 @@ mod tests {
         ctx.insert("entity_type", Value::String("class".into()));
         ctx.insert("name", Value::String("Foo".into()));
 
-        engine.render("t", &ctx).unwrap();
-        engine.reset();
+        let mut session = test_session();
+        engine.render(&mut session, "t", &ctx).unwrap();
+        session.reset();
 
         // After reset, should behave as if first render
-        let result = engine.render("t", &ctx).unwrap();
+        let result = engine.render(&mut session, "t", &ctx).unwrap();
         assert!(result.starts_with("The class Foo"));
     }
 
@@ -2752,9 +2778,10 @@ mod tests {
         engine.register_template("t", "beta different tokens").unwrap();
         engine.register_template("t", "gamma unique tokens").unwrap();
 
+        let mut session = test_session();
         let ctx = Context::new();
-        let r1 = engine.render("t", &ctx).unwrap();
-        let r2 = engine.render("t", &ctx).unwrap();
+        let r1 = engine.render(&mut session, "t", &ctx).unwrap();
+        let r2 = engine.render(&mut session, "t", &ctx).unwrap();
 
         // Second render must pick a different variant than the first —
         // choose-best plus explicit last-variant exclusion guarantees it.
@@ -2768,16 +2795,17 @@ mod tests {
             .register_template("t", "{items|truncate:1|join}")
             .unwrap();
 
+        let mut session = test_session();
         let mut ctx = Context::new();
         ctx.insert(
             "items",
             Value::List(vec!["alpha".into(), "beta".into(), "gamma".into()]),
         );
 
-        let r1 = engine.render("t", &ctx).unwrap();
-        let r2 = engine.render("t", &ctx).unwrap();
-        let r3 = engine.render("t", &ctx).unwrap();
-        let r4 = engine.render("t", &ctx).unwrap();
+        let r1 = engine.render(&mut session, "t", &ctx).unwrap();
+        let r2 = engine.render(&mut session, "t", &ctx).unwrap();
+        let r3 = engine.render(&mut session, "t", &ctx).unwrap();
+        let r4 = engine.render(&mut session, "t", &ctx).unwrap();
 
         // Each should use a different list style
         let results = vec![r1, r2, r3, r4];
@@ -2792,13 +2820,14 @@ mod tests {
             .register_template("t", "{items|truncate:1|join:bracketed}")
             .unwrap();
 
+        let mut session = test_session();
         let mut ctx = Context::new();
         ctx.insert(
             "items",
             Value::List(vec!["alpha".into(), "beta".into(), "gamma".into()]),
         );
 
-        let result = engine.render("t", &ctx).unwrap();
+        let result = engine.render(&mut session, "t", &ctx).unwrap();
         assert!(result.starts_with('[') && result.ends_with(']'),
             "Expected bracketed format, got: {result}");
     }
@@ -2812,11 +2841,12 @@ mod tests {
             .register_template("t", "{name|refer} was updated")
             .unwrap();
 
+        let mut session = test_session();
         let mut ctx = Context::new();
         ctx.insert("entity_type", Value::String("class".into()));
         ctx.insert("name", Value::String("UserService".into()));
 
-        let result = engine.render("t", &ctx).unwrap();
+        let result = engine.render(&mut session, "t", &ctx).unwrap();
         assert_eq!(result, "The class UserService was updated.");
     }
 
@@ -2830,12 +2860,13 @@ mod tests {
             .register_template("second", "{name|refer} now has new behavior")
             .unwrap();
 
+        let mut session = test_session();
         let mut ctx = Context::new();
         ctx.insert("entity_type", Value::String("class".into()));
         ctx.insert("name", Value::String("Foo".into()));
 
-        let r1 = engine.render("first", &ctx).unwrap();
-        let r2 = engine.render("second", &ctx).unwrap();
+        let r1 = engine.render(&mut session, "first", &ctx).unwrap();
+        let r2 = engine.render(&mut session, "second", &ctx).unwrap();
 
         assert_eq!(r1, "The class Foo was modified.");
         // Second render: pronoun + possibly a discourse connective prepended
@@ -2852,20 +2883,22 @@ mod tests {
             .register_template("t", "{name|refer} changed")
             .unwrap();
 
+        let mut session = test_session();
+
         // Render with entity A
         let mut ctx_a = Context::new();
         ctx_a.insert("entity_type", Value::String("class".into()));
         ctx_a.insert("name", Value::String("ServiceA".into()));
-        engine.render("t", &ctx_a).unwrap();
+        engine.render(&mut session, "t", &ctx_a).unwrap();
 
         // Render with entity B (ambiguity introduced)
         let mut ctx_b = Context::new();
         ctx_b.insert("entity_type", Value::String("class".into()));
         ctx_b.insert("name", Value::String("ServiceB".into()));
-        engine.render("t", &ctx_b).unwrap();
+        engine.render(&mut session, "t", &ctx_b).unwrap();
 
         // Back to entity A — ambiguous context, should not use "It"
-        let result = engine.render("t", &ctx_a).unwrap();
+        let result = engine.render(&mut session, "t", &ctx_a).unwrap();
         // May have a discourse connective prepended, but the key is NO pronoun
         assert!(
             result.contains("ServiceA changed") || result.contains("serviceA changed"),
@@ -2884,10 +2917,11 @@ mod tests {
             .register_template("t", "{name|refer:method} was called")
             .unwrap();
 
+        let mut session = test_session();
         let mut ctx = Context::new();
         ctx.insert("name", Value::String("processOrder".into()));
 
-        let result = engine.render("t", &ctx).unwrap();
+        let result = engine.render(&mut session, "t", &ctx).unwrap();
         assert_eq!(result, "The method processOrder was called.");
     }
 
@@ -2898,15 +2932,16 @@ mod tests {
             .register_template("t", "{name|refer} updated")
             .unwrap();
 
+        let mut session = test_session();
         let mut ctx = Context::new();
         ctx.insert("entity_type", Value::String("class".into()));
         ctx.insert("name", Value::String("Foo".into()));
 
-        engine.render("t", &ctx).unwrap();
-        engine.reset();
+        engine.render(&mut session, "t", &ctx).unwrap();
+        session.reset();
 
         // After reset, should use full form again
-        let result = engine.render("t", &ctx).unwrap();
+        let result = engine.render(&mut session, "t", &ctx).unwrap();
         assert_eq!(result, "The class Foo updated.");
     }
 
@@ -2918,6 +2953,7 @@ mod tests {
             .unwrap();
         engine.register_template("other", "Something else happened").unwrap();
 
+        let mut session = test_session();
         let mut ctx = Context::new();
         ctx.insert("entity_type", Value::String("class".into()));
         ctx.insert("name", Value::String("Foo".into()));
@@ -2927,15 +2963,15 @@ mod tests {
         other_ctx.insert("name", Value::String("bar".into()));
 
         // Mention Foo
-        engine.render("track", &ctx).unwrap();
+        engine.render(&mut session, "track", &ctx).unwrap();
 
         // Three unrelated renders
-        engine.render("other", &other_ctx).unwrap();
-        engine.render("other", &other_ctx).unwrap();
-        engine.render("other", &other_ctx).unwrap();
+        engine.render(&mut session, "other", &other_ctx).unwrap();
+        engine.render(&mut session, "other", &other_ctx).unwrap();
+        engine.render(&mut session, "other", &other_ctx).unwrap();
 
         // Foo should be re-introduced with full form
-        let result = engine.render("track", &ctx).unwrap();
+        let result = engine.render(&mut session, "track", &ctx).unwrap();
         assert_eq!(result, "The class Foo was tracked.");
     }
 
@@ -2947,7 +2983,8 @@ mod tests {
         engine.register_template("t", "alpha").unwrap();
         engine.register_template("t", "beta").unwrap();
 
-        let exp = engine.render_explained("t", Context::new()).unwrap();
+        let mut session = test_session();
+        let exp = engine.render_explained(&mut session, "t", Context::new()).unwrap();
         assert_eq!(exp.template_key, "t");
         assert_eq!(exp.variant_index, 0);
         assert_eq!(exp.variant_source, "alpha");
@@ -2964,7 +3001,8 @@ mod tests {
         ctx.insert("entity_type", Value::String("class".into()));
         ctx.insert("name", Value::String("Foo".into()));
 
-        let exp = engine.render_explained("t", &ctx).unwrap();
+        let mut session = test_session();
+        let exp = engine.render_explained(&mut session, "t", &ctx).unwrap();
         // First mention → Full form.
         assert_eq!(exp.reference_form, Some(ReferenceForm::Full));
     }
@@ -2982,10 +3020,11 @@ mod tests {
         ctx.insert("entity_type", Value::String("class".into()));
         ctx.insert("name", Value::String("Foo".into()));
 
+        let mut session = test_session();
         // Prime.
-        engine.render("t", &ctx).unwrap();
+        engine.render(&mut session, "t", &ctx).unwrap();
         // Same entity, different action → "Additionally," prepended.
-        let exp = engine.render_explained("u", &ctx).unwrap();
+        let exp = engine.render_explained(&mut session, "u", &ctx).unwrap();
         assert_eq!(exp.connective, Some("Additionally,"));
     }
 
@@ -3001,9 +3040,10 @@ mod tests {
             .register_template("b", "Beta was found")
             .unwrap();
 
+        let mut session = test_session();
         let events: Vec<(&str, Context)> = vec![("a", Context::new()), ("b", Context::new())];
         let results: Vec<_> = engine
-            .render_iter(&events)
+            .render_iter(&mut session, &events)
             .collect::<Result<Vec<_>, _>>()
             .unwrap();
         // Two different templates without shared entities — each yields
@@ -3023,6 +3063,7 @@ mod tests {
             .register_template("modified", "{name|refer} was modified")
             .unwrap();
 
+        let mut session = test_session();
         let mut ctx = Context::new();
         ctx.insert("entity_type", Value::String("class".into()));
         ctx.insert("name", Value::String("Foo".into()));
@@ -3031,7 +3072,7 @@ mod tests {
             ("modified", ctx.clone()),
         ];
         let iter_results: Vec<_> = engine
-            .render_iter(&events)
+            .render_iter(&mut session, &events)
             .collect::<Result<Vec<_>, _>>()
             .unwrap();
         // Expected: exactly one reduced sentence for the same-entity run.
@@ -3052,7 +3093,8 @@ mod tests {
         engine.register_template("t", "beta").unwrap();
         engine.register_template("t", "gamma").unwrap();
 
-        let scores = engine.score_variants("t", Context::new()).unwrap();
+        let mut session = test_session();
+        let scores = engine.score_variants(&mut session, "t", Context::new()).unwrap();
         assert_eq!(scores.len(), 3);
         let sources: Vec<_> = scores.iter().map(|s| s.source.as_str()).collect();
         assert_eq!(sources, vec!["alpha", "beta", "gamma"]);
@@ -3064,7 +3106,8 @@ mod tests {
         engine.register_template("t", "alpha").unwrap();
         engine.register_template("t", "beta").unwrap();
 
-        let scores = engine.score_variants("t", Context::new()).unwrap();
+        let mut session = test_session();
+        let scores = engine.score_variants(&mut session, "t", Context::new()).unwrap();
         assert_eq!(scores.iter().filter(|s| s.selected).count(), 1);
     }
 
@@ -3077,8 +3120,9 @@ mod tests {
         // Confirm that scoring doesn't advance render_index or any other
         // discourse state — a follow-up render must behave as if the
         // score call never happened.
-        let _ = engine.score_variants("t", Context::new()).unwrap();
-        let r1 = engine.render("t", Context::new()).unwrap();
+        let mut session = test_session();
+        let _ = engine.score_variants(&mut session, "t", Context::new()).unwrap();
+        let r1 = engine.render(&mut session, "t", Context::new()).unwrap();
         // Fresh discourse: expected Fixed variation returns the first
         // variant (index 0). Single-word output, so no sentence-end period.
         assert_eq!(r1, "alpha");
@@ -3087,7 +3131,8 @@ mod tests {
     #[test]
     fn score_variants_unknown_key_errors() {
         let engine = test_engine();
-        let result = engine.score_variants("never_registered", Context::new());
+        let mut session = test_session();
+        let result = engine.score_variants(&mut session, "never_registered", Context::new());
         assert!(matches!(result, Err(NlgError::UnknownTemplate(_))));
     }
 
@@ -3106,10 +3151,11 @@ mod tests {
             .register_template("t", "The class Foo was modified{>tail}")
             .unwrap();
 
+        let mut session = test_session();
         let mut ctx = Context::new();
         ctx.insert("count", Value::Number(3));
         assert_eq!(
-            engine.render("t", &ctx).unwrap(),
+            engine.render(&mut session, "t", &ctx).unwrap(),
             "The class Foo was modified, affecting 3 consumers."
         );
     }
@@ -3130,16 +3176,17 @@ mod tests {
             .register_template("renamed", "The class {name} was renamed{>tail}")
             .unwrap();
 
+        let mut session = test_session();
         let mut ctx = Context::new();
         ctx.insert("name", Value::String("Foo".into()));
         ctx.insert("count", Value::Number(2));
 
         assert_eq!(
-            engine.render("modified", &ctx).unwrap(),
+            engine.render(&mut session, "modified", &ctx).unwrap(),
             "The class Foo was modified, affecting 2 consumers."
         );
         assert_eq!(
-            engine.render("renamed", &ctx).unwrap(),
+            engine.render(&mut session, "renamed", &ctx).unwrap(),
             "The class Foo was renamed, affecting 2 consumers."
         );
     }
@@ -3150,7 +3197,8 @@ mod tests {
         engine
             .register_template("t", "Hello{>missing_partial}")
             .unwrap();
-        let result = engine.render("t", Context::new());
+        let mut session = test_session();
+        let result = engine.render(&mut session, "t", Context::new());
         assert!(matches!(
             result,
             Err(NlgError::TemplateParseError { .. })
@@ -3170,7 +3218,8 @@ mod tests {
             )
             .unwrap();
 
-        let out = engine.render("t", Context::new()).unwrap();
+        let mut session = test_session();
+        let out = engine.render(&mut session, "t", Context::new()).unwrap();
         assert!(
             out.contains("This impacts 6 consumers"),
             "got: {out}"
@@ -3185,7 +3234,8 @@ mod tests {
             .register_template("t", "The class Foo was modified")
             .unwrap();
 
-        let out = engine.render("t", Context::new()).unwrap();
+        let mut session = test_session();
+        let out = engine.render(&mut session, "t", Context::new()).unwrap();
         assert_eq!(out, "The class Foo was modified.");
     }
 
@@ -3197,10 +3247,11 @@ mod tests {
         engine.register_antonym("was modified", "remained unchanged");
         engine.register_template("t", "The class Foo {p|negated}").unwrap();
 
+        let mut session = test_session();
         let mut ctx = Context::new();
         ctx.insert("p", Value::String("was modified".into()));
         assert_eq!(
-            engine.render("t", &ctx).unwrap(),
+            engine.render(&mut session, "t", &ctx).unwrap(),
             "The class Foo remained unchanged."
         );
     }
@@ -3210,10 +3261,11 @@ mod tests {
         let mut engine = test_engine();
         engine.register_template("t", "The class Foo {p|negated}").unwrap();
 
+        let mut session = test_session();
         let mut ctx = Context::new();
         ctx.insert("p", Value::String("was modified".into()));
         assert_eq!(
-            engine.render("t", &ctx).unwrap(),
+            engine.render(&mut session, "t", &ctx).unwrap(),
             "The class Foo was not modified."
         );
     }
@@ -3223,10 +3275,11 @@ mod tests {
         let mut engine = test_engine();
         engine.register_template("t", "The class Foo {p|negated}").unwrap();
 
+        let mut session = test_session();
         let mut ctx = Context::new();
         ctx.insert("p", Value::String("has been renamed".into()));
         assert_eq!(
-            engine.render("t", &ctx).unwrap(),
+            engine.render(&mut session, "t", &ctx).unwrap(),
             "The class Foo has not been renamed."
         );
     }
@@ -3240,10 +3293,11 @@ mod tests {
             .register_template("t", "The change {conf|hedge} broke the build")
             .unwrap();
 
+        let mut session = test_session();
         let mut ctx = Context::new();
         ctx.insert("conf", Value::Number(60));
         assert_eq!(
-            engine.render("t", &ctx).unwrap(),
+            engine.render(&mut session, "t", &ctx).unwrap(),
             "The change probably broke the build."
         );
     }
@@ -3255,10 +3309,11 @@ mod tests {
             .register_template("t", "The change {conf|hedge:modal} break things")
             .unwrap();
 
+        let mut session = test_session();
         let mut ctx = Context::new();
         ctx.insert("conf", Value::Number(40));
         assert_eq!(
-            engine.render("t", &ctx).unwrap(),
+            engine.render(&mut session, "t", &ctx).unwrap(),
             "The change might break things."
         );
     }
@@ -3267,10 +3322,11 @@ mod tests {
     fn hedge_pipe_rejects_unknown_mode() {
         let mut engine = test_engine();
         engine.register_template("t", "{c|hedge:bogus}").unwrap();
+        let mut session = test_session();
         let mut ctx = Context::new();
         ctx.insert("c", Value::Number(60));
         assert!(matches!(
-            engine.render("t", &ctx),
+            engine.render(&mut session, "t", &ctx),
             Err(NlgError::InvalidPipe { .. })
         ));
     }
@@ -3283,13 +3339,14 @@ mod tests {
         engine
             .register_template("t", "{noun|demonstrative}")
             .unwrap();
+        let mut session = test_session();
         let mut ctx = Context::new();
         ctx.insert("noun", Value::String("change".into()));
         // Lowercase — demonstrative never capitalizes; callers that want
         // the demonstrative at a sentence start combine it with a
         // leading template word that already capitalizes, or with the
         // engine's refer-pipe capitalization path.
-        assert_eq!(engine.render("t", &ctx).unwrap(), "the change");
+        assert_eq!(engine.render(&mut session, "t", &ctx).unwrap(), "the change");
     }
 
     #[test]
@@ -3300,12 +3357,13 @@ mod tests {
             .register_template("t", "{noun|demonstrative}")
             .unwrap();
 
+        let mut session = test_session();
         // Prior render establishes discourse.
-        engine.render("prime", Context::new()).unwrap();
+        engine.render(&mut session, "prime", Context::new()).unwrap();
 
         let mut ctx = Context::new();
         ctx.insert("noun", Value::String("change".into()));
-        let result = engine.render("t", &ctx).unwrap();
+        let result = engine.render(&mut session, "t", &ctx).unwrap();
         // Mid-sentence capitalization isn't applied (template doesn't
         // start with refer), so the value comes out lowercase.
         assert_eq!(result, "this change");
@@ -3319,12 +3377,13 @@ mod tests {
             .register_template("t", "{noun|demonstrative}")
             .unwrap();
 
-        engine.render("prime", Context::new()).unwrap();
-        engine.reset();
+        let mut session = test_session();
+        engine.render(&mut session, "prime", Context::new()).unwrap();
+        session.reset();
 
         let mut ctx = Context::new();
         ctx.insert("noun", Value::String("change".into()));
-        assert_eq!(engine.render("t", &ctx).unwrap(), "the change");
+        assert_eq!(engine.render(&mut session, "t", &ctx).unwrap(), "the change");
     }
 
     // ── Quantify pipe ────────────────────────────────────────────────────
@@ -3337,17 +3396,18 @@ mod tests {
         let mut engine = test_engine();
         engine.register_template("t", "{n|quantify} consumer").unwrap();
 
+        let mut session = test_session();
         let mut ctx = Context::new();
         ctx.insert("n", Value::Number(0));
-        assert_eq!(engine.render("t", &ctx).unwrap(), "no consumer");
-        engine.reset();
+        assert_eq!(engine.render(&mut session, "t", &ctx).unwrap(), "no consumer");
+        session.reset();
 
         ctx.insert("n", Value::Number(1));
-        assert_eq!(engine.render("t", &ctx).unwrap(), "a single consumer");
-        engine.reset();
+        assert_eq!(engine.render(&mut session, "t", &ctx).unwrap(), "a single consumer");
+        session.reset();
 
         ctx.insert("n", Value::Number(300));
-        assert_eq!(engine.render("t", &ctx).unwrap(), "hundreds of consumer");
+        assert_eq!(engine.render(&mut session, "t", &ctx).unwrap(), "hundreds of consumer");
     }
 
     #[test]
@@ -3357,9 +3417,10 @@ mod tests {
             .register_template("t", "{n|quantify:exact} callers")
             .unwrap();
 
+        let mut session = test_session();
         let mut ctx = Context::new();
         ctx.insert("n", Value::Number(47));
-        assert_eq!(engine.render("t", &ctx).unwrap(), "47 callers");
+        assert_eq!(engine.render(&mut session, "t", &ctx).unwrap(), "47 callers");
     }
 
     #[test]
@@ -3369,19 +3430,21 @@ mod tests {
             .register_template("t", "{n|quantify:hedged} dependents")
             .unwrap();
 
+        let mut session = test_session();
         let mut ctx = Context::new();
         ctx.insert("n", Value::Number(4));
-        assert_eq!(engine.render("t", &ctx).unwrap(), "a few dependents");
+        assert_eq!(engine.render(&mut session, "t", &ctx).unwrap(), "a few dependents");
     }
 
     #[test]
     fn quantify_pipe_rejects_unknown_mode() {
         let mut engine = test_engine();
         engine.register_template("t", "{n|quantify:bogus}").unwrap();
+        let mut session = test_session();
         let mut ctx = Context::new();
         ctx.insert("n", Value::Number(5));
         assert!(matches!(
-            engine.render("t", &ctx),
+            engine.render(&mut session, "t", &ctx),
             Err(NlgError::InvalidPipe { .. })
         ));
     }
@@ -3407,11 +3470,11 @@ mod tests {
         ];
 
         for (ts, expected) in cases {
+            let mut session = test_session();
             let mut ctx = Context::new();
             ctx.insert("ts", Value::Number(ts));
-            let rendered = engine.render("t", &ctx).unwrap();
+            let rendered = engine.render(&mut session, "t", &ctx).unwrap();
             assert_eq!(rendered, expected, "for ts={ts}");
-            engine.reset();
         }
     }
 
@@ -3429,11 +3492,11 @@ mod tests {
         ];
 
         for (ts, expected) in cases {
+            let mut session = test_session();
             let mut ctx = Context::new();
             ctx.insert("ts", Value::Number(ts));
-            let rendered = engine.render("t", &ctx).unwrap();
+            let rendered = engine.render(&mut session, "t", &ctx).unwrap();
             assert_eq!(rendered, expected, "for ts={ts}");
-            engine.reset();
         }
     }
 
@@ -3441,9 +3504,10 @@ mod tests {
     fn relative_pipe_rejects_non_numeric() {
         let mut engine = test_engine().reference_time(1_700_000_000);
         engine.register_template("t", "{x|relative}").unwrap();
+        let mut session = test_session();
         let mut ctx = Context::new();
         ctx.insert("x", Value::String("not a number".into()));
-        let result = engine.render("t", &ctx);
+        let result = engine.render(&mut session, "t", &ctx);
         assert!(matches!(result, Err(NlgError::InvalidPipe { .. })));
     }
 
@@ -3454,9 +3518,10 @@ mod tests {
         let mut engine = test_engine();
         engine.register_template("t", "{word|syn}").unwrap();
 
+        let mut session = test_session();
         let mut ctx = Context::new();
         ctx.insert("word", Value::String("unregistered".into()));
-        assert_eq!(engine.render("t", &ctx).unwrap(), "unregistered");
+        assert_eq!(engine.render(&mut session, "t", &ctx).unwrap(), "unregistered");
     }
 
     #[test]
@@ -3467,12 +3532,13 @@ mod tests {
             .register_template("t", "the {word|syn} was seen")
             .unwrap();
 
+        let mut session = test_session();
         let mut ctx = Context::new();
         ctx.insert("word", Value::String("class".into()));
 
-        let r1 = engine.render("t", &ctx).unwrap();
-        let r2 = engine.render("t", &ctx).unwrap();
-        let r3 = engine.render("t", &ctx).unwrap();
+        let r1 = engine.render(&mut session, "t", &ctx).unwrap();
+        let r2 = engine.render(&mut session, "t", &ctx).unwrap();
+        let r3 = engine.render(&mut session, "t", &ctx).unwrap();
 
         // All three synonyms should appear across three renders —
         // least-recently-used scoring rotates them.
@@ -3488,10 +3554,11 @@ mod tests {
         engine.register_synonyms(&["class", "type"]);
         engine.register_template("t", "{word|syn}").unwrap();
 
+        let mut session = test_session();
         // Uppercase input → uppercase output synonym.
         let mut ctx = Context::new();
         ctx.insert("word", Value::String("Class".into()));
-        let first = engine.render("t", &ctx).unwrap();
+        let first = engine.render(&mut session, "t", &ctx).unwrap();
         assert!(
             first.chars().next().unwrap().is_uppercase(),
             "expected capitalized output, got: {first}"
@@ -3504,11 +3571,12 @@ mod tests {
         engine.register_synonyms(&["alpha", "beta", "gamma"]);
         engine.register_template("t", "{word|syn}").unwrap();
 
+        let mut session = test_session();
         // First render, no history → all tied at frequency 0. The
         // first-registered entry wins.
         let mut ctx = Context::new();
         ctx.insert("word", Value::String("alpha".into()));
-        assert_eq!(engine.render("t", &ctx).unwrap(), "alpha");
+        assert_eq!(engine.render(&mut session, "t", &ctx).unwrap(), "alpha");
     }
 
     // ── Clause aggregation / conjunction reduction ───────────────────────
@@ -3621,9 +3689,10 @@ mod tests {
         engine
             .register_template("t", "The file was modified by {author}")
             .unwrap();
+        let mut session = test_session();
         let ctx = Context::new();
         assert_eq!(
-            engine.render("t", &ctx).unwrap(),
+            engine.render(&mut session, "t", &ctx).unwrap(),
             "The file was modified."
         );
     }
@@ -3634,9 +3703,10 @@ mod tests {
         engine
             .register_template("t", "The class was renamed to {new_name}.")
             .unwrap();
+        let mut session = test_session();
         let ctx = Context::new();
         assert_eq!(
-            engine.render("t", &ctx).unwrap(),
+            engine.render(&mut session, "t", &ctx).unwrap(),
             "The class was renamed."
         );
     }
@@ -3647,9 +3717,10 @@ mod tests {
         engine
             .register_template("t", "The module exports {a} and {b}")
             .unwrap();
+        let mut session = test_session();
         let ctx = Context::new();
         assert_eq!(
-            engine.render("t", &ctx).unwrap(),
+            engine.render(&mut session, "t", &ctx).unwrap(),
             "The module exports."
         );
     }
@@ -3660,10 +3731,11 @@ mod tests {
         engine
             .register_template("t", "The job was scheduled by {a} at {b}")
             .unwrap();
+        let mut session = test_session();
         let ctx = Context::new();
         // Strips "at" then "by" in sequence.
         assert_eq!(
-            engine.render("t", &ctx).unwrap(),
+            engine.render(&mut session, "t", &ctx).unwrap(),
             "The job was scheduled."
         );
     }
@@ -3673,9 +3745,10 @@ mod tests {
         let mut engine = test_engine().strictness(Strictness::Silent);
         // A template that's only a preposition + slot — nothing to keep.
         engine.register_template("t", "by {author}").unwrap();
+        let mut session = test_session();
         let ctx = Context::new();
         // We refuse to empty the output; the orphan stays.
-        assert_eq!(engine.render("t", &ctx).unwrap(), "by");
+        assert_eq!(engine.render(&mut session, "t", &ctx).unwrap(), "by");
     }
 
     #[test]
@@ -3686,9 +3759,10 @@ mod tests {
         engine
             .register_template("t", "The  quick   brown fox")
             .unwrap();
+        let mut session = test_session();
         let ctx = Context::new();
         assert_eq!(
-            engine.render("t", &ctx).unwrap(),
+            engine.render(&mut session, "t", &ctx).unwrap(),
             "The quick brown fox."
         );
     }
@@ -3701,8 +3775,9 @@ mod tests {
         engine
             .register_template("t", "modified by {author}")
             .unwrap();
+        let mut session = test_session();
         let ctx = Context::new();
-        assert!(engine.render("t", &ctx).is_err());
+        assert!(engine.render(&mut session, "t", &ctx).is_err());
     }
 
     // ── Referring Expression Generation (Dale & Reiter) ─────────────────
@@ -3714,11 +3789,12 @@ mod tests {
             .register_template("t", "{name|refer} was modified")
             .unwrap();
 
+        let mut session = test_session();
         let mut ctx = Context::new();
         ctx.insert("entity_type", Value::String("class".into()));
         ctx.insert("name", Value::String("UserService".into()));
 
-        let result = engine.render("t", &ctx).unwrap();
+        let result = engine.render(&mut session, "t", &ctx).unwrap();
         assert_eq!(result, "The class UserService was modified.");
     }
 
@@ -3737,11 +3813,12 @@ mod tests {
             .register_template("t", "{name|refer} was modified")
             .unwrap();
 
+        let mut session = test_session();
         let mut ctx = Context::new();
         ctx.insert("entity_type", Value::String("class".into()));
         ctx.insert("name", Value::String("UserService".into()));
 
-        let result = engine.render("t", &ctx).unwrap();
+        let result = engine.render(&mut session, "t", &ctx).unwrap();
         assert_eq!(result, "The domain class UserService was modified.");
     }
 
@@ -3760,11 +3837,12 @@ mod tests {
             .register_template("t", "{name|refer} was modified")
             .unwrap();
 
+        let mut session = test_session();
         let mut ctx = Context::new();
         ctx.insert("entity_type", Value::String("class".into()));
         ctx.insert("name", Value::String("UserService".into()));
 
-        let result = engine.render("t", &ctx).unwrap();
+        let result = engine.render(&mut session, "t", &ctx).unwrap();
         // Different types → head noun alone disambiguates, no attribute added.
         assert_eq!(result, "The class UserService was modified.");
     }
@@ -3786,12 +3864,13 @@ mod tests {
             .register_template("t", "{name|refer} appeared")
             .unwrap();
 
+        let mut session = test_session();
         let mut ctx = Context::new();
         ctx.insert("entity_type", Value::String("widget".into()));
         ctx.insert("name", Value::String("Foo".into()));
 
         // Preference says size first; size alone disambiguates.
-        let result = engine.render("t", &ctx).unwrap();
+        let result = engine.render(&mut session, "t", &ctx).unwrap();
         assert_eq!(result, "The small widget Foo appeared.");
     }
 
@@ -3814,23 +3893,24 @@ mod tests {
             .register_template("t", "{name|refer} was modified")
             .unwrap();
 
+        let mut session = test_session();
         let mut ctx_class = Context::new();
         ctx_class.insert("entity_type", Value::String("class".into()));
         ctx_class.insert("name", Value::String("UserService".into()));
 
         // Context says class → must render as class, never as trait.
-        let r = engine.render("t", &ctx_class).unwrap();
+        let r = engine.render(&mut session, "t", &ctx_class).unwrap();
         assert!(r.contains("class UserService"), "got: {r}");
         assert!(!r.contains("trait"), "got: {r}");
         // With only one class-typed UserService registered (the trait is
         // a different type), no distinguishing attribute is needed.
         assert_eq!(r, "The class UserService was modified.");
 
-        engine.reset();
+        let mut session2 = test_session();
         let mut ctx_trait = Context::new();
         ctx_trait.insert("entity_type", Value::String("trait".into()));
         ctx_trait.insert("name", Value::String("UserService".into()));
-        let r2 = engine.render("t", &ctx_trait).unwrap();
+        let r2 = engine.render(&mut session2, "t", &ctx_trait).unwrap();
         assert_eq!(r2, "The trait UserService was modified.");
     }
 
@@ -3857,12 +3937,13 @@ mod tests {
             .register_template("t", "{name|refer} appeared")
             .unwrap();
 
+        let mut session = test_session();
         let mut ctx = Context::new();
         ctx.insert("entity_type", Value::String("widget".into()));
         ctx.insert("name", Value::String("A".into()));
 
         // color rules out C; size then rules out B.
-        let result = engine.render("t", &ctx).unwrap();
+        let result = engine.render(&mut session, "t", &ctx).unwrap();
         assert_eq!(result, "The red small widget A appeared.");
     }
 
@@ -3873,11 +3954,12 @@ mod tests {
             .register_template("t", "{name|refer} appeared")
             .unwrap();
 
+        let mut session = test_session();
         let mut ctx = Context::new();
         // No entity_type provided
         ctx.insert("name", Value::String("something".into()));
 
-        let result = engine.render("t", &ctx).unwrap();
+        let result = engine.render(&mut session, "t", &ctx).unwrap();
         // Falls back to just the name, with sentence-start capitalization
         // Note: "Something appeared" is 2 words so no period is added
         assert_eq!(result, "Something appeared");
@@ -3896,22 +3978,23 @@ mod tests {
             .register_template("bad", "{missing_slot} fails here")
             .unwrap();
 
+        let mut session = test_session();
         let mut ctx = Context::new();
         ctx.insert("entity_type", Value::String("class".into()));
         ctx.insert("name", Value::String("Foo".into()));
 
         // Successful render — Foo is now known, render index is 1.
-        let r1 = engine.render("ok", &ctx).unwrap();
+        let r1 = engine.render(&mut session, "ok", &ctx).unwrap();
         assert!(r1.contains("class Foo"), "r1 = {r1}");
 
         // Attempt a failing render. The discourse state must NOT advance.
         let bad_ctx = Context::new();
-        assert!(engine.render("bad", &bad_ctx).is_err());
+        assert!(engine.render(&mut session, "bad", &bad_ctx).is_err());
 
         // Next successful render should behave as if the failure never
         // happened: Foo is still the focus entity at distance 1, so
         // the pronoun form fires.
-        let r2 = engine.render("ok", &ctx).unwrap();
+        let r2 = engine.render(&mut session, "ok", &ctx).unwrap();
         assert!(
             r2.contains("it") || r2.contains("It"),
             "Expected pronoun reference after failed render was rolled back, got: {r2}"
@@ -3928,19 +4011,20 @@ mod tests {
         engine.register_template("ok", "beta {name}").unwrap();
         engine.register_template("ok", "gamma {name}").unwrap();
 
+        let mut session = test_session();
         let mut ctx = Context::new();
         ctx.insert("name", Value::String("x".into()));
         let empty = Context::new();
 
         // First successful render: alpha
-        assert!(engine.render("ok", &ctx).unwrap().contains("alpha"));
+        assert!(engine.render(&mut session, "ok", &ctx).unwrap().contains("alpha"));
 
         // A failed render between the two should NOT advance the counter
         // for "ok" — the missing slot aborts before commit.
-        assert!(engine.render("ok", &empty).is_err());
+        assert!(engine.render(&mut session, "ok", &empty).is_err());
 
         // Next successful render must be beta, not gamma.
-        assert!(engine.render("ok", &ctx).unwrap().contains("beta"));
+        assert!(engine.render(&mut session, "ok", &ctx).unwrap().contains("beta"));
     }
 
     /// RoundRobin must rotate through every alternative in order.
@@ -3951,11 +4035,12 @@ mod tests {
         engine.register_template("t", "beta").unwrap();
         engine.register_template("t", "gamma").unwrap();
 
+        let mut session = test_session();
         let ctx = Context::new();
-        let r1 = engine.render("t", &ctx).unwrap();
-        let r2 = engine.render("t", &ctx).unwrap();
-        let r3 = engine.render("t", &ctx).unwrap();
-        let r4 = engine.render("t", &ctx).unwrap();
+        let r1 = engine.render(&mut session, "t", &ctx).unwrap();
+        let r2 = engine.render(&mut session, "t", &ctx).unwrap();
+        let r3 = engine.render(&mut session, "t", &ctx).unwrap();
+        let r4 = engine.render(&mut session, "t", &ctx).unwrap();
 
         // First three should be the three alternatives, in order.
         assert!(r1.starts_with("alpha"), "r1 = {r1}");
@@ -3974,9 +4059,10 @@ mod tests {
         engine.register_template("t", "alpha body here").unwrap();
         engine.register_template("t", "beta body here").unwrap();
 
+        let mut session = test_session();
         let ctx = Context::new();
         for _ in 0..5 {
-            let rendered = engine.render("t", &ctx).unwrap();
+            let rendered = engine.render(&mut session, "t", &ctx).unwrap();
             assert!(
                 rendered.contains("alpha body here"),
                 "Fixed should always pick the first-registered template, got: {rendered}"
@@ -3997,9 +4083,10 @@ mod tests {
             .register_template("t", "{action|verb:past}")
             .unwrap();
 
+        let mut session = test_session();
         let mut ctx = Context::new();
         ctx.insert("action", Value::String("rename".into()));
-        assert_eq!(engine.render("t", &ctx).unwrap(), "was renameed");
+        assert_eq!(engine.render(&mut session, "t", &ctx).unwrap(), "was renameed");
     }
 
     #[test]
@@ -4009,9 +4096,10 @@ mod tests {
             .register_template("t", "{action|verb:present_perfect}")
             .unwrap();
 
+        let mut session = test_session();
         let mut ctx = Context::new();
         ctx.insert("action", Value::String("rename".into()));
-        assert_eq!(engine.render("t", &ctx).unwrap(), "has been renameed");
+        assert_eq!(engine.render(&mut session, "t", &ctx).unwrap(), "has been renameed");
     }
 
     #[test]
@@ -4021,9 +4109,10 @@ mod tests {
             .register_template("t", "{action|verb:present_progressive}")
             .unwrap();
 
+        let mut session = test_session();
         let mut ctx = Context::new();
         ctx.insert("action", Value::String("rename".into()));
-        assert_eq!(engine.render("t", &ctx).unwrap(), "is being renameed");
+        assert_eq!(engine.render(&mut session, "t", &ctx).unwrap(), "is being renameed");
     }
 
     #[test]
@@ -4033,9 +4122,10 @@ mod tests {
             .register_template("t", "{action|verb:active_present_perfect}")
             .unwrap();
 
+        let mut session = test_session();
         let mut ctx = Context::new();
         ctx.insert("action", Value::String("rename".into()));
-        assert_eq!(engine.render("t", &ctx).unwrap(), "has renameed");
+        assert_eq!(engine.render(&mut session, "t", &ctx).unwrap(), "has renameed");
     }
 
     #[test]
@@ -4045,9 +4135,10 @@ mod tests {
             .register_template("t", "{action|verb:conditional}")
             .unwrap();
 
+        let mut session = test_session();
         let mut ctx = Context::new();
         ctx.insert("action", Value::String("rename".into()));
-        assert_eq!(engine.render("t", &ctx).unwrap(), "would be renameed");
+        assert_eq!(engine.render(&mut session, "t", &ctx).unwrap(), "would be renameed");
     }
 
     #[test]
@@ -4057,9 +4148,10 @@ mod tests {
             .register_template("t", "{action|verb:bogus_form}")
             .unwrap();
 
+        let mut session = test_session();
         let mut ctx = Context::new();
         ctx.insert("action", Value::String("rename".into()));
-        let result = engine.render("t", &ctx);
+        let result = engine.render(&mut session, "t", &ctx);
         assert!(matches!(result, Err(NlgError::InvalidPipe { .. })));
     }
 
@@ -4070,9 +4162,10 @@ mod tests {
             .register_template("t", "{action|verb}")
             .unwrap();
 
+        let mut session = test_session();
         let mut ctx = Context::new();
         ctx.insert("action", Value::String("rename".into()));
-        let result = engine.render("t", &ctx);
+        let result = engine.render(&mut session, "t", &ctx);
         assert!(matches!(result, Err(NlgError::InvalidPipe { .. })));
     }
 
@@ -4091,15 +4184,16 @@ mod tests {
             .register_template("t", "beta uses {items|truncate:1|join}")
             .unwrap();
 
+        let mut session = test_session();
         let mut ctx = Context::new();
         ctx.insert(
             "items",
             Value::List(vec!["a".into(), "b".into(), "c".into()]),
         );
 
-        let r1 = engine.render("t", &ctx).unwrap();
-        let r2 = engine.render("t", &ctx).unwrap();
-        let r3 = engine.render("t", &ctx).unwrap();
+        let r1 = engine.render(&mut session, "t", &ctx).unwrap();
+        let r2 = engine.render(&mut session, "t", &ctx).unwrap();
+        let r3 = engine.render(&mut session, "t", &ctx).unwrap();
 
         // Three renders should show three consecutive list styles.
         // If candidate scoring leaked state, we'd see the cycle skip ahead
@@ -4118,4 +4212,16 @@ mod tests {
             "Expected three distinct list styles across three renders, got: {r1} / {r2} / {r3}"
         );
     }
+}
+
+#[cfg(test)]
+mod engine_thread_safety {
+    use super::Engine;
+
+    // Compile-time assert: Engine is Send + Sync post-refactor.
+    // If this ever breaks (e.g. RefCell re-introduced), compilation fails here.
+    const _: fn() = || {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<Engine>();
+    };
 }

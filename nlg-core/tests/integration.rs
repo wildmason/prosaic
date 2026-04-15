@@ -1,6 +1,6 @@
 use nlg_core::{
     entity, named, Clause, Context, DocumentPlan, Engine, EntityDescriptor, GroupingStrategy,
-    RhetoricalCategory, Salience, Sentence, Strictness, Tense, Value, Variation, VerbForm, Voice,
+    RhetoricalCategory, Salience, Sentence, Session, Strictness, Tense, Value, Variation, VerbForm, Voice,
 };
 use nlg_derive::IntoContext;
 use nlg_grammar_en::English;
@@ -41,8 +41,9 @@ fn full_rename_scenario() {
             "Garply".into(),
         ]),
     );
+    let mut session = Session::new();
 
-    let result = engine.render("renamed", &ctx).unwrap();
+    let result = engine.render(&mut session, "renamed", &ctx).unwrap();
     assert_eq!(
         result,
         "The class Foo was renamed to Foobar which impacts 6 direct consumers \
@@ -71,8 +72,9 @@ fn full_rename_scenario_single_consumer() {
         "consumers",
         Value::List(vec!["UserService".into()]),
     );
+    let mut session = Session::new();
 
-    let result = engine.render("renamed", &ctx).unwrap();
+    let result = engine.render(&mut session, "renamed", &ctx).unwrap();
     assert_eq!(
         result,
         "The interface IUser was renamed to User which impacts 1 direct consumer [UserService]."
@@ -276,9 +278,10 @@ fn verb_pipe_with_english_grammar() {
     ctx.insert("entity_type", Value::String("class".into()));
     ctx.insert("name", Value::String("OrderProcessor".into()));
     ctx.insert("action", Value::String("break".into()));
+    let mut session = Session::new();
 
     // Irregular: break → broken (past participle)
-    let result = engine.render("t", &ctx).unwrap();
+    let result = engine.render(&mut session, "t", &ctx).unwrap();
     assert_eq!(result, "The class OrderProcessor has been broken.");
 }
 
@@ -296,10 +299,11 @@ fn verb_pipe_progressive_irregular() {
     ctx.insert("entity_type", Value::String("module".into()));
     ctx.insert("name", Value::String("Core".into()));
     ctx.insert("action", Value::String("write".into()));
+    let mut session = Session::new();
 
     // Irregular write: past participle "written", present participle "writing"
     // "is being written"
-    let result = engine.render("t", &ctx).unwrap();
+    let result = engine.render(&mut session, "t", &ctx).unwrap();
     assert_eq!(result, "The module Core is being written.");
 }
 
@@ -318,9 +322,10 @@ fn verb_pipe_active_simple_past_irregular() {
     ctx.insert("name", Value::String("Platform".into()));
     ctx.insert("action", Value::String("write".into()));
     ctx.insert("target", Value::String("the migration".into()));
+    let mut session = Session::new();
 
     // write → wrote (irregular simple past)
-    let result = engine.render("t", &ctx).unwrap();
+    let result = engine.render(&mut session, "t", &ctx).unwrap();
     assert_eq!(result, "The team Platform wrote the migration.");
 }
 
@@ -352,8 +357,9 @@ fn clause_reduction_fuses_simple_same_entity_sequence() {
         ("code.modified", c2),
         ("code.moved", c3),
     ];
+    let mut session = Session::new();
 
-    let out = engine.render_batch(&events).unwrap();
+    let out = engine.render_batch(&mut session, &events).unwrap();
     assert_eq!(
         out,
         "The class UserService was renamed, modified, and moved."
@@ -385,7 +391,8 @@ fn clause_reduction_declines_when_predicate_has_embedded_clause() {
     c2.remove_consumer_count_dummy(); // placeholder; see helper below
 
     let events: Vec<(&str, Context)> = vec![("code.renamed", c1), ("code.modified", c2)];
-    let out = engine.render_batch(&events).unwrap();
+    let mut session = Session::new();
+    let out = engine.render_batch(&mut session, &events).unwrap();
     // Expect the subordinate "which" clause to stay on its own sentence.
     assert!(out.contains(", which impacts 6 consumers"), "got: {out}");
     assert!(!out.contains("modified and"), "should not fuse, got: {out}");
@@ -456,8 +463,9 @@ fn by_action_produces_section_style_narrative() {
         plan.paragraphs[2].category,
         Some(RhetoricalCategory::Modification)
     );
+    let mut session = Session::new();
 
-    let rendered = plan.render(&engine).unwrap();
+    let rendered = plan.render(&engine, &mut session).unwrap();
     // Removal content leads.
     let remove_idx = rendered.find("legacyFoo").expect("legacyFoo should render");
     let add_idx = rendered.find("newFoo").expect("newFoo should render");
@@ -495,13 +503,14 @@ fn reg_disambiguates_two_same_type_entities_in_narrative() {
     let mut ctx_auth = Context::new();
     ctx_auth.insert("entity_type", Value::String("class".into()));
     ctx_auth.insert("name", Value::String("AuthService".into()));
+    let mut session = Session::new();
 
     // First render introduces UserService with distinguisher.
-    let r1 = engine.render("t", &ctx_user).unwrap();
+    let r1 = engine.render(&mut session, "t", &ctx_user).unwrap();
     assert_eq!(r1, "The domain class UserService was modified.");
 
     // Second render introduces AuthService with its own distinguisher.
-    let r2 = engine.render("t", &ctx_auth).unwrap();
+    let r2 = engine.render(&mut session, "t", &ctx_auth).unwrap();
     // A connective gets prepended ("Similarly," since same action, different entity).
     assert!(r2.contains("the infra class AuthService"), "got: {r2}");
 }
@@ -523,9 +532,10 @@ fn reg_unambiguous_single_entity_skips_attributes() {
     let mut ctx = Context::new();
     ctx.insert("entity_type", Value::String("class".into()));
     ctx.insert("name", Value::String("UserService".into()));
+    let mut session = Session::new();
 
     // No distractor registered → no attribute premodifier.
-    let r = engine.render("t", &ctx).unwrap();
+    let r = engine.render(&mut session, "t", &ctx).unwrap();
     assert_eq!(r, "The class UserService was modified.");
 }
 
@@ -549,10 +559,11 @@ fn reg_registered_entity_with_unregistered_distractor() {
     let mut ctx_user = Context::new();
     ctx_user.insert("entity_type", Value::String("class".into()));
     ctx_user.insert("name", Value::String("UserService".into()));
+    let mut session = Session::new();
 
     // Only registered entities count as distractors, so UserService still
     // renders without premodifying attributes (there's no registered rival).
-    let r = engine.render("t", &ctx_user).unwrap();
+    let r = engine.render(&mut session, "t", &ctx_user).unwrap();
     assert_eq!(r, "The class UserService was modified.");
 }
 
@@ -583,8 +594,9 @@ fn derive_with_template_rendering() {
         consumer_count: 3,
         consumers: vec!["LoginPage".into(), "SignupPage".into(), "AdminDashboard".into()],
     };
+    let mut session = Session::new();
 
-    let result = engine.render("changed", event).unwrap();
+    let result = engine.render(&mut session, "changed", event).unwrap();
     assert_eq!(
         result,
         "AuthService (service) was changed, affecting 3 consumers."
@@ -604,13 +616,14 @@ fn seeded_variation_is_deterministic_from_fresh_state() {
     engine.register_template("t", "third variant").unwrap();
 
     let ctx = Context::new();
+    let mut session = Session::new();
 
     // From fresh state, same seed produces same result
-    let result1 = engine.render("t", &ctx).unwrap();
-    engine.reset();
-    let result2 = engine.render("t", &ctx).unwrap();
-    engine.reset();
-    let result3 = engine.render("t", &ctx).unwrap();
+    let result1 = engine.render(&mut session, "t", &ctx).unwrap();
+    session.reset();
+    let result2 = engine.render(&mut session, "t", &ctx).unwrap();
+    session.reset();
+    let result3 = engine.render(&mut session, "t", &ctx).unwrap();
 
     assert_eq!(result1, result2);
     assert_eq!(result2, result3);
@@ -627,13 +640,14 @@ fn fixed_variation_picks_first_on_fresh_render() {
     engine.register_template("t", "gamma").unwrap();
 
     let ctx = Context::new();
+    let mut session = Session::new();
 
     // First render always picks first variant
-    assert_eq!(engine.render("t", &ctx).unwrap(), "alpha");
+    assert_eq!(engine.render(&mut session, "t", &ctx).unwrap(), "alpha");
 
     // After reset, picks first again
-    engine.reset();
-    assert_eq!(engine.render("t", &ctx).unwrap(), "alpha");
+    session.reset();
+    assert_eq!(engine.render(&mut session, "t", &ctx).unwrap(), "alpha");
 }
 
 #[test]
@@ -650,10 +664,11 @@ fn discourse_avoids_repeating_same_variant() {
     engine.register_template("t", "gamma unique tokens").unwrap();
 
     let ctx = Context::new();
+    let mut session = Session::new();
 
-    let r1 = engine.render("t", &ctx).unwrap();
-    let r2 = engine.render("t", &ctx).unwrap();
-    let r3 = engine.render("t", &ctx).unwrap();
+    let r1 = engine.render(&mut session, "t", &ctx).unwrap();
+    let r2 = engine.render(&mut session, "t", &ctx).unwrap();
+    let r3 = engine.render(&mut session, "t", &ctx).unwrap();
 
     // Discourse-aware engine avoids immediate repetition
     assert_ne!(r1, r2);
@@ -671,9 +686,10 @@ fn strict_mode_fails_on_missing_slot() {
 
     let mut ctx = Context::new();
     ctx.insert("name", Value::String("Alice".into()));
+    let mut session = Session::new();
     // "count" is missing
 
-    let result = engine.render("t", &ctx);
+    let result = engine.render(&mut session, "t", &ctx);
     assert!(result.is_err());
 }
 
@@ -686,8 +702,9 @@ fn lenient_mode_shows_placeholder() {
 
     let mut ctx = Context::new();
     ctx.insert("name", Value::String("Alice".into()));
+    let mut session = Session::new();
 
-    let result = engine.render("t", &ctx).unwrap();
+    let result = engine.render(&mut session, "t", &ctx).unwrap();
     assert_eq!(result, "Hello Alice, you have [missing: count] items.");
 }
 
@@ -700,8 +717,9 @@ fn silent_mode_omits_missing() {
 
     let mut ctx = Context::new();
     ctx.insert("name", Value::String("Alice".into()));
+    let mut session = Session::new();
 
-    let result = engine.render("t", &ctx).unwrap();
+    let result = engine.render(&mut session, "t", &ctx).unwrap();
     // Silent-mode cleanup collapses the double space left by the omitted slot.
     assert_eq!(result, "Hello Alice, you have items.");
 }
@@ -713,8 +731,9 @@ fn empty_list_join() {
     let engine = engine();
     let mut ctx = Context::new();
     ctx.insert("items", Value::List(vec![]));
+    let mut session = Session::new();
 
-    let result = engine.render_inline("{items|join}", &ctx).unwrap();
+    let result = engine.render_inline(&mut session, "{items|join}", &ctx).unwrap();
     assert_eq!(result, "");
 }
 
@@ -723,8 +742,9 @@ fn single_item_join() {
     let engine = engine();
     let mut ctx = Context::new();
     ctx.insert("items", Value::List(vec!["only".into()]));
+    let mut session = Session::new();
 
-    let result = engine.render_inline("{items|join}", &ctx).unwrap();
+    let result = engine.render_inline(&mut session, "{items|join}", &ctx).unwrap();
     assert_eq!(result, "only");
 }
 
@@ -733,8 +753,9 @@ fn two_item_join() {
     let engine = engine();
     let mut ctx = Context::new();
     ctx.insert("items", Value::List(vec!["alpha".into(), "beta".into()]));
+    let mut session = Session::new();
 
-    let result = engine.render_inline("{items|join}", &ctx).unwrap();
+    let result = engine.render_inline(&mut session, "{items|join}", &ctx).unwrap();
     assert_eq!(result, "alpha and beta");
 }
 
@@ -743,8 +764,9 @@ fn truncate_when_under_limit_is_noop() {
     let engine = engine();
     let mut ctx = Context::new();
     ctx.insert("items", Value::List(vec!["a".into(), "b".into()]));
+    let mut session = Session::new();
 
-    let result = engine.render_inline("{items|truncate:5|join}", &ctx).unwrap();
+    let result = engine.render_inline(&mut session, "{items|truncate:5|join}", &ctx).unwrap();
     assert_eq!(result, "a and b");
 }
 
@@ -753,8 +775,9 @@ fn number_as_words() {
     let engine = engine();
     let mut ctx = Context::new();
     ctx.insert("n", Value::Number(42));
+    let mut session = Session::new();
 
-    let result = engine.render_inline("{n|words}", &ctx).unwrap();
+    let result = engine.render_inline(&mut session, "{n|words}", &ctx).unwrap();
     assert_eq!(result, "forty-two");
 }
 
@@ -763,8 +786,9 @@ fn ordinal_rendering() {
     let engine = engine();
     let mut ctx = Context::new();
     ctx.insert("n", Value::Number(3));
+    let mut session = Session::new();
 
-    let result = engine.render_inline("{n|ordinal}", &ctx).unwrap();
+    let result = engine.render_inline(&mut session, "{n|ordinal}", &ctx).unwrap();
     assert_eq!(result, "3rd");
 }
 
@@ -773,8 +797,9 @@ fn capitalize_rendering() {
     let engine = engine();
     let mut ctx = Context::new();
     ctx.insert("word", Value::String("hello world".into()));
+    let mut session = Session::new();
 
-    let result = engine.render_inline("{word|capitalize}", &ctx).unwrap();
+    let result = engine.render_inline(&mut session, "{word|capitalize}", &ctx).unwrap();
     assert_eq!(result, "Hello world");
 }
 
@@ -784,16 +809,17 @@ fn article_rendering() {
 
     let mut ctx = Context::new();
     ctx.insert("thing", Value::String("apple".into()));
-    assert_eq!(engine.render_inline("{thing|article}", &ctx).unwrap(), "an apple");
+    let mut session = Session::new();
+    assert_eq!(engine.render_inline(&mut session, "{thing|article}", &ctx).unwrap(), "an apple");
 
     ctx.insert("thing", Value::String("banana".into()));
-    assert_eq!(engine.render_inline("{thing|article}", &ctx).unwrap(), "a banana");
+    assert_eq!(engine.render_inline(&mut session, "{thing|article}", &ctx).unwrap(), "a banana");
 
     ctx.insert("thing", Value::String("hour".into()));
-    assert_eq!(engine.render_inline("{thing|article}", &ctx).unwrap(), "an hour");
+    assert_eq!(engine.render_inline(&mut session, "{thing|article}", &ctx).unwrap(), "an hour");
 
     ctx.insert("thing", Value::String("university".into()));
-    assert_eq!(engine.render_inline("{thing|article}", &ctx).unwrap(), "a university");
+    assert_eq!(engine.render_inline(&mut session, "{thing|article}", &ctx).unwrap(), "a university");
 }
 
 // ── Snapshot-style tests: exact output for realistic scenarios ────────────
@@ -823,9 +849,10 @@ fn snapshot_angular_service_rename() {
             "AuthGuard".into(),
         ]),
     );
+    let mut session = Session::new();
 
     assert_eq!(
-        engine.render("change", &ctx).unwrap(),
+        engine.render(&mut session, "change", &ctx).unwrap(),
         "The class UserService was renamed to AccountService which impacts \
          4 direct consumers [ProfileComponent, SettingsComponent, AdminModule, and 1 more]."
     );
@@ -844,9 +871,10 @@ fn snapshot_interface_deleted_no_consumers() {
     let mut ctx = Context::new();
     ctx.insert("entity_type", Value::String("interface".into()));
     ctx.insert("name", Value::String("LegacyConfig".into()));
+    let mut session = Session::new();
 
     assert_eq!(
-        engine.render("deleted", &ctx).unwrap(),
+        engine.render(&mut session, "deleted", &ctx).unwrap(),
         "The interface LegacyConfig was removed with no remaining consumers."
     );
 }
@@ -869,9 +897,10 @@ fn snapshot_method_signature_change() {
         "callers",
         Value::List(vec!["ProfileController".into(), "AdminPanel".into()]),
     );
+    let mut session = Session::new();
 
     assert_eq!(
-        engine.render("sig", &ctx).unwrap(),
+        engine.render(&mut session, "sig", &ctx).unwrap(),
         "The signature of getUser was changed, requiring updates in \
          2 callers [ProfileController and AdminPanel]."
     );
@@ -896,8 +925,9 @@ fn batch_produces_periods_between_sentences() {
         ("simple", ctx1),
         ("simple", ctx2),
     ];
+    let mut session = Session::new();
 
-    let result = engine.render_batch(&events).unwrap();
+    let result = engine.render_batch(&mut session, &events).unwrap();
 
     // Two sentences, both terminated
     assert!(result.contains("."), "Expected periods in batch output, got: {result}");
@@ -923,8 +953,9 @@ fn batch_aggregates_same_action_different_subjects() {
         ("code.renamed", ctx1),
         ("code.renamed", ctx2),
     ];
+    let mut session = Session::new();
 
-    let result = engine.render_batch(&events).unwrap();
+    let result = engine.render_batch(&mut session, &events).unwrap();
 
     // Should aggregate into a single sentence with combined subjects
     assert!(
@@ -951,8 +982,9 @@ fn batch_sequential_when_entities_differ_across_actions() {
         ("code.renamed", ctx1),
         ("code.deleted", ctx2),
     ];
+    let mut session = Session::new();
 
-    let result = engine.render_batch(&events).unwrap();
+    let result = engine.render_batch(&mut session, &events).unwrap();
 
     // Different actions, different entities — sequential
     // Periods should separate the sentences
@@ -974,8 +1006,9 @@ fn conditional_section_skipped_when_zero() {
     ctx.insert("entity_type", Value::String("class".into()));
     ctx.insert("name", Value::String("Foo".into()));
     ctx.insert("count", Value::Number(0));
+    let mut session = Session::new();
 
-    let result = engine.render("t", &ctx).unwrap();
+    let result = engine.render(&mut session, "t", &ctx).unwrap();
     // 0 count — conditional should be skipped entirely
     assert_eq!(result, "The class Foo was removed.");
     assert!(!result.contains("0"), "Should not contain '0', got: {result}");
@@ -993,8 +1026,9 @@ fn conditional_section_rendered_when_nonzero() {
     ctx.insert("entity_type", Value::String("class".into()));
     ctx.insert("name", Value::String("Foo".into()));
     ctx.insert("count", Value::Number(3));
+    let mut session = Session::new();
 
-    let result = engine.render("t", &ctx).unwrap();
+    let result = engine.render(&mut session, "t", &ctx).unwrap();
     assert_eq!(result, "The class Foo was removed, impacting 3 consumers.");
 }
 
@@ -1008,8 +1042,9 @@ fn conditional_section_skipped_for_empty_list() {
 
     let mut ctx = Context::new();
     ctx.insert("items", Value::List(vec![]));
+    let mut session = Session::new();
 
-    let result = engine.render("t", &ctx).unwrap();
+    let result = engine.render(&mut session, "t", &ctx).unwrap();
     assert_eq!(result, "Added item");
 }
 
@@ -1023,8 +1058,9 @@ fn conditional_section_rendered_for_nonempty_list() {
 
     let mut ctx = Context::new();
     ctx.insert("items", Value::List(vec!["a".into(), "b".into()]));
+    let mut session = Session::new();
 
-    let result = engine.render("t", &ctx).unwrap();
+    let result = engine.render(&mut session, "t", &ctx).unwrap();
     assert!(result.contains("with refs: a and b"));
 }
 
@@ -1037,9 +1073,10 @@ fn conditional_section_skipped_when_key_missing() {
     ).unwrap();
 
     let ctx = Context::new();
+    let mut session = Session::new();
     // No "optional" key at all
 
-    let result = engine.render("t", &ctx).unwrap();
+    let result = engine.render(&mut session, "t", &ctx).unwrap();
     // Should not include the conditional content
     assert!(!result.contains("maybe"), "Should skip missing-key conditional, got: {result}");
 }
@@ -1065,14 +1102,14 @@ fn salience_selects_correct_level() {
     ctx_high.insert("name", Value::String("Baz".into()));
     ctx_high.insert("consumer_count", Value::Number(50));
 
-    engine.reset();
-    let low = engine.render("event", &ctx_low).unwrap();
+    let mut session = Session::new();
+    let low = engine.render(&mut session, "event", &ctx_low).unwrap();
     assert!(low.starts_with("terse"), "Expected low template, got: {low}");
-    engine.reset();
-    let med = engine.render("event", &ctx_med).unwrap();
+    session.reset();
+    let med = engine.render(&mut session, "event", &ctx_med).unwrap();
     assert!(med.starts_with("standard"), "Expected medium template, got: {med}");
-    engine.reset();
-    let high = engine.render("event", &ctx_high).unwrap();
+    session.reset();
+    let high = engine.render(&mut session, "event", &ctx_high).unwrap();
     assert!(high.starts_with("elaborate"), "Expected high template, got: {high}");
 }
 
@@ -1085,8 +1122,9 @@ fn salience_falls_back_to_medium_when_level_missing() {
     let mut ctx = Context::new();
     ctx.insert("name", Value::String("Foo".into()));
     ctx.insert("consumer_count", Value::Number(50)); // Would be High
+    let mut session = Session::new();
 
-    let result = engine.render("event", &ctx).unwrap();
+    let result = engine.render(&mut session, "event", &ctx).unwrap();
     assert!(result.contains("standard"), "Expected fallback to Medium, got: {result}");
 }
 
@@ -1100,7 +1138,8 @@ fn explicit_salience_key_overrides_count() {
     ctx.insert("name", Value::String("Foo".into()));
     ctx.insert("consumer_count", Value::Number(50)); // Would normally be High
     ctx.insert("salience", Value::String("low".into())); // Explicit override
+    let mut session = Session::new();
 
-    let result = engine.render("event", &ctx).unwrap();
+    let result = engine.render(&mut session, "event", &ctx).unwrap();
     assert!(result.contains("low"), "Expected Low from explicit override, got: {result}");
 }

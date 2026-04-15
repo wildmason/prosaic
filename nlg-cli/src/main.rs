@@ -38,7 +38,7 @@
 use std::io::{self, BufRead, Write};
 
 use nlg_core::{
-    Context, DocumentPlan, Engine, GroupingStrategy, NlgError, Strictness, Value,
+    Context, DocumentPlan, Engine, GroupingStrategy, NlgError, Session, Strictness, Value,
 };
 use nlg_grammar_en::English;
 use serde::Deserialize;
@@ -232,6 +232,7 @@ fn run_sequential<R: BufRead, W: Write>(
     input: R,
     cfg: &Config,
 ) -> Result<(), String> {
+    let mut session = Session::new();
     for line in input.lines() {
         let line = line.map_err(|e| format!("reading stdin: {e}"))?;
         if line.trim().is_empty() {
@@ -244,14 +245,14 @@ fn run_sequential<R: BufRead, W: Write>(
 
         if cfg.explain {
             let exp = engine
-                .render_explained(&raw.key, &ctx)
+                .render_explained(&mut session, &raw.key, &ctx)
                 .map_err(|e| format!("rendering `{}`: {e}", raw.key))?;
             let json = serde_json::to_string(&exp)
                 .map_err(|e| format!("serializing explanation: {e}"))?;
             writeln!(out, "{json}").map_err(|e| format!("writing stdout: {e}"))?;
         } else {
             let rendered = engine
-                .render(&raw.key, &ctx)
+                .render(&mut session, &raw.key, &ctx)
                 .map_err(|e| format!("rendering `{}`: {e}", raw.key))?;
             writeln!(out, "{rendered}").map_err(|e| format!("writing stdout: {e}"))?;
         }
@@ -284,8 +285,9 @@ fn run_document_plan<R: BufRead, W: Write>(
         .collect();
 
     let plan = DocumentPlan::from_events_grouped(&event_refs, engine, strategy);
+    let mut session = Session::new();
     let narrative = plan
-        .render(engine)
+        .render(engine, &mut session)
         .map_err(|e: NlgError| format!("rendering plan: {e}"))?;
     writeln!(out, "{narrative}").map_err(|e| format!("writing stdout: {e}"))?;
     Ok(())

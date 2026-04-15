@@ -2,6 +2,7 @@ use crate::context::Context;
 use crate::engine::Engine;
 use crate::error::NlgError;
 use crate::salience::Salience;
+use crate::session::Session;
 
 /// Rhetorical classification of an event based on its template key.
 ///
@@ -296,12 +297,12 @@ impl DocumentPlan {
     /// Paragraphs are separated by a double newline. Between paragraphs the
     /// discourse state is reset so pronouns don't span paragraph boundaries —
     /// each paragraph reintroduces its entity with the full form.
-    pub fn render(&self, engine: &Engine) -> Result<String, NlgError> {
+    pub fn render(&self, engine: &Engine, session: &mut Session) -> Result<String, NlgError> {
         let mut paragraphs = Vec::new();
 
         for (idx, p) in self.paragraphs.iter().enumerate() {
             if idx > 0 {
-                engine.reset();
+                session.reset();
             }
 
             let events: Vec<(&str, Context)> = p
@@ -310,7 +311,7 @@ impl DocumentPlan {
                 .map(|(k, c)| (k.as_str(), c.clone()))
                 .collect();
 
-            let rendered = engine.render_batch(&events)?;
+            let rendered = engine.render_batch(session, &events)?;
             if !rendered.is_empty() {
                 paragraphs.push(rendered);
             }
@@ -339,6 +340,7 @@ mod tests {
     use crate::context::Value;
     use crate::engine::{Engine, Strictness, Variation};
     use crate::language::{Conjunction, Language, Person, Tense};
+    use crate::session::Session;
 
     struct TestLang;
 
@@ -373,7 +375,8 @@ mod tests {
         let engine = test_engine();
         let plan = DocumentPlan::from_events(&[], &engine);
         assert!(plan.paragraphs.is_empty());
-        assert_eq!(plan.render(&engine).unwrap(), "");
+        let mut session = Session::new();
+        assert_eq!(plan.render(&engine, &mut session).unwrap(), "");
     }
 
     #[test]
@@ -445,7 +448,8 @@ mod tests {
         let events: Vec<(&str, Context)> = vec![("t", c1), ("t", c2)];
 
         let plan = DocumentPlan::from_events(&events, &engine);
-        let rendered = plan.render(&engine).unwrap();
+        let mut session = Session::new();
+        let rendered = plan.render(&engine, &mut session).unwrap();
 
         assert!(rendered.contains("\n\n"), "Expected paragraph break, got: {rendered}");
     }

@@ -9,7 +9,7 @@
 //! # Quick start
 //!
 //! ```
-//! use nlg_core::{Context, Engine, Strictness, Value, Variation};
+//! use nlg_core::{Context, Engine, Session, Strictness, Value, Variation};
 //! use nlg_grammar_en::English;
 //!
 //! let mut engine = Engine::new(English::new())
@@ -26,7 +26,8 @@
 //! ctx.insert("old_name", Value::String("Foo".into()));
 //! ctx.insert("new_name", Value::String("Foobar".into()));
 //!
-//! let sentence = engine.render("entity.renamed", &ctx).unwrap();
+//! let mut session = Session::new();
+//! let sentence = engine.render(&mut session, "entity.renamed", &ctx).unwrap();
 //! assert_eq!(sentence, "The class Foo was renamed to Foobar.");
 //! ```
 

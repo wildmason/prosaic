@@ -215,7 +215,7 @@ fn register_signature_templates(engine: &mut Engine) -> Result<(), NlgError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nlg_core::{Context, Engine, Strictness, Value, Variation};
+    use nlg_core::{Context, Engine, Session, Strictness, Value, Variation};
     use nlg_grammar_en::English;
 
     fn test_engine() -> Engine {
@@ -246,8 +246,9 @@ mod tests {
                 "Garply".into(),
             ]),
         );
+        let mut session = Session::new();
 
-        let result = engine.render("code.renamed", &ctx).unwrap();
+        let result = engine.render(&mut session, "code.renamed", &ctx).unwrap();
         assert!(result.contains("Foo was renamed to Foobar"));
         assert!(result.contains("6 direct consumers"));
         assert!(result.contains("Baz"));
@@ -268,8 +269,9 @@ mod tests {
             "consumers",
             Value::List(vec!["DashboardComponent".into()]),
         );
+        let mut session = Session::new();
 
-        let result = engine.render("code.renamed", &ctx).unwrap();
+        let result = engine.render(&mut session, "code.renamed", &ctx).unwrap();
         // With consumer_count=1, this is a Low-salience event — templates
         // drop the impact clause for terseness.
         assert!(result.contains("getData"));
@@ -292,8 +294,9 @@ mod tests {
                 "AdminPanel".into(),
             ]),
         );
+        let mut session = Session::new();
 
-        let result = engine.render("code.deleted", &ctx).unwrap();
+        let result = engine.render(&mut session, "code.deleted", &ctx).unwrap();
         assert!(result.contains("UserProfile was removed"));
         assert!(result.contains("3 dependents"));
         assert!(result.contains("UserService"));
@@ -309,8 +312,9 @@ mod tests {
         ctx.insert("entity_type", Value::String("service".into()));
         ctx.insert("name", Value::String("AuthGuard".into()));
         ctx.insert("location", Value::String("src/guards/auth.guard.ts".into()));
+        let mut session = Session::new();
 
-        let result = engine.render("code.added", &ctx).unwrap();
+        let result = engine.render(&mut session, "code.added", &ctx).unwrap();
         assert!(result.contains("service AuthGuard"));
         assert!(result.contains("src/guards/auth.guard.ts"));
     }
@@ -332,8 +336,9 @@ mod tests {
                 "OrderHistory".into(),
             ]),
         );
+        let mut session = Session::new();
 
-        let result = engine.render("code.modified", &ctx).unwrap();
+        let result = engine.render(&mut session, "code.modified", &ctx).unwrap();
         assert!(result.contains("processOrder was modified"));
         assert!(result.contains("4 consumers"));
         assert!(result.contains("OrderPage"));
@@ -360,8 +365,9 @@ mod tests {
                 "OrderService".into(),
             ]),
         );
+        let mut session = Session::new();
 
-        let result = engine.render("code.moved", &ctx).unwrap();
+        let result = engine.render(&mut session, "code.moved", &ctx).unwrap();
         assert!(result.contains("Logger"));
         assert!(result.contains("src/utils/logger.ts"));
         assert!(result.contains("src/core/logger.ts"));
@@ -386,8 +392,9 @@ mod tests {
                 "SettingsPage".into(),
             ]),
         );
+        let mut session = Session::new();
 
-        let result = engine.render("code.signature_changed", &ctx).unwrap();
+        let result = engine.render(&mut session, "code.signature_changed", &ctx).unwrap();
         assert!(result.contains("getUser"));
         assert!(result.contains("method"));
         assert!(result.contains("5 callers"));
@@ -415,8 +422,10 @@ mod tests {
             Value::List(vec!["A".into(), "B".into()]),
         );
 
-        let result1 = engine1.render("code.renamed", &ctx).unwrap();
-        let result2 = engine2.render("code.renamed", &ctx).unwrap();
+        let mut session1 = Session::new();
+        let mut session2 = Session::new();
+        let result1 = engine1.render(&mut session1, "code.renamed", &ctx).unwrap();
+        let result2 = engine2.render(&mut session2, "code.renamed", &ctx).unwrap();
 
         // With 3 alternatives and different variation strategies,
         // they should produce different output (though this is seed-dependent)
@@ -433,8 +442,9 @@ mod tests {
         ctx.insert("name", Value::String("Trivial".into()));
         ctx.insert("consumer_count", Value::Number(1));
         ctx.insert("consumers", Value::List(vec!["OnlyConsumer".into()]));
+        let mut session = Session::new();
 
-        let result = engine.render("code.modified", &ctx).unwrap();
+        let result = engine.render(&mut session, "code.modified", &ctx).unwrap();
         // Low salience: drop impact clause, keep it terse
         assert!(!result.contains("affect"), "Low salience should drop impact clause, got: {result}");
     }
@@ -453,8 +463,9 @@ mod tests {
                 "F".into(), "G".into(), "H".into(),
             ]),
         );
+        let mut session = Session::new();
 
-        let result = engine.render("code.modified", &ctx).unwrap();
+        let result = engine.render(&mut session, "code.modified", &ctx).unwrap();
         // High salience: elaborate with emphasis language
         assert!(
             result.contains("substantial") || result.contains("significant") || result.contains("recommended"),
@@ -475,8 +486,9 @@ mod tests {
             "consumers",
             Value::List(vec!["A".into(), "B".into(), "C".into(), "D".into(), "E".into()]),
         );
+        let mut session = Session::new();
 
-        let result = engine.render("code.modified", &ctx).unwrap();
+        let result = engine.render(&mut session, "code.modified", &ctx).unwrap();
         // Medium salience: standard impact clause with count
         assert!(result.contains("5"));
         assert!(

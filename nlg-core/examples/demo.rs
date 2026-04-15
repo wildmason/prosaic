@@ -1,6 +1,6 @@
 use nlg_core::{
-    entity, named, Clause, Context, DocumentPlan, Engine, EntityDescriptor, Sentence, Strictness,
-    Tense, Value, Variation, VerbForm, Voice,
+    entity, named, Clause, Context, DocumentPlan, Engine, EntityDescriptor, Sentence, Session,
+    Strictness, Tense, Value, Variation, VerbForm, Voice,
 };
 use nlg_derive::IntoContext;
 use nlg_grammar_en::English;
@@ -39,6 +39,7 @@ fn show(label: &str, result: &str) {
 // ── REG: Dale & Reiter disambiguation ────────────────────────────────────
 
 fn reg_disambiguation_demo() {
+    let mut session = Session::new();
     header("Referring Expression Generation (REG)");
 
     println!("  Without REG, ambiguous same-type entities render with the bare type:");
@@ -65,12 +66,12 @@ fn reg_disambiguation_demo() {
     let mut ctx = Context::new();
     ctx.insert("entity_type", Value::String("class".into()));
     ctx.insert("name", Value::String("UserService".into()));
-    show("First render", &engine.render("t", &ctx).unwrap());
+    show("First render", &engine.render(&mut session, "t", &ctx).unwrap());
 
     let mut ctx2 = Context::new();
     ctx2.insert("entity_type", Value::String("class".into()));
     ctx2.insert("name", Value::String("AuthService".into()));
-    show("Second render", &engine.render("t", &ctx2).unwrap());
+    show("Second render", &engine.render(&mut session, "t", &ctx2).unwrap());
 
     // A 3-way disambiguation: multiple attributes may be needed.
     let mut engine3 = Engine::new(English::new())
@@ -103,14 +104,15 @@ fn reg_disambiguation_demo() {
         let mut ctx = Context::new();
         ctx.insert("entity_type", Value::String("widget".into()));
         ctx.insert("name", Value::String(name.into()));
-        show(name, &engine3.render("t", &ctx).unwrap());
-        engine3.reset();
+        show(name, &engine3.render(&mut session, "t", &ctx).unwrap());
+        session.reset();
     }
 }
 
 // ── Importance-Aware Verbosity ─────────────────────────────────────────
 
 fn salience_demo() {
+    let mut session = Session::new();
     header("Importance-Aware Verbosity (Salience)");
 
     let mut engine = Engine::new(English::new())
@@ -127,11 +129,11 @@ fn salience_demo() {
     low.insert("name", Value::String("formatDate".into()));
     low.insert("consumer_count", Value::Number(0));
     low.insert("consumers", Value::List(vec![]));
-    let r_low = engine.render("code.modified", &low).unwrap();
+    let r_low = engine.render(&mut session, "code.modified", &low).unwrap();
     println!("    Low impact (0 consumers):");
     println!("      \"{r_low}\"\n");
 
-    engine.reset();
+    session.reset();
 
     // Medium salience — 5 consumers
     let mut med = Context::new();
@@ -142,11 +144,11 @@ fn salience_demo() {
         "CartComponent".into(), "CheckoutFlow".into(), "OrderHistory".into(),
         "AdminPanel".into(), "InvoiceService".into(),
     ]));
-    let r_med = engine.render("code.modified", &med).unwrap();
+    let r_med = engine.render(&mut session, "code.modified", &med).unwrap();
     println!("    Medium impact (5 consumers):");
     println!("      \"{r_med}\"\n");
 
-    engine.reset();
+    session.reset();
 
     // High salience — 50 consumers
     let mut high = Context::new();
@@ -158,7 +160,7 @@ fn salience_demo() {
         "AdminDashboard".into(), "UserProfile".into(), "SessionManager".into(),
         "PermissionGuard".into(), "AuditLogger".into(),
     ]));
-    let r_high = engine.render("code.modified", &high).unwrap();
+    let r_high = engine.render(&mut session, "code.modified", &high).unwrap();
     println!("    High impact (50 consumers):");
     println!("      \"{r_high}\"\n");
 }
@@ -166,6 +168,7 @@ fn salience_demo() {
 // ── Document Planning ───────────────────────────────────────────────────
 
 fn document_planning_demo() {
+    let mut session = Session::new();
     header("Document Planning (Multi-Paragraph Narratives)");
 
     let mut engine = Engine::new(English::new())
@@ -230,7 +233,7 @@ fn document_planning_demo() {
     let plan = DocumentPlan::from_events(&events, &engine);
     println!("  Plan produced {} paragraph(s).\n", plan.paragraphs.len());
 
-    let narrative = plan.render(&engine).unwrap();
+    let narrative = plan.render(&engine, &mut session).unwrap();
     println!("  Final narrative:\n");
     for line in narrative.lines() {
         println!("    {line}");
@@ -241,13 +244,13 @@ fn document_planning_demo() {
     println!("  With `GroupingStrategy::ByAction`, the same events become");
     println!("  a section-style summary (removals → additions → modifications):\n");
 
-    engine.reset();
+    session.reset();
     let plan = nlg_core::DocumentPlan::from_events_grouped(
         &events,
         &engine,
         nlg_core::GroupingStrategy::ByAction,
     );
-    let narrative = plan.render(&engine).unwrap();
+    let narrative = plan.render(&engine, &mut session).unwrap();
     for line in narrative.lines() {
         println!("    {line}");
     }
@@ -255,6 +258,7 @@ fn document_planning_demo() {
 }
 
 fn referring_expression_demo() {
+    let mut session = Session::new();
     header("Referring Expressions (Entity Tracking)");
 
     let mut engine = Engine::new(English::new())
@@ -275,15 +279,15 @@ fn referring_expression_demo() {
         "ProfilePage".into(), "SettingsPage".into(), "AuthModule".into(),
     ]));
 
-    let r1 = engine.render("code.renamed", &ctx).unwrap();
+    let r1 = engine.render(&mut session, "code.renamed", &ctx).unwrap();
     println!("    1. \"{r1}\"");
 
     // Update context to use new name going forward (though for demo we keep same entity)
     ctx.insert("name", Value::String("UserService".into()));
-    let r2 = engine.render("code.modified", &ctx).unwrap();
+    let r2 = engine.render(&mut session, "code.modified", &ctx).unwrap();
     println!("    2. \"{r2}\"");
 
-    let r3 = engine.render("code.modified", &ctx).unwrap();
+    let r3 = engine.render(&mut session, "code.modified", &ctx).unwrap();
     println!("    3. \"{r3}\"");
 
     // Introduce a different entity — should break pronoun chain
@@ -291,11 +295,11 @@ fn referring_expression_demo() {
     other_ctx.insert("entity_type", Value::String("service".into()));
     other_ctx.insert("name", Value::String("AuthGuard".into()));
     other_ctx.insert("location", Value::String("src/guards/".into()));
-    let r4 = engine.render("code.added", &other_ctx).unwrap();
+    let r4 = engine.render(&mut session, "code.added", &other_ctx).unwrap();
     println!("    4. \"{r4}\"");
 
     // Back to UserService — now there's ambiguity, so no pronoun
-    let r5 = engine.render("code.modified", &ctx).unwrap();
+    let r5 = engine.render(&mut session, "code.modified", &ctx).unwrap();
     println!("    5. \"{r5}\"");
 
     println!();
@@ -309,6 +313,7 @@ fn referring_expression_demo() {
 // ── Discourse-Aware Rendering ─────────────────────────────────────────────
 
 fn discourse_aware_demos() {
+    let mut session = Session::new();
     header("Discourse-Aware Sequential Rendering");
 
     let mut engine = Engine::new(English::new())
@@ -328,7 +333,7 @@ fn discourse_aware_demos() {
         "ProfileComponent".into(), "SettingsComponent".into(), "AdminModule".into(),
         "AuthGuard".into(), "DashboardWidget".into(), "NotificationService".into(),
     ]));
-    let r1 = engine.render("code.renamed", &ctx).unwrap();
+    let r1 = engine.render(&mut session, "code.renamed", &ctx).unwrap();
     println!("    1. \"{r1}\"");
 
     // Event 2: delete (different entity, triggers connective)
@@ -339,7 +344,7 @@ fn discourse_aware_demos() {
     ctx.insert("consumers", Value::List(vec![
         "ConfigLoader".into(), "BootstrapModule".into(), "MigrationScript".into(),
     ]));
-    let r2 = engine.render("code.deleted", &ctx).unwrap();
+    let r2 = engine.render(&mut session, "code.deleted", &ctx).unwrap();
     println!("    2. \"{r2}\"");
 
     // Event 3: modify (different entity, different action)
@@ -351,7 +356,7 @@ fn discourse_aware_demos() {
         "CartComponent".into(), "CheckoutFlow".into(),
         "InvoiceService".into(), "PricingEngine".into(),
     ]));
-    let r3 = engine.render("code.modified", &ctx).unwrap();
+    let r3 = engine.render(&mut session, "code.modified", &ctx).unwrap();
     println!("    3. \"{r3}\"");
 
     // Event 4: another rename (same action as #1, triggers "Similarly")
@@ -363,7 +368,7 @@ fn discourse_aware_demos() {
     ctx.insert("consumers", Value::List(vec![
         "LoginPage".into(), "TokenManager".into(),
     ]));
-    let r4 = engine.render("code.renamed", &ctx).unwrap();
+    let r4 = engine.render(&mut session, "code.renamed", &ctx).unwrap();
     println!("    4. \"{r4}\"");
 
     // Event 5: add (new entity)
@@ -371,7 +376,7 @@ fn discourse_aware_demos() {
     ctx.insert("entity_type", Value::String("service".into()));
     ctx.insert("name", Value::String("TelemetryService".into()));
     ctx.insert("location", Value::String("src/services/telemetry.service.ts".into()));
-    let r5 = engine.render("code.added", &ctx).unwrap();
+    let r5 = engine.render(&mut session, "code.added", &ctx).unwrap();
     println!("    5. \"{r5}\"");
 
     println!();
@@ -381,6 +386,7 @@ fn discourse_aware_demos() {
 }
 
 fn batch_rendering_demo() {
+    let mut session = Session::new();
     header("Batch Rendering with Aggregation");
 
     let mut engine = Engine::new(English::new())
@@ -420,7 +426,7 @@ fn batch_rendering_demo() {
         ("code.added", ctx3),
     ];
 
-    let paragraph = engine.render_batch(&events).unwrap();
+    let paragraph = engine.render_batch(&mut session, &events).unwrap();
     println!("  Batch output (3 events, first 2 share an entity):\n");
     println!("    \"{paragraph}\"\n");
 
@@ -444,7 +450,7 @@ fn batch_rendering_demo() {
         ("code.renamed", make_rename("DataService", "StorageService")),
     ];
 
-    let aggregated = engine2.render_batch(&events).unwrap();
+    let aggregated = engine2.render_batch(&mut session, &events).unwrap();
     println!("  Same action with differing details (falls back to sequential):\n");
     println!("    \"{aggregated}\"\n");
 
@@ -467,7 +473,7 @@ fn batch_rendering_demo() {
         ("code.deleted", make_delete("DeprecatedShims")),
     ];
 
-    let aggregated = engine3.render_batch(&events).unwrap();
+    let aggregated = engine3.render_batch(&mut session, &events).unwrap();
     println!("  True aggregation (3 deletions with matching context):\n");
     println!("    \"{aggregated}\"\n");
 
@@ -497,7 +503,7 @@ fn batch_rendering_demo() {
         ("code.moved", c3),
     ];
 
-    let reduced = engine4.render_batch(&events).unwrap();
+    let reduced = engine4.render_batch(&mut session, &events).unwrap();
     println!("  Clause reduction (same entity, simple predicates, matching voice):\n");
     println!("    \"{reduced}\"\n");
 }
@@ -505,6 +511,7 @@ fn batch_rendering_demo() {
 // ── Template API ─────────────────────────────────────────────────────────
 
 fn template_api_demos() {
+    let mut session = Session::new();
     header("Template API");
 
     let mut engine = Engine::new(English::new())
@@ -537,7 +544,7 @@ fn template_api_demos() {
             "NotificationService".into(),
         ]),
     );
-    show("Rename (6 consumers)", &engine.render("renamed", &ctx).unwrap());
+    show("Rename (6 consumers)", &engine.render(&mut session, "renamed", &ctx).unwrap());
 
     // 1 consumer
     ctx.insert("entity_type", Value::String("method".into()));
@@ -545,7 +552,7 @@ fn template_api_demos() {
     ctx.insert("new_name", Value::String("fetchData".into()));
     ctx.insert("count", Value::Number(1));
     ctx.insert("consumers", Value::List(vec!["DashboardComponent".into()]));
-    show("Rename (1 consumer)", &engine.render("renamed", &ctx).unwrap());
+    show("Rename (1 consumer)", &engine.render(&mut session, "renamed", &ctx).unwrap());
 
     // 2 consumers (no truncation, Oxford comma not needed)
     ctx.insert("entity_type", Value::String("interface".into()));
@@ -556,7 +563,7 @@ fn template_api_demos() {
         "consumers",
         Value::List(vec!["AppModule".into(), "TestHarness".into()]),
     );
-    show("Rename (2 consumers)", &engine.render("renamed", &ctx).unwrap());
+    show("Rename (2 consumers)", &engine.render(&mut session, "renamed", &ctx).unwrap());
 
     // Inline template
     let mut ctx = Context::new();
@@ -566,6 +573,7 @@ fn template_api_demos() {
         "Inline template",
         &engine
             .render_inline(
+                &mut session,
                 "Found {n} {n|pluralize:occurrence} of {thing|article} in the codebase",
                 &ctx,
             )
@@ -580,6 +588,7 @@ fn template_api_demos() {
         "Ordinal + words",
         &engine
             .render_inline(
+                &mut session,
                 "This is the {n|ordinal} time this has happened, \
                  totalling {total|words} critical issue reports",
                 &ctx,
@@ -595,6 +604,7 @@ fn template_api_demos() {
         "Capitalize (sentence start)",
         &engine
             .render_inline(
+                &mut session,
                 "{event|capitalize} detected {count} {count|pluralize:time} today",
                 &ctx,
             )
@@ -718,6 +728,7 @@ fn builder_api_demos() {
 // ── Tense & Aspect ───────────────────────────────────────────────────────
 
 fn tense_and_aspect_demo() {
+    let mut session = Session::new();
     header("Tense & Aspect Variation");
 
     let engine = Engine::new(English::new())
@@ -746,7 +757,7 @@ fn tense_and_aspect_demo() {
         ctx.insert("entity_type", Value::String("class".into()));
         ctx.insert("name", Value::String("UserService".into()));
         ctx.insert("action", Value::String("rename".into()));
-        let rendered = engine.render_inline(&tpl, &ctx).unwrap();
+        let rendered = engine.render_inline(&mut session, &tpl, &ctx).unwrap();
         show(label, &rendered);
     }
 
@@ -774,6 +785,7 @@ fn tense_and_aspect_demo() {
 // ── Elegant variation, time, quantifier naturalization ──────────────────
 
 fn elegance_time_quantifier_demo() {
+    let mut session = Session::new();
     header("Elegant Variation, Time, and Quantifiers");
 
     // Synonym rotation across renders.
@@ -790,7 +802,7 @@ fn elegance_time_quantifier_demo() {
         let mut ctx = Context::new();
         ctx.insert("count", Value::Number(3));
         ctx.insert("word", Value::String("consumer".into()));
-        show(&format!("Render {}", i + 1), &engine.render("t", &ctx).unwrap());
+        show(&format!("Render {}", i + 1), &engine.render(&mut session, "t", &ctx).unwrap());
     }
 
     // Relative time framing.
@@ -815,9 +827,9 @@ fn elegance_time_quantifier_demo() {
         ctx.insert("ts", Value::Number(ts));
         show(
             &format!("ts={ts}"),
-            &engine2.render("t", &ctx).unwrap(),
+            &engine2.render(&mut session, "t", &ctx).unwrap(),
         );
-        engine2.reset();
+        session.reset();
     }
 
     // Quantifier naturalization.
@@ -836,15 +848,16 @@ fn elegance_time_quantifier_demo() {
         ctx.insert("count", Value::Number(count));
         show(
             &format!("count={count}"),
-            &engine3.render("t", &ctx).unwrap(),
+            &engine3.render(&mut session, "t", &ctx).unwrap(),
         );
-        engine3.reset();
+        session.reset();
     }
 }
 
 // ── Vocab Code module ────────────────────────────────────────────────────
 
 fn vocab_code_demos() {
+    let mut session = Session::new();
     header("Code Vocabulary Module");
 
     let mut engine = Engine::new(English::new())
@@ -866,7 +879,7 @@ fn vocab_code_demos() {
             "ReportService".into(), "CacheService".into(), "LogService".into(),
         ]),
     );
-    show("code.renamed", &engine.render("code.renamed", &ctx).unwrap());
+    show("code.renamed", &engine.render(&mut session, "code.renamed", &ctx).unwrap());
 
     // code.deleted
     let mut ctx = Context::new();
@@ -879,14 +892,14 @@ fn vocab_code_demos() {
             "ProfilePage".into(), "SettingsPage".into(), "AdminPanel".into(),
         ]),
     );
-    show("code.deleted", &engine.render("code.deleted", &ctx).unwrap());
+    show("code.deleted", &engine.render(&mut session, "code.deleted", &ctx).unwrap());
 
     // code.added
     let mut ctx = Context::new();
     ctx.insert("entity_type", Value::String("service".into()));
     ctx.insert("name", Value::String("TelemetryService".into()));
     ctx.insert("location", Value::String("src/services/telemetry.service.ts".into()));
-    show("code.added", &engine.render("code.added", &ctx).unwrap());
+    show("code.added", &engine.render(&mut session, "code.added", &ctx).unwrap());
 
     // code.modified
     let mut ctx = Context::new();
@@ -902,7 +915,7 @@ fn vocab_code_demos() {
             "DiscountService".into(),
         ]),
     );
-    show("code.modified", &engine.render("code.modified", &ctx).unwrap());
+    show("code.modified", &engine.render(&mut session, "code.modified", &ctx).unwrap());
 
     // code.moved
     let mut ctx = Context::new();
@@ -918,7 +931,7 @@ fn vocab_code_demos() {
             "CalendarComponent".into(), "ReportService".into(),
         ]),
     );
-    show("code.moved", &engine.render("code.moved", &ctx).unwrap());
+    show("code.moved", &engine.render(&mut session, "code.moved", &ctx).unwrap());
 
     // code.signature_changed
     let mut ctx = Context::new();
@@ -928,13 +941,14 @@ fn vocab_code_demos() {
     ctx.insert("consumers", Value::List(vec!["ProfileController".into()]));
     show(
         "code.signature_changed (singular)",
-        &engine.render("code.signature_changed", &ctx).unwrap(),
+        &engine.render(&mut session, "code.signature_changed", &ctx).unwrap(),
     );
 }
 
 // ── Variation ────────────────────────────────────────────────────────────
 
 fn variation_demos() {
+    let mut session = Session::new();
     header("Variation Strategies");
 
     let ctx = {
@@ -950,7 +964,7 @@ fn variation_demos() {
     // Fixed
     let mut engine = Engine::new(English::new()).variation(Variation::Fixed);
     nlg_vocab_code::register(&mut engine).unwrap();
-    show("Fixed", &engine.render("code.renamed", &ctx).unwrap());
+    show("Fixed", &engine.render(&mut session, "code.renamed", &ctx).unwrap());
 
     // Seeded (different seeds)
     for seed in [1, 42, 999] {
@@ -958,7 +972,7 @@ fn variation_demos() {
         nlg_vocab_code::register(&mut engine).unwrap();
         show(
             &format!("Seeded({seed})"),
-            &engine.render("code.renamed", &ctx).unwrap(),
+            &engine.render(&mut session, "code.renamed", &ctx).unwrap(),
         );
     }
 }
@@ -966,6 +980,7 @@ fn variation_demos() {
 // ── Strictness ───────────────────────────────────────────────────────────
 
 fn strictness_demos() {
+    let mut session = Session::new();
     header("Strictness Modes");
 
     let template = "The {entity_type} {name} was modified by {author}";
@@ -977,7 +992,7 @@ fn strictness_demos() {
     // Strict
     let mut engine = Engine::new(English::new()).strictness(Strictness::Strict);
     engine.register_template("t", template).unwrap();
-    match engine.render("t", &ctx) {
+    match engine.render(&mut session, "t", &ctx) {
         Ok(s) => show("Strict", &s),
         Err(e) => show("Strict (error)", &e.to_string()),
     }
@@ -985,12 +1000,12 @@ fn strictness_demos() {
     // Lenient
     let mut engine = Engine::new(English::new()).strictness(Strictness::Lenient);
     engine.register_template("t", template).unwrap();
-    show("Lenient", &engine.render("t", &ctx).unwrap());
+    show("Lenient", &engine.render(&mut session, "t", &ctx).unwrap());
 
     // Silent
     let mut engine = Engine::new(English::new()).strictness(Strictness::Silent);
     engine.register_template("t", template).unwrap();
-    show("Silent", &engine.render("t", &ctx).unwrap());
+    show("Silent", &engine.render(&mut session, "t", &ctx).unwrap());
 }
 
 // ── Derive macro ─────────────────────────────────────────────────────────
@@ -1005,6 +1020,7 @@ struct DeployEvent {
 }
 
 fn derive_macro_demo() {
+    let mut session = Session::new();
     header("Derive Macro");
 
     let mut engine = Engine::new(English::new());
@@ -1025,12 +1041,13 @@ fn derive_macro_demo() {
         consumers: vec!["OrderService".into(), "BillingService".into(), "RefundService".into()],
     };
 
-    show("From struct", &engine.render("deploy", event).unwrap());
+    show("From struct", &engine.render(&mut session, "deploy", event).unwrap());
 }
 
 // ── Grammar showcase ─────────────────────────────────────────────────────
 
 fn grammar_showcase() {
+    let mut session = Session::new();
     header("Grammar Showcase");
 
     let engine = Engine::new(English::new());
@@ -1052,7 +1069,7 @@ fn grammar_showcase() {
         let mut ctx = Context::new();
         ctx.insert("n", Value::Number(count));
         let result = engine
-            .render_inline(&format!("{{n}} {{n|pluralize:{word}}}"), &ctx)
+            .render_inline(&mut session, &format!("{{n}} {{n|pluralize:{word}}}"), &ctx)
             .unwrap();
         println!("    {result}");
     }
@@ -1064,7 +1081,7 @@ fn grammar_showcase() {
     for word in words {
         let mut ctx = Context::new();
         ctx.insert("w", Value::String(word.into()));
-        let result = engine.render_inline("{w|article}", &ctx).unwrap();
+        let result = engine.render_inline(&mut session, "{w|article}", &ctx).unwrap();
         println!("    {result}");
     }
     println!();
@@ -1075,7 +1092,7 @@ fn grammar_showcase() {
     for n in numbers {
         let mut ctx = Context::new();
         ctx.insert("n", Value::Number(n));
-        let result = engine.render_inline("{n|words}", &ctx).unwrap();
+        let result = engine.render_inline(&mut session, "{n|words}", &ctx).unwrap();
         println!("    {n} -> {result}");
     }
     println!();
@@ -1086,7 +1103,7 @@ fn grammar_showcase() {
     for n in ordinals {
         let mut ctx = Context::new();
         ctx.insert("n", Value::Number(n));
-        let result = engine.render_inline("{n|ordinal}", &ctx).unwrap();
+        let result = engine.render_inline(&mut session, "{n|ordinal}", &ctx).unwrap();
         print!("    {result}");
     }
     println!("\n");
@@ -1102,7 +1119,7 @@ fn grammar_showcase() {
     ] {
         let mut ctx = Context::new();
         ctx.insert("items", Value::List(items.clone()));
-        let result = engine.render_inline("{items|join}", &ctx).unwrap();
+        let result = engine.render_inline(&mut session, "{items|join}", &ctx).unwrap();
         println!(
             "    {} item(s): \"{}\"",
             items.len(),

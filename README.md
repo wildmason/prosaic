@@ -21,7 +21,7 @@ Notice: **pronouns** on second and third mentions, a **discourse connective** ("
 ## Quick Start
 
 ```rust
-use nlg_core::{Engine, Context, Value, Variation, Strictness};
+use nlg_core::{Engine, Context, Session, Value, Variation, Strictness};
 use nlg_grammar_en::English;
 
 let mut engine = Engine::new(English::new())
@@ -45,7 +45,10 @@ ctx.insert("consumers", Value::List(vec![
     "Corge".into(), "Grault".into(), "Garply".into(),
 ]));
 
-let sentence = engine.render("entity.renamed", &ctx)?;
+// Session holds all discourse state (focus, word history, list-style cycle).
+// Create one per logical document — reset it or drop it to start a new narrative.
+let mut session = engine.new_session();
+let sentence = engine.render(&mut session, "entity.renamed", &ctx)?;
 // "The class Foo was renamed to Foobar, which impacts 6 direct consumers
 //  including Baz, Qux, and Quux among others."
 ```
@@ -132,8 +135,9 @@ engine.register_entity(
 );
 
 engine.register_template("t", "{name|refer} was modified")?;
-engine.render("t", &user_ctx)?;  // "The domain class UserService was modified."
-engine.render("t", &auth_ctx)?;  // "Similarly, the infra class AuthService was modified."
+let mut session = engine.new_session();
+engine.render(&mut session, "t", &user_ctx)?;  // "The domain class UserService was modified."
+engine.render(&mut session, "t", &auth_ctx)?;  // "Similarly, the infra class AuthService was modified."
 ```
 
 **Algorithm**: For each target entity, start with all registered same-type entities as distractors. Walk the preferred attribute order; for each attribute, if including its value rules out at least one distractor, add it. Stop as soon as no distractors remain.
@@ -440,26 +444,30 @@ let narrative = plan.render(&engine)?;
 
 The built-in classifier maps well-known template keys (`code.added`, `code.deleted`, `code.modified`, `code.renamed`, `code.moved`, `code.signature_changed`, etc.) into `RhetoricalCategory::{Removal, Addition, Modification, Other}`. For domain-specific keys, pass a custom classifier via `DocumentPlan::from_events_classified(events, engine, |key| …)`. Within each section, events sharing an entity stay clustered so co-reference still works.
 
-### Discourse Reset, Sessions, and Long-Lived Services
+### Sessions, Discourse State, and Long-Lived Services
 
-An `Engine` accumulates discourse state across every `render()` call, which is what lets consecutive renders reference each other naturally. That state is *stateful* — so a single engine shared across unrelated requests will leak context between them (pronouns referring to entities from a different request, connectives linking unrelated actions).
+`Engine` is stateless after construction — all template registrations, grammar rules, and configuration are immutable. Every `render()` call takes a `&mut Session` that carries the discourse state (focus stack, word-frequency log, list-style cycle, round-robin counters) for one logical narrative.
 
 Pick the lifecycle that matches your workload:
 
-- **Single narrative / batch** — share one engine across the whole batch and let the discourse system link the outputs together. This is the common case.
-- **Multi-tenant / long-lived service** — treat each request (or logical session) as its own discourse scope. Call `engine.reset()` at the start of each request to clear discourse state in place, or construct a fresh `Engine` per request (re-registering templates is cheap; a one-time registration helper keeps the setup in one place). `Engine` is not `Clone` — the internal discourse state is a `RefCell` (and therefore not `Sync`) so a single engine cannot be shared across threads. For concurrent services, build one engine per thread/worker, or wrap in a `Mutex` if cross-thread sharing is required.
-- **Failed renders are safe** — `render()` is transactional: if a render fails (missing slot in Strict mode, unknown pipe, etc.), the discourse state is rolled back so the next successful render is unaffected.
+- **Single narrative / batch** — create one `Session`, share it across the whole batch. The engine links outputs together through it.
+- **Multi-tenant / long-lived service** — create one `Session` per request. Drop it when the request ends, or call `session.reset()` to reuse the allocation. The `Engine` itself is `Send + Sync` and can safely be shared across threads (e.g. inside an `Arc`).
+- **Isolated renders** — create a fresh `Session::new()` for each call. State never leaks between calls.
+- **Failed renders are safe** — `render()` is transactional: if a render fails (missing slot in Strict mode, unknown pipe, etc.), the session state is rolled back to what it was before the call.
 
-Manual reset:
+Per-request session:
 
 ```rust
-engine.render("code.renamed", &event1)?;
-engine.render("code.modified", &event2)?;
+// Engine is shared; sessions are per-request
+let mut session = engine.new_session();   // or Session::new()
+
+engine.render(&mut session, "code.renamed", &event1)?;
+engine.render(&mut session, "code.modified", &event2)?;
 // ...generates output linking these two events...
 
-engine.reset();
+session.reset();  // start a new narrative in the same session
 
-engine.render("code.added", &event3)?;
+engine.render(&mut session, "code.added", &event3)?;
 // ...starts fresh, no pronouns or connectives referencing prior events
 ```
 
@@ -522,7 +530,8 @@ struct RenameEvent {
 }
 
 let event = RenameEvent { /* ... */ };
-let sentence = engine.render("code.renamed", event)?;
+let mut session = engine.new_session();
+let sentence = engine.render(&mut session, "code.renamed", event)?;
 ```
 
 Supported field types: `String`, `&str` (cloned into the context), integer types (`i8`…`i64`, `u8`…`u64`, `usize`, `isize`), `Vec<String>`, and `Option<T>` wrapping any of those (skipped when `None`). Unsupported field types produce a compile-time error — no silent drops — so template slots can't disappear from a struct without being noticed.
@@ -622,10 +631,10 @@ Partials use the same syntax as top-level templates — slots, pipes, conditiona
 
 ### A/B Variant Scoring
 
-`engine.score_variants(key, ctx)` returns every variant that would be considered, along with the choose-best score the engine would assign and a flag marking which one would be selected right now:
+`engine.score_variants(&mut session, key, ctx)` returns every variant that would be considered, along with the choose-best score the engine would assign and a flag marking which one would be selected right now:
 
 ```rust
-for v in engine.score_variants("code.renamed", &ctx)? {
+for v in engine.score_variants(&mut session, "code.renamed", &ctx)? {
     println!("[{:?}] score={:.2} {}{}",
         v.salience, v.score,
         if v.selected { "← selected " } else { "" },
@@ -637,11 +646,11 @@ Does not mutate discourse state.
 
 ### Explain Output
 
-`engine.render_explained(key, ctx)` returns a `RenderExplanation` with the output plus the engine's decisions — variant index and source, salience bucket, candidate scores, reference form, connective, plural focus, and whether the length-budget split fired. Useful for debugging vocab modules.
+`engine.render_explained(&mut session, key, ctx)` returns a `RenderExplanation` with the output plus the engine's decisions — variant index and source, salience bucket, candidate scores, reference form, connective, plural focus, and whether the length-budget split fired. Useful for debugging vocab modules.
 
 ### Streaming Render
 
-`engine.render_iter(events)` returns an iterator over `Result<String, NlgError>`, yielding one sentence per aggregated run. Each `.next()` produces output as soon as the next batch unit is ready — useful for long code-review narratives where time-to-first-sentence matters.
+`engine.render_iter(&mut session, events)` returns an iterator over `Result<String, NlgError>`, yielding one sentence per aggregated run. Each `.next()` produces output as soon as the next batch unit is ready — useful for long code-review narratives where time-to-first-sentence matters.
 
 ### Punctuation Polish
 

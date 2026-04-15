@@ -11,7 +11,7 @@
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use nlg_core::{
-    Context, DocumentPlan, Engine, EntityDescriptor, GroupingStrategy, Strictness, Value,
+    Context, DocumentPlan, Engine, EntityDescriptor, GroupingStrategy, Session, Strictness, Value,
     Variation,
 };
 use nlg_grammar_en::English;
@@ -70,8 +70,8 @@ fn bench_single_render(c: &mut Criterion) {
     let ctx = sample_rename_ctx();
     c.bench_function("render_single_rename_medium", |b| {
         b.iter(|| {
-            engine.reset();
-            let out = engine.render("code.renamed", black_box(&ctx)).unwrap();
+            let mut session = Session::new();
+            let out = engine.render(&mut session, "code.renamed", black_box(&ctx)).unwrap();
             black_box(out);
         });
     });
@@ -100,8 +100,8 @@ fn bench_batch_with_aggregation(c: &mut Criterion) {
 
     c.bench_function("render_batch_same_action_aggregation", |b| {
         b.iter(|| {
-            engine.reset();
-            let out = engine.render_batch(black_box(&events)).unwrap();
+            let mut session = Session::new();
+            let out = engine.render_batch(&mut session, black_box(&events)).unwrap();
             black_box(out);
         });
     });
@@ -131,8 +131,8 @@ fn bench_reg_with_many_distractors(c: &mut Criterion) {
 
     c.bench_function("reg_fifty_distractors_single_render", |b| {
         b.iter(|| {
-            engine.reset();
-            let out = engine.render("t", black_box(&ctx)).unwrap();
+            let mut session = Session::new();
+            let out = engine.render(&mut session, "t", black_box(&ctx)).unwrap();
             black_box(out);
         });
     });
@@ -171,7 +171,8 @@ fn bench_document_plan_render(c: &mut Criterion) {
                 &engine,
                 GroupingStrategy::ByEntity,
             );
-            let out = plan.render(&engine).unwrap();
+            let mut session = Session::new();
+            let out = plan.render(&engine, &mut session).unwrap();
             black_box(out);
         });
     });
@@ -202,8 +203,8 @@ fn bench_clause_reduction(c: &mut Criterion) {
 
     c.bench_function("clause_reduction_three_same_entity", |b| {
         b.iter(|| {
-            engine.reset();
-            let out = engine.render_batch(black_box(&events)).unwrap();
+            let mut session = Session::new();
+            let out = engine.render_batch(&mut session, black_box(&events)).unwrap();
             black_box(out);
         });
     });

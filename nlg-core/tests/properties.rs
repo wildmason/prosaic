@@ -13,7 +13,7 @@
 //! test input space so generated data remains within the invariant's
 //! domain.
 
-use nlg_core::{Context, Engine, Strictness, Value, Variation};
+use nlg_core::{Context, Engine, Session, Strictness, Value, Variation};
 use nlg_grammar_en::English;
 use proptest::prelude::*;
 
@@ -48,7 +48,8 @@ proptest! {
 
         let mut ctx = Context::new();
         ctx.insert("name", Value::String(name.clone()));
-        let output = engine.render("t", &ctx).unwrap();
+        let mut session = Session::new();
+        let output = engine.render(&mut session, "t", &ctx).unwrap();
 
         prop_assert!(!leaks_open_brace(&output));
         prop_assert!(!leaks_close_brace(&output));
@@ -61,7 +62,8 @@ proptest! {
         let mut engine = base_engine();
         engine.register_template("t", "needs {absent}").unwrap();
         let ctx = Context::new();
-        prop_assert!(engine.render("t", &ctx).is_err());
+        let mut session = Session::new();
+        prop_assert!(engine.render(&mut session, "t", &ctx).is_err());
     }
 
     /// Silent mode never panics on missing slots and never leaves slot
@@ -73,7 +75,8 @@ proptest! {
         engine.register_template("t", "hello {missing} world").unwrap();
 
         let ctx = Context::new();
-        let output = engine.render("t", &ctx).unwrap();
+        let mut session = Session::new();
+        let output = engine.render(&mut session, "t", &ctx).unwrap();
         prop_assert!(!leaks_open_brace(&output));
         prop_assert!(!leaks_close_brace(&output));
         prop_assert!(!output.is_empty());
@@ -104,7 +107,8 @@ proptest! {
             ("modified", ctx.clone()),
             ("moved", ctx.clone()),
         ];
-        let output = engine.render_batch(&events).unwrap();
+        let mut session = Session::new();
+        let output = engine.render_batch(&mut session, &events).unwrap();
 
         prop_assert!(output.contains(&name));
     }
@@ -129,7 +133,8 @@ proptest! {
 
         let mut ctx = Context::new();
         ctx.insert("count", Value::Number(count));
-        let output = engine.render("t", &ctx).unwrap();
+        let mut session = Session::new();
+        let output = engine.render(&mut session, "t", &ctx).unwrap();
 
         for piece in output.split(". ") {
             prop_assert!(piece.chars().count() <= budget + 60);
@@ -145,7 +150,8 @@ proptest! {
 
         let mut ctx = Context::new();
         ctx.insert("n", Value::Number(count));
-        let output = engine.render("t", &ctx).unwrap();
+        let mut session = Session::new();
+        let output = engine.render(&mut session, "t", &ctx).unwrap();
 
         prop_assert!(!output.is_empty());
         prop_assert!(!leaks_open_brace(&output));
@@ -161,7 +167,8 @@ proptest! {
 
         let mut ctx = Context::new();
         ctx.insert("c", Value::Number(score));
-        let output = engine.render("t", &ctx).unwrap();
+        let mut session = Session::new();
+        let output = engine.render(&mut session, "t", &ctx).unwrap();
         prop_assert!(!leaks_open_brace(&output));
         prop_assert!(!leaks_close_brace(&output));
         prop_assert!(!output.is_empty());
@@ -179,7 +186,8 @@ proptest! {
 
         let mut ctx = Context::new();
         ctx.insert("ts", Value::Number(ts));
-        let output = engine.render("t", &ctx).unwrap();
+        let mut session = Session::new();
+        let output = engine.render(&mut session, "t", &ctx).unwrap();
         prop_assert!(!output.is_empty());
         prop_assert!(!leaks_open_brace(&output));
         prop_assert!(!leaks_close_brace(&output));

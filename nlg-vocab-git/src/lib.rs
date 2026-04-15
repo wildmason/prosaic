@@ -202,7 +202,7 @@ fn register_release(engine: &mut Engine) -> Result<(), NlgError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nlg_core::{Context, Strictness, Value, Variation};
+    use nlg_core::{Context, Session, Strictness, Value, Variation};
     use nlg_grammar_en::English;
 
     fn engine() -> Engine {
@@ -225,8 +225,9 @@ mod tests {
         );
         ctx.insert("additions", Value::Number(40));
         ctx.insert("deletions", Value::Number(10));
+        let mut session = Session::new();
 
-        let result = engine.render("git.commit", &ctx).unwrap();
+        let result = engine.render(&mut session, "git.commit", &ctx).unwrap();
         assert!(
             result.contains("Alice") && result.contains("5 files"),
             "got: {result}"
@@ -240,8 +241,9 @@ mod tests {
         ctx.insert("author", Value::String("Bob".into()));
         ctx.insert("number", Value::Number(42));
         ctx.insert("title", Value::String("Add retry logic".into()));
+        let mut session = Session::new();
 
-        let result = engine.render("git.pr_opened", &ctx).unwrap();
+        let result = engine.render(&mut session, "git.pr_opened", &ctx).unwrap();
         assert!(result.contains("#42"), "got: {result}");
         assert!(result.contains("Add retry logic"), "got: {result}");
     }
@@ -254,8 +256,9 @@ mod tests {
         ctx.insert("merger", Value::String("Charlie".into()));
         ctx.insert("number", Value::Number(17));
         ctx.insert("title", Value::String("Fix flaky test".into()));
+        let mut session = Session::new();
 
-        let result = engine.render("git.pr_merged", &ctx).unwrap();
+        let result = engine.render(&mut session, "git.pr_merged", &ctx).unwrap();
         assert!(result.contains("#17"), "got: {result}");
         assert!(result.contains("Charlie"), "got: {result}");
     }
@@ -267,8 +270,9 @@ mod tests {
         ctx.insert("author", Value::String("Dave".into()));
         ctx.insert("number", Value::Number(99));
         ctx.insert("title", Value::String("Server returns 500 on logout".into()));
+        let mut session = Session::new();
 
-        let result = engine.render("git.issue_opened", &ctx).unwrap();
+        let result = engine.render(&mut session, "git.issue_opened", &ctx).unwrap();
         assert!(result.contains("#99"), "got: {result}");
     }
 
@@ -279,8 +283,9 @@ mod tests {
         ctx.insert("reviewer", Value::String("Eve".into()));
         ctx.insert("pr_number", Value::Number(7));
         ctx.insert("comment_count", Value::Number(3));
+        let mut session = Session::new();
 
-        let result = engine.render("git.review_changes_requested", &ctx).unwrap();
+        let result = engine.render(&mut session, "git.review_changes_requested", &ctx).unwrap();
         assert!(result.contains("3 comments"), "got: {result}");
     }
 
@@ -291,8 +296,9 @@ mod tests {
         ctx.insert("version", Value::String("1.2.0".into()));
         ctx.insert("tag", Value::String("v1.2.0".into()));
         ctx.insert("changes_count", Value::Number(14));
+        let mut session = Session::new();
 
-        let result = engine.render("git.release", &ctx).unwrap();
+        let result = engine.render(&mut session, "git.release", &ctx).unwrap();
         assert!(result.contains("1.2.0"), "got: {result}");
         assert!(result.contains("14 changes"), "got: {result}");
     }
@@ -309,11 +315,12 @@ mod tests {
         ctx.insert("additions", Value::Number(2));
         ctx.insert("deletions", Value::Number(1));
 
+        let mut session = Session::new();
         // Reset in case other tests' discourse state leaked into this
-        // engine instance.
-        engine.reset();
+        // engine instance (no-op on a fresh session, documents intent).
+        session.reset();
 
-        let result = engine.render("git.commit", &ctx).unwrap();
+        let result = engine.render(&mut session, "git.commit", &ctx).unwrap();
         assert!(
             result.contains("Alice"),
             "got: {result}"
