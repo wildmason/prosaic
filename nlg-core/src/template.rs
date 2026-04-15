@@ -57,6 +57,37 @@ impl Template {
             segments,
         })
     }
+
+    /// Return the text of every literal segment in this template.
+    ///
+    /// Walks the segment tree recursively, collecting text from
+    /// [`Segment::Literal`] nodes at every nesting depth (including
+    /// inside conditional sections). [`Segment::Partial`] nodes are
+    /// treated as opaque — their literals are only reachable after the
+    /// engine expands them at render time. Callers that need partial
+    /// content to contribute to faithfulness scoring should pre-expand
+    /// partials or disable the gate for partial-heavy templates.
+    ///
+    /// Used by faithfulness scoring to include template boilerplate in
+    /// the entailment source set alongside context values.
+    pub fn literal_tokens(&self) -> Vec<&str> {
+        let mut out = Vec::new();
+        collect_literals(&self.segments, &mut out);
+        out
+    }
+}
+
+/// Recursively collect literal text from a segment list into `out`.
+/// `Segment::Partial` nodes are skipped (opaque at parse time).
+fn collect_literals<'a>(segments: &'a [Segment], out: &mut Vec<&'a str>) {
+    for seg in segments {
+        match seg {
+            Segment::Literal(s) => out.push(s.as_str()),
+            Segment::Slot { .. } => {}
+            Segment::Conditional { inner, .. } => collect_literals(inner, out),
+            Segment::Partial { .. } => {}
+        }
+    }
 }
 
 /// Parse a range of source into segments. Handles nested conditionals.
@@ -495,5 +526,46 @@ mod tests {
     fn parse_unclosed_partial_is_error() {
         let result = Template::parse("{>tail");
         assert!(matches!(result, Err(NlgError::TemplateParseError { .. })));
+    }
+
+    // ── literal_tokens tests ────────────────────────────────────────────
+
+    #[test]
+    fn literal_tokens_simple() {
+        let t = Template::parse("The {type} {name} was modified").unwrap();
+        let lits = t.literal_tokens();
+        assert_eq!(lits, vec!["The ", " ", " was modified"]);
+    }
+
+    #[test]
+    fn literal_tokens_from_conditional_sections() {
+        let t = Template::parse("{name}{?count}, impacting {count} consumers{/?}").unwrap();
+        let lits = t.literal_tokens();
+        assert!(lits.iter().any(|l| l.contains("impacting")));
+        assert!(lits.iter().any(|l| l.contains("consumers")));
+    }
+
+    #[test]
+    fn literal_tokens_empty_for_all_slots() {
+        let t = Template::parse("{a}{b}{c}").unwrap();
+        assert!(t.literal_tokens().is_empty());
+    }
+
+    #[test]
+    fn literal_tokens_skips_partial_nodes() {
+        // Partial nodes are opaque at parse time; their literals are only
+        // reachable after engine expansion.
+        let t = Template::parse("prefix {>partial_name} suffix").unwrap();
+        let lits = t.literal_tokens();
+        assert_eq!(lits, vec!["prefix ", " suffix"]);
+    }
+
+    #[test]
+    fn literal_tokens_nested_conditional_recursion() {
+        // Conditional inside conditional should surface literals at all depths.
+        let t = Template::parse("{?a}outer{?b} inner{/?}{/?}").unwrap();
+        let lits = t.literal_tokens();
+        assert!(lits.iter().any(|l| l.contains("outer")));
+        assert!(lits.iter().any(|l| l.contains("inner")));
     }
 }
