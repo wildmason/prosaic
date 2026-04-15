@@ -270,10 +270,10 @@ impl<'e, 's> RenderCtx<'e, 's> {
         }
 
         // Clean up whitespace and silent-mode gaps
-        output = cleanup_artifacts(&output, self.engine.strictness);
+        cleanup_artifacts_in_place(&mut output, self.engine.strictness);
 
         // Terminate the sentence
-        output = terminate_sentence(&output);
+        terminate_sentence_in_place(&mut output);
 
         // Length budget
         #[cfg(feature = "polish")]
@@ -2086,58 +2086,46 @@ fn strip_it_aux_prefix(body: &str) -> Option<(&str, &str)> {
 ///    under `Strictness::Silent` because those gaps are the user's
 ///    explicit choice to swallow missing slots — the dangling fragments
 ///    are artifacts of that choice, not of the template's intent.
-fn cleanup_artifacts(output: &str, strictness: Strictness) -> String {
-    let mut s = collapse_and_tidy(output);
+fn cleanup_artifacts_in_place(output: &mut String, strictness: Strictness) {
+    collapse_and_tidy_in_place(output);
 
     if strictness == Strictness::Silent {
-        s = strip_dangling_tail_words(&s);
+        strip_dangling_tail_words_in_place(output);
     }
-
-    s
 }
 
 /// Collapse multi-space runs, strip whitespace before closing punctuation,
-/// and trim outer whitespace.
-fn collapse_and_tidy(s: &str) -> String {
-    // Collapse interior whitespace to single spaces while preserving
-    // meaningful content.
-    let mut result = String::with_capacity(s.len());
+/// and trim outer whitespace — mutates in place using a single scratch buffer swap.
+fn collapse_and_tidy_in_place(output: &mut String) {
+    // First pass: collapse whitespace runs, trim leading whitespace, and
+    // strip space before closing punctuation — all in one scan.
+    let mut scratch = String::with_capacity(output.len());
     let mut last_was_space = false;
     let mut started = false;
 
-    for c in s.chars() {
+    let chars: Vec<char> = output.chars().collect();
+    let len = chars.len();
+    let mut i = 0;
+    while i < len {
+        let c = chars[i];
         if c.is_whitespace() {
             if started {
                 last_was_space = true;
             }
         } else {
-            if last_was_space {
-                result.push(' ');
+            // If there's a pending space, only emit it if the next non-space
+            // char is not a closing-punctuation character.
+            if last_was_space && !matches!(c, ',' | '.' | '!' | '?' | ':' | ';' | ')' | ']') {
+                scratch.push(' ');
             }
-            result.push(c);
+            scratch.push(c);
             last_was_space = false;
             started = true;
         }
+        i += 1;
     }
 
-    // Strip space before closing punctuation that might have been
-    // introduced by the collapse above (unlikely, but cheap to handle).
-    // Iterate through and skip " <punct>" → "<punct>". Implemented as a
-    // second pass so the first stays simple.
-    let mut tidied = String::with_capacity(result.len());
-    let mut chars = result.chars().peekable();
-    while let Some(c) = chars.next() {
-        if c == ' '
-            && let Some(&next) = chars.peek()
-            && matches!(next, ',' | '.' | '!' | '?' | ':' | ';' | ')' | ']')
-        {
-            // drop the space
-            continue;
-        }
-        tidied.push(c);
-    }
-
-    tidied
+    std::mem::swap(output, &mut scratch);
 }
 
 /// Words that are almost always followed by an argument — if they're
@@ -2158,11 +2146,11 @@ const ORPHAN_TAIL_WORDS: &[&str] = &[
 /// Strip trailing words that were left orphaned by omitted slots. Repeats
 /// until no more matching tails remain — handles chained gaps like
 /// `"modified by in"`.
-fn strip_dangling_tail_words(s: &str) -> String {
-    let mut current = s.to_string();
+fn strip_dangling_tail_words_in_place(output: &mut String) {
     loop {
         // Consider any trailing punctuation separately — we'll preserve it.
-        let (body, tail_punct) = split_trailing_punct(&current);
+        let (body, _) = split_trailing_punct(output);
+        let body_len = body.len();
         let trimmed_body = body.trim_end();
 
         // Grab the last word
@@ -2170,24 +2158,27 @@ fn strip_dangling_tail_words(s: &str) -> String {
             Some(idx) => idx + 1,
             None => {
                 // Single word output — don't touch.
-                return current;
+                return;
             }
         };
         let last_word = &trimmed_body[last_word_start..];
         let last_word_lower = last_word.to_lowercase();
 
         if ORPHAN_TAIL_WORDS.contains(&last_word_lower.as_str()) {
-            // Strip the orphan and any whitespace before it; retain trailing punctuation.
-            let new_body = trimmed_body[..last_word_start].trim_end().to_string();
-            if new_body.is_empty() {
+            let new_body_end = trimmed_body[..last_word_start].trim_end().len();
+            if new_body_end == 0 {
                 // The whole output was orphans — bail out to avoid erasing content.
-                return current;
+                return;
             }
-            current = format!("{new_body}{tail_punct}");
+            // Build the new string: new_body + tail_punct
+            // tail_punct starts at byte offset body_len in `output`
+            let tail_punct_owned = output[body_len..].to_string();
+            output.truncate(new_body_end);
+            output.push_str(&tail_punct_owned);
             continue;
         }
 
-        return current;
+        return;
     }
 }
 
@@ -2207,34 +2198,34 @@ fn split_trailing_punct(s: &str) -> (&str, &str) {
 /// Append a period to the output if it appears to be a sentence without
 /// terminal punctuation. A sentence starts with a capital letter and has
 /// multiple words. Fragments (single words, lists) are not terminated.
-fn terminate_sentence(output: &str) -> String {
+fn terminate_sentence_in_place(output: &mut String) {
     let trimmed_end = output.trim_end();
     if trimmed_end.is_empty() {
-        return output.to_string();
+        return;
     }
 
     // Already ends with sentence-ending punctuation? Leave alone.
     let last = trimmed_end.chars().last().unwrap();
     if matches!(last, '.' | '!' | '?') {
-        return output.to_string();
+        return;
     }
 
     // Looks like a fragment (doesn't start with capital, or is short)?
     let first = trimmed_end.chars().next().unwrap();
     if !first.is_uppercase() {
-        return output.to_string();
+        return;
     }
 
     // Count words — single words or very short outputs are likely fragments
     let word_count = trimmed_end.split_whitespace().count();
     if word_count < 3 {
-        return output.to_string();
+        return;
     }
 
-    // Add period (before trailing whitespace if any)
-    let mut s = output.trim_end().to_string();
-    s.push('.');
-    s
+    // Trim trailing whitespace, then append period.
+    let trimmed_len = output.trim_end().len();
+    output.truncate(trimmed_len);
+    output.push('.');
 }
 
 /// Check if a template's first segment is a `refer` pipe, meaning the
