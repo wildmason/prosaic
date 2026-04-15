@@ -6,6 +6,7 @@ license.workspace = true
 description = "General-purpose natural language generation from structured data"
 
 [dependencies]
+ahash = { version = "0.8", default-features = false, features = ["std", "compile-time-rng"] }
 thiserror = "2"
 serde = { version = "1", features = ["derive"], optional = true }
 
@@ -15,7 +16,7 @@ default = ["time", "polish", "reg"]
 # Optional serde Serialize/Deserialize on Context, Value, EntityDescriptor,
 # RenderExplanation, VariantScore, and all configuration enums — enables
 # sending engine artefacts across JSON/MessagePack/etc. boundaries.
-serde = ["dep:serde"]
+serde = ["dep:serde", "ahash/serde"]
 
 # Relative-time pipe (`{ts|relative}`) and `engine.reference_time()`.
 # When disabled, the `relative` pipe is not registered and attempting

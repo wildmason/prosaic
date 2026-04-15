@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use ahash::AHashMap;
 
 /// A value that can be inserted into a rendering context.
 #[derive(Debug, Clone, PartialEq)]
@@ -41,7 +41,7 @@ impl Value {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(transparent))]
 pub struct Context {
-    values: HashMap<String, Value>,
+    values: AHashMap<String, Value>,
 }
 
 impl Context {
