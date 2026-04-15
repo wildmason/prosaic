@@ -7,11 +7,20 @@
 //! because it keeps saying the same word" effect that lingers even when
 //! templates themselves already vary.
 
+use ahash::AHashMap;
+
 /// Registry of synonym groups. Each group is an ordered list; ties in
 /// recency are broken by registration order (first-registered wins).
+///
+/// An inverted index (`index`) maps each lowercased word to its group so
+/// that [`synonyms_for`](SynonymRegistry::synonyms_for) is O(1) rather
+/// than O(groups × group_size).
 #[derive(Debug, Clone, Default)]
 pub struct SynonymRegistry {
     groups: Vec<Vec<String>>,
+    /// Lowercased word → index into `groups`. Populated on every
+    /// `register_group` call so lookups never scan linearly.
+    index: AHashMap<String, usize>,
 }
 
 impl SynonymRegistry {
@@ -25,8 +34,14 @@ impl SynonymRegistry {
         if words.is_empty() {
             return;
         }
-        self.groups
-            .push(words.iter().map(|w| w.to_string()).collect());
+        let group_idx = self.groups.len();
+        let group: Vec<String> = words.iter().map(|w| w.to_string()).collect();
+        // Pre-lowercase into the index so lookups are allocation-free on
+        // the index side (one allocation on the input word remains).
+        for w in &group {
+            self.index.insert(w.to_lowercase(), group_idx);
+        }
+        self.groups.push(group);
     }
 
     /// Look up the synonym group a word belongs to.
@@ -34,14 +49,8 @@ impl SynonymRegistry {
     /// Matching is case-insensitive. Returns `None` when the word is not
     /// registered in any group.
     pub fn synonyms_for(&self, word: &str) -> Option<&[String]> {
-        let lower = word.to_lowercase();
-        self.groups.iter().find_map(|group| {
-            if group.iter().any(|w| w.to_lowercase() == lower) {
-                Some(group.as_slice())
-            } else {
-                None
-            }
-        })
+        let key = word.to_lowercase();
+        self.index.get(&key).map(|&i| self.groups[i].as_slice())
     }
 
     pub fn is_empty(&self) -> bool {
