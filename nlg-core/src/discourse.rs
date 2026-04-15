@@ -250,21 +250,37 @@ impl DiscourseState {
 
         let distance = self.render_index.saturating_sub(mention.last_mentioned);
 
-        // If it's been too long, reintroduce with full form
+        // If it's been too long, reintroduce with full form.
         if distance >= ENTITY_REINTRODUCE_DISTANCE {
             return ReferenceForm::Full;
         }
 
-        // If it's the focus entity and was mentioned in the immediately previous
-        // render, and there's no ambiguity (only one recently active entity), use pronoun
-        if distance == 1
+        // Candidate for pronoun under existing distance/focus/ambiguity rules.
+        let pronoun_candidate = distance == 1
             && self.focus_entity.as_deref() == Some(name)
-            && !self.has_ambiguity(name)
-        {
-            return ReferenceForm::Pronoun;
+            && !self.has_ambiguity(name);
+
+        if pronoun_candidate {
+            // Centering Theory Rule 1 gate:
+            //   If any element of Cf(Ui) is realized as a pronoun in Ui+1,
+            //   then the Cb(Ui+1) must also be realized as a pronoun.
+            //
+            // Practically: only pronominalize when the referent IS the Cb, or
+            // when there is no Cb yet (fresh discourse / post-reset / first
+            // named entity). If the Cb is a *different* entity, demoting to
+            // ShortName avoids an ambiguous pronoun resolution.
+            match self.cb.as_deref() {
+                // No Cb yet (first render or post-reset) — fall through to pronoun.
+                None => return ReferenceForm::Pronoun,
+                // Referent IS the Cb — Rule 1 permits pronominalization.
+                Some(cb_name) if cb_name == name => return ReferenceForm::Pronoun,
+                // Referent is NOT the Cb — Rule 1 demotes to ShortName to
+                // prevent an ambiguous pronoun whose referent is the Cb entity.
+                Some(_) => return ReferenceForm::ShortName,
+            }
         }
 
-        // Otherwise use the short name
+        // Short name for entities mentioned recently but not pronoun-eligible.
         if distance > 0 && distance < ENTITY_REINTRODUCE_DISTANCE {
             return ReferenceForm::ShortName;
         }
@@ -481,9 +497,6 @@ impl DiscourseState {
     /// along with all other fields via `Clone`.
     ///
     /// Called by `Engine::render_tx` at the end of each successful render.
-    // `advance_cb` is called from engine.rs (added in Phase 2). The allow
-    // suppresses the Phase 1 dead-code lint; removed once the engine call lands.
-    #[allow(dead_code)]
     pub fn advance_cb(&mut self) {
         self.compute_cb_transition();
     }

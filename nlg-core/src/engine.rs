@@ -321,6 +321,11 @@ impl<'e, 's> RenderCtx<'e, 's> {
         // Record output words for future repetition scoring
         self.session.discourse.record_output_words(&output);
 
+        // Advance Cb (backward-looking center) for the next render.
+        // Must be the last mutation so failed renders don't advance Cb
+        // — the snapshot/restore path in render() rolls back via Clone.
+        self.session.discourse.advance_cb();
+
         Ok(output)
     }
 
