@@ -258,15 +258,20 @@ impl<'e, 's> RenderCtx<'e, 's> {
         // Prepend discourse connective if applicable
         if let Some(conn) = connective {
             if conn.starts_with("It ") {
-                output = prepend_replacing_subject(&output, conn);
+                prepend_replacing_subject_in_place(&mut output, conn);
             } else {
-                output = format!("{conn} {}", lowercase_first(&output));
+                lowercase_first_in_place(&mut output);
+                let mut buf = String::with_capacity(conn.len() + 1 + output.len());
+                buf.push_str(conn);
+                buf.push(' ');
+                buf.push_str(&output);
+                std::mem::swap(&mut output, &mut buf);
             }
         }
 
         // Capitalize if the template starts with a refer pipe
         if starts_with_refer_pipe(template) {
-            output = capitalize_first(&output);
+            capitalize_first_in_place(&mut output);
         }
 
         // Clean up whitespace and silent-mode gaps
@@ -593,7 +598,9 @@ impl<'e, 's> RenderCtx<'e, 's> {
             .map(|c| c.is_uppercase())
             .unwrap_or(false)
         {
-            capitalize_first(best)
+            let mut s = best.clone();
+            capitalize_first_in_place(&mut s);
+            s
         } else {
             best.clone()
         };
@@ -724,9 +731,9 @@ impl<'e, 's> RenderCtx<'e, 's> {
     }
 
     fn pipe_capitalize(&self, value: &Value) -> Result<Value, NlgError> {
-        let s = value.as_display();
-        let capitalized = capitalize_first(&s);
-        Ok(Value::String(capitalized))
+        let mut s = value.as_display();
+        capitalize_first_in_place(&mut s);
+        Ok(Value::String(s))
     }
 
     fn pipe_negated(&self, value: &Value) -> Result<Value, NlgError> {
@@ -2239,48 +2246,49 @@ fn starts_with_refer_pipe(template: &Template) -> bool {
     }
 }
 
-fn capitalize_first(s: &str) -> String {
-    let mut chars = s.chars();
-    match chars.next() {
-        None => String::new(),
-        Some(c) => {
-            let mut result = String::with_capacity(s.len());
-            for upper in c.to_uppercase() {
-                result.push(upper);
-            }
-            result.extend(chars);
-            result
-        }
-    }
+fn capitalize_first_in_place(output: &mut String) {
+    let first = match output.chars().next() {
+        Some(c) if c.is_lowercase() => c,
+        _ => return,
+    };
+    let first_len = first.len_utf8();
+    let upper: String = first.to_uppercase().collect();
+    output.replace_range(0..first_len, &upper);
 }
 
-fn lowercase_first(s: &str) -> String {
-    let mut chars = s.chars();
-    match chars.next() {
-        None => String::new(),
-        Some(c) => {
-            let mut result = String::with_capacity(s.len());
-            for lower in c.to_lowercase() {
-                result.push(lower);
-            }
-            result.extend(chars);
-            result
-        }
-    }
+fn lowercase_first_in_place(output: &mut String) {
+    let first = match output.chars().next() {
+        Some(c) if c.is_uppercase() => c,
+        _ => return,
+    };
+    let first_len = first.len_utf8();
+    let lower: String = first.to_lowercase().collect();
+    output.replace_range(0..first_len, &lower);
 }
 
 /// Try to replace "The {type} {name} was ..." with a connective like "It also was ..."
-fn prepend_replacing_subject(output: &str, connective: &str) -> String {
+fn prepend_replacing_subject_in_place(output: &mut String, connective: &str) {
     // Look for pattern: "The <word> <word> was" or "The <word> <word> has"
     if let Some(rest) = output.strip_prefix("The ") {
         // Skip entity_type and name (two words)
         let words: Vec<&str> = rest.splitn(3, ' ').collect();
         if words.len() >= 3 {
-            return format!("{connective} {}", words[2..].join(" "));
+            let tail = words[2..].join(" ");
+            let mut buf = String::with_capacity(connective.len() + 1 + tail.len());
+            buf.push_str(connective);
+            buf.push(' ');
+            buf.push_str(&tail);
+            std::mem::swap(output, &mut buf);
+            return;
         }
     }
-    // Fallback: just prepend
-    format!("{connective} {}", lowercase_first(output))
+    // Fallback: lowercase the first char then prepend the connective.
+    lowercase_first_in_place(output);
+    let mut buf = String::with_capacity(connective.len() + 1 + output.len());
+    buf.push_str(connective);
+    buf.push(' ');
+    buf.push_str(output);
+    std::mem::swap(output, &mut buf);
 }
 
 /// Filter templates to those matching the target salience level.
