@@ -5,6 +5,8 @@ members = [
     "nlg-grammar-en",
     "nlg-derive",
     "nlg-vocab-code",
+    "nlg-vocab-git",
+    "nlg-cli",
 ]
 
 [workspace.package]

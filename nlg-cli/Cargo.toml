@@ -1,0 +1,18 @@
+[package]
+name = "nlg-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Command-line front-end to the nlg crate: JSON-lines events in, rendered text out"
+
+[[bin]]
+name = "nlg"
+path = "src/main.rs"
+
+[dependencies]
+nlg-core = { path = "../nlg-core", features = ["serde"] }
+nlg-grammar-en = { path = "../nlg-grammar-en" }
+nlg-vocab-code = { path = "../nlg-vocab-code" }
+nlg-vocab-git = { path = "../nlg-vocab-git" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
