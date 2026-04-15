@@ -252,8 +252,9 @@ impl<'e, 's> RenderCtx<'e, 's> {
         // Record template choice
         self.session.discourse.record_template_choice(key, variant_index);
 
-        // Render the selected template.
-        let mut output = self.render_template(key, template, context)?;
+        // Render the selected template into a preallocated buffer.
+        let mut output = String::with_capacity(128);
+        self.render_template_into(&mut output, key, template, context)?;
 
         // Prepend discourse connective if applicable
         if let Some(conn) = connective {
@@ -336,18 +337,20 @@ impl<'e, 's> RenderCtx<'e, 's> {
         let snapshot = self.session.clone();
 
         let mut candidates: Vec<(usize, String)> = Vec::new();
+        let mut scratch = String::with_capacity(128);
         for (i, template) in alternatives.iter().enumerate() {
             if Some(i) == last_variant {
                 continue;
             }
-            let candidate = match self.render_template(key, template, context) {
-                Ok(s) => s,
+            scratch.clear();
+            match self.render_template_into(&mut scratch, key, template, context) {
+                Ok(()) => {}
                 Err(e) => {
                     *self.session = snapshot;
                     return Err(e);
                 }
-            };
-            candidates.push((i, candidate));
+            }
+            candidates.push((i, scratch.clone()));
         }
 
         *self.session = snapshot;
@@ -398,40 +401,38 @@ impl<'e, 's> RenderCtx<'e, 's> {
         }
     }
 
-    fn render_template(
+    fn render_template_into(
         &mut self,
+        out: &mut String,
         key: &str,
         template: &Template,
         context: &Context,
-    ) -> Result<String, NlgError> {
-        self.render_segments(key, &template.segments, context)
+    ) -> Result<(), NlgError> {
+        self.render_segments_into(out, key, &template.segments, context)
     }
 
-    fn render_segments(
+    fn render_segments_into(
         &mut self,
+        out: &mut String,
         key: &str,
         segments: &[Segment],
         context: &Context,
-    ) -> Result<String, NlgError> {
-        let mut output = String::new();
-
+    ) -> Result<(), NlgError> {
         for segment in segments {
             match segment {
-                Segment::Literal(text) => output.push_str(text),
+                Segment::Literal(text) => out.push_str(text),
                 Segment::Slot {
                     key: slot_key,
                     pipes,
                 } => {
-                    let rendered = self.render_slot(key, slot_key, pipes, context)?;
-                    output.push_str(&rendered);
+                    self.render_slot_into(out, key, slot_key, pipes, context)?;
                 }
                 Segment::Conditional {
                     condition_key,
                     inner,
                 } => {
                     if is_truthy(context.get(condition_key)) {
-                        let rendered = self.render_segments(key, inner, context)?;
-                        output.push_str(&rendered);
+                        self.render_segments_into(out, key, inner, context)?;
                     }
                 }
                 Segment::Partial { name } => {
@@ -445,29 +446,34 @@ impl<'e, 's> RenderCtx<'e, 's> {
                             ),
                         }
                     })?.segments.clone();
-                    let rendered = self.render_segments(key, &partial_segments, context)?;
-                    output.push_str(&rendered);
+                    self.render_segments_into(out, key, &partial_segments, context)?;
                 }
             }
         }
 
-        Ok(output)
+        Ok(())
     }
 
-    fn render_slot(
+    fn render_slot_into(
         &mut self,
+        out: &mut String,
         template_key: &str,
         slot_key: &str,
         pipes: &[Pipe],
         context: &Context,
-    ) -> Result<String, NlgError> {
+    ) -> Result<(), NlgError> {
         let value = match context.get(slot_key) {
             Some(v) => v.clone(),
-            None => return self.handle_missing_slot(template_key, slot_key),
+            None => {
+                let s = self.handle_missing_slot(template_key, slot_key)?;
+                out.push_str(&s);
+                return Ok(());
+            }
         };
 
         if pipes.is_empty() {
-            return Ok(value.as_display());
+            out.push_str(&value.as_display());
+            return Ok(());
         }
 
         let mut current = value;
@@ -475,7 +481,8 @@ impl<'e, 's> RenderCtx<'e, 's> {
             current = self.apply_pipe(pipe, &current, context)?;
         }
 
-        Ok(current.as_display())
+        out.push_str(&current.as_display());
+        Ok(())
     }
 
     fn handle_missing_slot(
@@ -876,19 +883,21 @@ impl<'e, 's> RenderCtx<'e, 's> {
 
         let last_variant = self.session.discourse.last_template_variant(key);
         let mut scores: Vec<VariantScore> = Vec::with_capacity(alternatives.len());
+        let mut scratch = String::with_capacity(128);
 
         for (i, template) in alternatives.iter().enumerate() {
-            let candidate = match self.render_template(key, template, ctx) {
-                Ok(s) => s,
+            scratch.clear();
+            match self.render_template_into(&mut scratch, key, template, ctx) {
+                Ok(()) => {}
                 Err(e) => {
                     *self.session = snapshot;
                     return Err(e);
                 }
-            };
+            }
             scores.push(VariantScore {
                 index: i,
                 source: template.source.clone(),
-                rendered: candidate,
+                rendered: scratch.clone(),
                 score: 0.0,
                 salience: target_salience,
                 is_last_selected: Some(i) == last_variant,
@@ -1328,7 +1337,8 @@ impl Engine {
     ) -> Result<String, NlgError> {
         let template = Template::parse(source)?;
         let context = context.into_context();
-        let output = RenderCtx::new(self, session).render_template("<inline>", &template, &context)?;
+        let mut output = String::with_capacity(128);
+        RenderCtx::new(self, session).render_template_into(&mut output, "<inline>", &template, &context)?;
         session.discourse.record_output_words(&output);
         Ok(output)
     }
@@ -1511,10 +1521,12 @@ impl Engine {
                 let snapshot = scoring_session.clone();
                 let mut scored: Vec<f64> = Vec::with_capacity(alternatives.len());
                 let mut scoring_failed = false;
+                let mut scratch = String::with_capacity(128);
                 for template in &alternatives {
-                    match RenderCtx::new(self, &mut scoring_session).render_template(key, template, &context) {
-                        Ok(candidate) => {
-                            let score = scoring_session.discourse.repetition_score(&candidate);
+                    scratch.clear();
+                    match RenderCtx::new(self, &mut scoring_session).render_template_into(&mut scratch, key, template, &context) {
+                        Ok(()) => {
+                            let score = scoring_session.discourse.repetition_score(&scratch);
                             scored.push(score);
                         }
                         Err(_) => {
