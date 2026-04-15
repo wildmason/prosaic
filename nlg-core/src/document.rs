@@ -3,6 +3,78 @@ use crate::engine::Engine;
 use crate::error::NlgError;
 use crate::salience::Salience;
 
+/// Rhetorical classification of an event based on its template key.
+///
+/// Used by [`DocumentPlan::from_events_grouped`] to organize a batch of
+/// events into thematic sections — a breaking-changes paragraph, an
+/// additions paragraph, etc. — instead of the default same-entity grouping.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum RhetoricalCategory {
+    /// Deletions, removals — typically breaking changes. Leads the narrative.
+    Removal,
+    /// New entities, features, introductions.
+    Addition,
+    /// Modifications, renames, moves, signature changes — existing code
+    /// that was altered.
+    Modification,
+    /// Anything the default classifier doesn't recognize.
+    Other,
+}
+
+/// How events should be grouped into paragraphs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum GroupingStrategy {
+    /// Group consecutive events that share an entity name; sort paragraphs
+    /// by highest salience first. This is the default and produces tight,
+    /// entity-focused narratives.
+    #[default]
+    ByEntity,
+    /// Group events by rhetorical category (removals, additions, each
+    /// modification sub-type). Produces section-style narratives useful
+    /// for release notes or high-level change summaries. Within a
+    /// category, events are further grouped by entity so multiple changes
+    /// to the same entity still flow together.
+    ByAction,
+}
+
+/// Default template-key classifier used by [`GroupingStrategy::ByAction`].
+///
+/// Looks at the last dotted segment of the key and maps well-known action
+/// names to [`RhetoricalCategory`]:
+///
+/// - `deleted`, `removed` → [`RhetoricalCategory::Removal`]
+/// - `added`, `created`, `introduced` → [`RhetoricalCategory::Addition`]
+/// - `modified`, `updated`, `renamed`, `moved`, `signature_changed` →
+///   [`RhetoricalCategory::Modification`]
+/// - anything else → [`RhetoricalCategory::Other`]
+///
+/// Use [`DocumentPlan::from_events_classified`] to supply a custom
+/// classifier when the defaults don't fit the domain.
+pub fn default_classifier(key: &str) -> RhetoricalCategory {
+    let action = key.rsplit('.').next().unwrap_or("");
+    match action {
+        "deleted" | "removed" => RhetoricalCategory::Removal,
+        "added" | "created" | "introduced" => RhetoricalCategory::Addition,
+        "modified" | "updated" | "renamed" | "moved" | "signature_changed" => {
+            RhetoricalCategory::Modification
+        }
+        _ => RhetoricalCategory::Other,
+    }
+}
+
+/// Convention-ordered list of categories (Removal first — breaking changes
+/// are usually the most important signal in a change report).
+fn category_order() -> [RhetoricalCategory; 4] {
+    [
+        RhetoricalCategory::Removal,
+        RhetoricalCategory::Addition,
+        RhetoricalCategory::Modification,
+        RhetoricalCategory::Other,
+    ]
+}
+
 /// A paragraph in a document plan — a group of related events rendered together.
 #[derive(Debug, Clone)]
 pub struct Paragraph {
@@ -10,6 +82,9 @@ pub struct Paragraph {
     pub events: Vec<(String, Context)>,
     /// The highest salience in this paragraph, used for ordering.
     pub salience: Salience,
+    /// Rhetorical category, when the plan was built with
+    /// [`GroupingStrategy::ByAction`]. `None` for entity-grouped plans.
+    pub category: Option<RhetoricalCategory>,
 }
 
 impl Paragraph {
@@ -17,6 +92,7 @@ impl Paragraph {
         Self {
             events: Vec::new(),
             salience: Salience::Low,
+            category: None,
         }
     }
 
@@ -54,35 +130,143 @@ impl DocumentPlan {
         }
     }
 
-    /// Build a document plan from a flat set of events.
+    /// Build a document plan from a flat set of events, using the default
+    /// entity-grouping strategy.
     ///
-    /// Organization strategy:
+    /// Organization:
     /// 1. Assign each event a salience (from context or explicit thresholds).
     /// 2. Group consecutive events that share an entity into the same paragraph.
     /// 3. Order paragraphs by highest-salience first.
     ///
     /// Within a paragraph, events keep their original order (which the engine's
     /// discourse state can then leverage for pronouns and connectives).
-    pub fn from_events(
+    ///
+    /// To group by action category instead, use
+    /// [`DocumentPlan::from_events_grouped`] or
+    /// [`DocumentPlan::from_events_classified`].
+    pub fn from_events(events: &[(&str, Context)], engine: &Engine) -> Self {
+        Self::from_events_grouped(events, engine, GroupingStrategy::ByEntity)
+    }
+
+    /// Build a document plan with an explicit grouping strategy.
+    pub fn from_events_grouped(
         events: &[(&str, Context)],
         engine: &Engine,
+        strategy: GroupingStrategy,
     ) -> Self {
+        match strategy {
+            GroupingStrategy::ByEntity => Self::build_by_entity(events, engine),
+            GroupingStrategy::ByAction => {
+                Self::from_events_classified(events, engine, default_classifier)
+            }
+        }
+    }
+
+    /// Build a [`GroupingStrategy::ByAction`] plan with a custom classifier.
+    /// Useful when template keys don't match the default classifier's
+    /// vocabulary (e.g., domain-specific verbs like `"issue.closed"`).
+    pub fn from_events_classified<F>(
+        events: &[(&str, Context)],
+        engine: &Engine,
+        classifier: F,
+    ) -> Self
+    where
+        F: Fn(&str) -> RhetoricalCategory,
+    {
         let mut plan = Self::new();
         if events.is_empty() {
             return plan;
         }
 
-        // Group consecutive events that share an entity name into paragraphs
+        // Bucket events by category, preserving input order within each.
+        use std::collections::BTreeMap;
+        let mut buckets: BTreeMap<RhetoricalCategory, Vec<(String, Context)>> =
+            BTreeMap::new();
+
+        for (key, ctx) in events {
+            let category = classifier(key);
+            buckets
+                .entry(category)
+                .or_default()
+                .push((key.to_string(), ctx.clone()));
+        }
+
+        // Walk categories in the canonical rhetorical order. For each
+        // non-empty bucket, sub-group by entity (so multiple changes to
+        // the same thing still cluster together) and emit a paragraph.
+        for category in category_order() {
+            let bucket = match buckets.remove(&category) {
+                Some(b) if !b.is_empty() => b,
+                _ => continue,
+            };
+
+            let mut para = Paragraph::new();
+            para.category = Some(category);
+            let mut current_entity: Option<String> = None;
+
+            // Sort within the bucket so that events sharing an entity are
+            // adjacent — stable to preserve user-provided ordering among
+            // entity-free events.
+            let mut sorted = bucket;
+            sorted.sort_by(|a, b| entity_key(&a.1).cmp(&entity_key(&b.1)));
+
+            for (key, ctx) in sorted {
+                let salience = engine.context_salience(&ctx);
+                let entity_name = entity_key(&ctx);
+
+                // When the entity changes within a category, flush the
+                // current paragraph and start a new one. This keeps
+                // pronouns/connectives working within a run of same-entity
+                // events and avoids awkward co-reference across unrelated
+                // entities inside one paragraph.
+                let same_entity = match (&current_entity, &entity_name) {
+                    (Some(a), Some(b)) => a == b,
+                    (None, None) => true,
+                    _ => false,
+                };
+
+                if !same_entity && !para.is_empty() {
+                    plan.paragraphs.push(std::mem::take(&mut para));
+                    para.category = Some(category);
+                }
+
+                para.push(key, ctx, salience);
+                current_entity = entity_name;
+            }
+
+            if !para.is_empty() {
+                plan.paragraphs.push(para);
+            }
+        }
+
+        // Any categories Left over (shouldn't happen since we iterate all
+        // four, but defensive): append in arbitrary but stable order.
+        for (category, bucket) in buckets {
+            let mut para = Paragraph::new();
+            para.category = Some(category);
+            for (key, ctx) in bucket {
+                let salience = engine.context_salience(&ctx);
+                para.push(key, ctx, salience);
+            }
+            plan.paragraphs.push(para);
+        }
+
+        plan
+    }
+
+    fn build_by_entity(events: &[(&str, Context)], engine: &Engine) -> Self {
+        let mut plan = Self::new();
+        if events.is_empty() {
+            return plan;
+        }
+
         let mut current = Paragraph::new();
         let mut current_entity: Option<String> = None;
 
         for (key, ctx) in events {
             let ctx = ctx.clone();
             let salience = engine.context_salience(&ctx);
-            let entity_name = ctx
-                .get("name")
-                .or_else(|| ctx.get("old_name"))
-                .map(|v| v.as_display());
+            let entity_name = entity_key(&ctx);
 
             let same_entity = match (&current_entity, &entity_name) {
                 (Some(a), Some(b)) => a == b,
@@ -136,6 +320,13 @@ impl DocumentPlan {
     }
 }
 
+/// Extract the primary entity-name key from a render context.
+fn entity_key(ctx: &Context) -> Option<String> {
+    ctx.get("name")
+        .or_else(|| ctx.get("old_name"))
+        .map(|v| v.as_display())
+}
+
 impl Default for DocumentPlan {
     fn default() -> Self {
         Self::new()
@@ -161,6 +352,7 @@ mod tests {
         fn article(&self, _word: &str) -> &str { "a" }
         fn conjugate(&self, verb: &str, _t: Tense, _p: Person) -> String { verb.to_string() }
         fn past_participle(&self, verb: &str) -> String { format!("{verb}ed") }
+        fn present_participle(&self, verb: &str) -> String { format!("{verb}ing") }
         fn join_list(&self, items: &[&str], _c: Conjunction) -> String {
             items.join(", ")
         }
@@ -256,5 +448,157 @@ mod tests {
         let rendered = plan.render(&engine).unwrap();
 
         assert!(rendered.contains("\n\n"), "Expected paragraph break, got: {rendered}");
+    }
+
+    // ── Rhetorical grouping ──────────────────────────────────────────────
+
+    fn ctx_with_entity(name: &str, count: i64) -> Context {
+        let mut c = Context::new();
+        c.insert("entity_type", Value::String("class".into()));
+        c.insert("name", Value::String(name.into()));
+        c.insert("consumer_count", Value::Number(count));
+        c
+    }
+
+    #[test]
+    fn default_classifier_buckets_common_keys() {
+        assert_eq!(default_classifier("code.deleted"), RhetoricalCategory::Removal);
+        assert_eq!(default_classifier("code.removed"), RhetoricalCategory::Removal);
+        assert_eq!(default_classifier("code.added"), RhetoricalCategory::Addition);
+        assert_eq!(default_classifier("code.introduced"), RhetoricalCategory::Addition);
+        assert_eq!(
+            default_classifier("code.modified"),
+            RhetoricalCategory::Modification,
+        );
+        assert_eq!(
+            default_classifier("code.renamed"),
+            RhetoricalCategory::Modification,
+        );
+        assert_eq!(
+            default_classifier("code.signature_changed"),
+            RhetoricalCategory::Modification,
+        );
+        assert_eq!(default_classifier("random"), RhetoricalCategory::Other);
+        assert_eq!(default_classifier(""), RhetoricalCategory::Other);
+    }
+
+    #[test]
+    fn by_action_groups_removals_before_additions_before_modifications() {
+        let engine = test_engine();
+
+        let events: Vec<(&str, Context)> = vec![
+            ("code.modified", ctx_with_entity("A", 1)),
+            ("code.added", ctx_with_entity("B", 1)),
+            ("code.deleted", ctx_with_entity("C", 1)),
+        ];
+
+        let plan = DocumentPlan::from_events_grouped(
+            &events,
+            &engine,
+            GroupingStrategy::ByAction,
+        );
+
+        // Removal first, then Addition, then Modification.
+        assert_eq!(plan.paragraphs.len(), 3);
+        assert_eq!(
+            plan.paragraphs[0].category,
+            Some(RhetoricalCategory::Removal)
+        );
+        assert_eq!(
+            plan.paragraphs[1].category,
+            Some(RhetoricalCategory::Addition)
+        );
+        assert_eq!(
+            plan.paragraphs[2].category,
+            Some(RhetoricalCategory::Modification)
+        );
+    }
+
+    #[test]
+    fn by_action_splits_paragraphs_within_category_on_entity_change() {
+        let engine = test_engine();
+
+        // Two modifications, different entities → two paragraphs in the
+        // Modification section so pronouns don't cross-link them.
+        let events: Vec<(&str, Context)> = vec![
+            ("code.modified", ctx_with_entity("Alpha", 1)),
+            ("code.modified", ctx_with_entity("Beta", 1)),
+        ];
+
+        let plan = DocumentPlan::from_events_grouped(
+            &events,
+            &engine,
+            GroupingStrategy::ByAction,
+        );
+
+        assert_eq!(plan.paragraphs.len(), 2);
+        for p in &plan.paragraphs {
+            assert_eq!(p.category, Some(RhetoricalCategory::Modification));
+            assert_eq!(p.events.len(), 1);
+        }
+    }
+
+    #[test]
+    fn by_action_keeps_same_entity_events_together_within_category() {
+        let engine = test_engine();
+
+        let events: Vec<(&str, Context)> = vec![
+            ("code.modified", ctx_with_entity("Alpha", 1)),
+            ("code.renamed", ctx_with_entity("Alpha", 1)),
+        ];
+
+        let plan = DocumentPlan::from_events_grouped(
+            &events,
+            &engine,
+            GroupingStrategy::ByAction,
+        );
+
+        // Both are Modification category, same entity → one paragraph, two events.
+        assert_eq!(plan.paragraphs.len(), 1);
+        assert_eq!(plan.paragraphs[0].events.len(), 2);
+    }
+
+    #[test]
+    fn from_events_classified_accepts_custom_classifier() {
+        let engine = test_engine();
+
+        let events: Vec<(&str, Context)> = vec![
+            ("issue.closed", ctx_with_entity("Bug1", 1)),
+            ("issue.opened", ctx_with_entity("Bug2", 1)),
+        ];
+
+        let plan = DocumentPlan::from_events_classified(&events, &engine, |key| {
+            match key.rsplit('.').next().unwrap_or("") {
+                "closed" => RhetoricalCategory::Removal,
+                "opened" => RhetoricalCategory::Addition,
+                _ => RhetoricalCategory::Other,
+            }
+        });
+
+        assert_eq!(plan.paragraphs.len(), 2);
+        assert_eq!(
+            plan.paragraphs[0].category,
+            Some(RhetoricalCategory::Removal)
+        );
+        assert_eq!(
+            plan.paragraphs[1].category,
+            Some(RhetoricalCategory::Addition)
+        );
+    }
+
+    #[test]
+    fn by_entity_grouping_still_default() {
+        let engine = test_engine();
+
+        let events: Vec<(&str, Context)> = vec![
+            ("code.modified", ctx_with_entity("Alpha", 1)),
+            ("code.modified", ctx_with_entity("Alpha", 1)),
+        ];
+
+        let plan = DocumentPlan::from_events(&events, &engine);
+        // Default remains the ByEntity strategy — same-entity consecutive
+        // events end up in one paragraph.
+        assert_eq!(plan.paragraphs.len(), 1);
+        assert!(plan.paragraphs[0].category.is_none());
     }
 }

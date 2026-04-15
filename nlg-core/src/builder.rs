@@ -1,15 +1,6 @@
 use crate::engine::Engine;
 use crate::error::NlgError;
-use crate::language::{Conjunction, Tense};
-
-/// Voice controls whether the verb is rendered in active or passive form.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Voice {
-    /// Active voice: "Foo renamed Foobar"
-    Active,
-    /// Passive voice: "Foo was renamed to Foobar"
-    Passive,
-}
+use crate::language::{Conjunction, Person, Tense, VerbForm, Voice};
 
 /// A subject in a sentence, optionally with an entity type prefix.
 #[derive(Debug, Clone)]
@@ -143,11 +134,18 @@ impl Clause {
 }
 
 /// Builder for constructing sentences programmatically.
+///
+/// The verb is specified either by a simple tense (via `.verb(word, Tense)`)
+/// or a full verb form (via `.form(VerbForm)`). The latter unlocks richer
+/// constructions like "has been renamed" (present perfect passive) or
+/// "is being renamed" (present progressive passive).
 #[derive(Debug, Clone)]
 pub struct Sentence {
     subject: Option<Subject>,
-    verb: Option<(String, Tense)>,
+    verb: Option<String>,
+    form: VerbForm,
     voice: Voice,
+    person: Person,
     preposition: Option<String>,
     object: Option<String>,
     clauses: Vec<Clause>,
@@ -158,7 +156,9 @@ impl Sentence {
         Self {
             subject: None,
             verb: None,
+            form: VerbForm::SimplePast,
             voice: Voice::Passive,
+            person: Person::Third,
             preposition: None,
             object: None,
             clauses: Vec::new(),
@@ -171,9 +171,26 @@ impl Sentence {
         self
     }
 
-    /// Set the verb and its tense.
+    /// Set the verb and its simple tense (Past / Present / Future).
+    /// Implies `Aspect::Simple` and `Mood::Indicative`. For richer forms
+    /// use [`Sentence::form`].
     pub fn verb(mut self, verb: &str, tense: Tense) -> Self {
-        self.verb = Some((verb.to_string(), tense));
+        self.verb = Some(verb.to_string());
+        self.form = VerbForm::from(tense);
+        self
+    }
+
+    /// Set the verb form (tense × aspect × mood) directly. Pair with
+    /// a verb set via [`Sentence::verb_word`] or a prior [`Sentence::verb`].
+    pub fn form(mut self, form: VerbForm) -> Self {
+        self.form = form;
+        self
+    }
+
+    /// Set just the verb word, leaving the existing form in place. Useful
+    /// when `form(…)` was used and a base verb is set separately.
+    pub fn verb_word(mut self, verb: &str) -> Self {
+        self.verb = Some(verb.to_string());
         self
     }
 
@@ -183,6 +200,13 @@ impl Sentence {
     /// - `Voice::Active`: "The class Foo renamed Foobar"
     pub fn voice(mut self, voice: Voice) -> Self {
         self.voice = voice;
+        self
+    }
+
+    /// Set the grammatical person used to conjugate auxiliaries
+    /// (default: Third).
+    pub fn person(mut self, person: Person) -> Self {
+        self.person = person;
         self
     }
 
@@ -219,26 +243,10 @@ impl Sentence {
             }
         }
 
-        // Verb (with voice handling)
-        if let Some((ref verb, tense)) = self.verb {
-            match self.voice {
-                Voice::Passive if tense == Tense::Past => {
-                    let participle = lang.past_participle(verb);
-                    parts.push(format!("was {participle}"));
-                }
-                Voice::Passive if tense == Tense::Present => {
-                    let participle = lang.past_participle(verb);
-                    parts.push(format!("is {participle}"));
-                }
-                Voice::Passive if tense == Tense::Future => {
-                    let participle = lang.past_participle(verb);
-                    parts.push(format!("will be {participle}"));
-                }
-                _ => {
-                    let conjugated = lang.conjugate(verb, tense, crate::language::Person::Third);
-                    parts.push(conjugated);
-                }
-            }
+        // Verb phrase — fully composed through the language's verb_phrase hook.
+        if let Some(ref verb) = self.verb {
+            let phrase = lang.verb_phrase(verb, self.form, self.voice, self.person);
+            parts.push(phrase);
         }
 
         // Object (with preposition)
@@ -303,14 +311,20 @@ mod tests {
             }
         }
         fn conjugate(&self, verb: &str, tense: Tense, _person: Person) -> String {
-            match tense {
-                Tense::Past => format!("{verb}ed"),
-                Tense::Present => verb.to_string(),
-                Tense::Future => format!("will {verb}"),
+            match (verb, tense) {
+                ("be", Tense::Past) => "was".to_string(),
+                ("be", Tense::Present) => "is".to_string(),
+                ("have", Tense::Present) => "has".to_string(),
+                (_, Tense::Past) => format!("{verb}ed"),
+                (_, Tense::Present) => verb.to_string(),
+                (_, Tense::Future) => format!("will {verb}"),
             }
         }
         fn past_participle(&self, verb: &str) -> String {
             format!("{verb}ed")
+        }
+        fn present_participle(&self, verb: &str) -> String {
+            format!("{verb}ing")
         }
         fn join_list(&self, items: &[&str], conjunction: Conjunction) -> String {
             let conj = match conjunction {

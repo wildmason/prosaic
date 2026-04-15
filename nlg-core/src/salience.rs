@@ -4,20 +4,16 @@ use crate::context::{Context, Value};
 ///
 /// Templates can be registered for specific salience levels, and the engine
 /// selects the appropriate level based on event magnitude.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Salience {
     /// Minor changes — single-consumer or no-impact. Brief, often parenthetical.
     Low,
     /// Standard changes — the default verbosity level.
+    #[default]
     Medium,
     /// Major changes — high impact, deserves elaboration.
     High,
-}
-
-impl Default for Salience {
-    fn default() -> Self {
-        Self::Medium
-    }
 }
 
 /// Thresholds for automatic salience derivation from context.

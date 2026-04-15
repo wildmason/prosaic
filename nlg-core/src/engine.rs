@@ -5,14 +5,27 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use crate::context::{Context, IntoContext, Value};
 use crate::discourse::{DiscourseState, ListStyle, ReferenceForm};
 use crate::error::NlgError;
-use crate::language::{Conjunction, Language};
+use crate::language::{Conjunction, Language, Person, VerbForm};
+use crate::antonyms::{insert_not, AntonymRegistry};
+use crate::hedge::{hedge as hedge_fn, parse_mode as parse_hedge_mode, HedgeMode};
+#[cfg(feature = "polish")]
+use crate::length::split_long;
+#[cfg(feature = "polish")]
+use crate::punctuation::smart_quotes;
+use crate::quantify::{parse_mode as parse_quantify_mode, quantify as quantify_fn, QuantifyMode};
+#[cfg(feature = "reg")]
+use crate::reg::{distinguishing_attributes, EntityDescriptor, EntityRegistry};
 use crate::salience::{Salience, SalienceThresholds};
+use crate::synonyms::SynonymRegistry;
 use crate::template::{Pipe, PipeArg, Segment, Template};
+#[cfg(feature = "time")]
+use crate::time::format_relative;
 
 /// Controls how missing slots are handled during rendering.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Strictness {
     /// Missing slot produces an error.
+    #[default]
     Strict,
     /// Missing slot renders as `[missing: slot_name]`.
     Lenient,
@@ -20,34 +33,148 @@ pub enum Strictness {
     Silent,
 }
 
-impl Default for Strictness {
-    fn default() -> Self {
-        Self::Strict
-    }
-}
-
 /// Controls how template alternatives are selected.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// `Fixed` and `RoundRobin` are literal: they honour the contract exactly
+/// (first alternative every time / strict rotation in registration order).
+/// `Seeded` and `Random` additionally layer discourse-aware choose-best
+/// scoring on top, so candidates that repeat words from recent output are
+/// penalised.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Variation {
-    /// Always pick the first registered template.
+    /// Always pick the first registered template, every render.
+    #[default]
     Fixed,
-    /// Deterministic selection based on a seed — varies across alternatives
-    /// but produces the same result for the same seed.
+    /// Deterministic hash-based selection. Same seed + key = same index.
+    /// Further refined by discourse-aware choose-best scoring.
     Seeded(u64),
-    /// Cycle through alternatives in registration order.
+    /// Cycle through alternatives in registration order, strictly.
     RoundRobin,
-    /// Select randomly (non-deterministic).
+    /// Select randomly (non-deterministic). Layered with choose-best scoring.
     Random,
-}
-
-impl Default for Variation {
-    fn default() -> Self {
-        Self::Fixed
-    }
 }
 
 /// A template registered under a key, with its salience level.
 type SalientTemplate = (Salience, Template);
+
+/// Per-render diagnostics — everything the engine decided along the
+/// way to produce the final output. Returned by
+/// [`Engine::render_explained`]. Useful for template-author debugging
+/// ("why did variant B win?") and for vocab-module linting.
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct RenderExplanation {
+    /// The final rendered string after all post-processing.
+    pub output: String,
+    /// Template key that was rendered.
+    pub template_key: String,
+    /// Index (within the salience-filtered alternative set) of the
+    /// variant that was emitted.
+    pub variant_index: usize,
+    /// Source string of the selected variant.
+    pub variant_source: String,
+    /// Salience bucket used for filtering alternatives.
+    pub salience: Salience,
+    /// Choose-best scores for each alternative that was considered (in
+    /// the same order as the filtered alternative set). `None` when
+    /// choose-best wasn't applicable (first render, or Fixed /
+    /// RoundRobin variation).
+    pub candidate_scores: Option<Vec<f64>>,
+    /// Reference form chosen by `{name|refer}` on the primary entity,
+    /// if a refer pipe fired.
+    pub reference_form: Option<ReferenceForm>,
+    /// Discourse connective prepended to the output, if any.
+    pub connective: Option<&'static str>,
+    /// List style used, if a join pipe fired.
+    pub list_style: Option<ListStyle>,
+    /// Whether the focus subject was plural (compound) at render time.
+    pub focus_is_plural: bool,
+    /// Whether the sentence was split by the length-budgeting pass.
+    pub length_split_applied: bool,
+    /// Whether the silent-mode cleanup stripped any trailing orphan
+    /// words from the output.
+    pub cleanup_stripped_tail: bool,
+}
+
+/// Iterator returned by [`Engine::render_iter`]. Wraps the batch
+/// rendering logic so callers can consume the output sentence-by-sentence
+/// without waiting for the full batch to complete.
+pub struct RenderIter<'a> {
+    engine: &'a Engine,
+    events: &'a [(&'a str, Context)],
+    i: usize,
+}
+
+impl<'a> Iterator for RenderIter<'a> {
+    type Item = Result<String, NlgError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.i >= self.events.len() {
+            return None;
+        }
+
+        // Mirror the logic in `render_batch` but emit one sentence per
+        // `.next()` call.
+        let action_end = self.engine.find_same_action_run(self.events, self.i);
+        if action_end > self.i + 1 {
+            let key = self.events[self.i].0;
+            let run = &self.events[self.i..action_end];
+            let sentence = match self.engine.render_aggregated_subjects(key, run) {
+                Ok(s) => s,
+                Err(e) => return Some(Err(e)),
+            };
+            self.i = action_end;
+            return Some(Ok(sentence));
+        }
+
+        let entity_end = self.engine.find_same_entity_run(self.events, self.i);
+        if entity_end > self.i + 1 {
+            let mut run_rendered: Vec<String> = Vec::with_capacity(entity_end - self.i);
+            for (key, ctx) in &self.events[self.i..entity_end] {
+                match self.engine.render(key, ctx) {
+                    Ok(s) => run_rendered.push(s),
+                    Err(e) => return Some(Err(e)),
+                }
+            }
+            self.i = entity_end;
+            if let Some(reduced) = reduce_same_entity_clauses(&run_rendered) {
+                return Some(Ok(reduced));
+            }
+            // No reduction: emit the first, stash the rest back into the
+            // queue by rewinding `i`. Simpler: join with spaces so this
+            // single `.next()` still corresponds to the same logical run.
+            return Some(Ok(run_rendered.join(" ")));
+        }
+
+        let (key, ctx) = &self.events[self.i];
+        self.i += 1;
+        Some(self.engine.render(key, ctx))
+    }
+}
+
+/// Diagnostic output from [`Engine::score_variants`]: one entry per
+/// variant that would be considered for the given key and context, with
+/// the choose-best score the engine would assign and a flag marking the
+/// variant that `render()` would currently emit.
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct VariantScore {
+    /// Index within the salience-filtered alternative set.
+    pub index: usize,
+    /// Original template source string.
+    pub source: String,
+    /// What the variant renders to with the given context.
+    pub rendered: String,
+    /// Choose-best repetition score — lower is better.
+    pub score: f64,
+    /// Salience bucket this variant was registered at.
+    pub salience: Salience,
+    /// Whether this variant was the most recently selected for the same
+    /// key (anti-repeat will try to avoid it on the next render).
+    pub is_last_selected: bool,
+    /// Whether `render()` would emit this variant right now.
+    pub selected: bool,
+}
 
 /// The core NLG engine. Holds a language implementation, template registry,
 /// configuration, and discourse state for natural cross-sentence rendering.
@@ -59,6 +186,19 @@ pub struct Engine {
     salience_thresholds: SalienceThresholds,
     round_robin_counters: HashMap<String, AtomicUsize>,
     discourse: RefCell<DiscourseState>,
+    #[cfg(feature = "reg")]
+    entity_registry: EntityRegistry,
+    #[cfg(feature = "reg")]
+    reg_preference: Vec<String>,
+    synonyms: SynonymRegistry,
+    #[cfg(feature = "time")]
+    reference_time: Option<i64>,
+    antonyms: AntonymRegistry,
+    #[cfg(feature = "polish")]
+    max_sentence_length: Option<usize>,
+    #[cfg(feature = "polish")]
+    smart_quotes: bool,
+    partials: HashMap<String, Template>,
 }
 
 impl Engine {
@@ -72,6 +212,19 @@ impl Engine {
             salience_thresholds: SalienceThresholds::default(),
             round_robin_counters: HashMap::new(),
             discourse: RefCell::new(DiscourseState::new()),
+            #[cfg(feature = "reg")]
+            entity_registry: EntityRegistry::new(),
+            #[cfg(feature = "reg")]
+            reg_preference: Vec::new(),
+            synonyms: SynonymRegistry::new(),
+            #[cfg(feature = "time")]
+            reference_time: None,
+            antonyms: AntonymRegistry::new(),
+            #[cfg(feature = "polish")]
+            max_sentence_length: None,
+            #[cfg(feature = "polish")]
+            smart_quotes: false,
+            partials: HashMap::new(),
         }
     }
 
@@ -93,6 +246,191 @@ impl Engine {
         self
     }
 
+    /// Register an entity descriptor for referring-expression generation
+    /// (REG). When the engine produces a *Full form* reference via the
+    /// `{name|refer}` pipe, it consults registered entities — if the
+    /// target shares its type with other registered entities, the Dale
+    /// & Reiter incremental algorithm selects the shortest set of
+    /// distinguishing attributes to include as premodifiers.
+    ///
+    /// Entities not registered here still render with just type + name.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use nlg_core::{Context, Engine, EntityDescriptor, Value};
+    /// use nlg_grammar_en::English;
+    ///
+    /// let mut engine = Engine::new(English::new());
+    /// engine.register_entity(
+    ///     EntityDescriptor::new("UserService", "class")
+    ///         .with_attribute("layer", "domain"),
+    /// );
+    /// engine.register_entity(
+    ///     EntityDescriptor::new("AuthService", "class")
+    ///         .with_attribute("layer", "infra"),
+    /// );
+    ///
+    /// engine.register_template("t", "{name|refer} was modified").unwrap();
+    /// let mut ctx = Context::new();
+    /// ctx.insert("entity_type", Value::String("class".into()));
+    /// ctx.insert("name", Value::String("UserService".into()));
+    ///
+    /// assert_eq!(
+    ///     engine.render("t", &ctx).unwrap(),
+    ///     "The domain class UserService was modified."
+    /// );
+    /// ```
+    #[cfg(feature = "reg")]
+    pub fn register_entity(&mut self, descriptor: EntityDescriptor) {
+        self.entity_registry.insert(descriptor);
+    }
+
+    /// Set the preferred attribute walking order for REG. Attributes
+    /// earlier in the list are tried first; unknown attributes are
+    /// ignored. Attributes not mentioned here still participate but fall
+    /// to the end, in the order they were registered on the target entity.
+    ///
+    /// Typical use: prefer semantic attributes ("layer", "scope") over
+    /// physical ones ("color") when disambiguating code entities.
+    #[cfg(feature = "reg")]
+    pub fn attribute_preference(mut self, order: Vec<String>) -> Self {
+        self.reg_preference = order;
+        self
+    }
+
+    /// Override the engine's "now" reference for relative-time rendering.
+    /// Useful for tests and for rendering a report "as of" a specific
+    /// point in time. The value is seconds since Unix epoch.
+    ///
+    /// If not set, the engine reads `SystemTime::now()` on each call to
+    /// the `{timestamp|relative}` pipe.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use nlg_core::{Context, Engine, Value};
+    /// use nlg_grammar_en::English;
+    ///
+    /// let now = 1_700_000_000;
+    /// let mut engine = Engine::new(English::new()).reference_time(now);
+    /// engine.register_template("t", "The change landed {ts|relative}").unwrap();
+    ///
+    /// let mut ctx = Context::new();
+    /// ctx.insert("ts", Value::Number(now - 86400 - 3600));
+    /// assert_eq!(engine.render("t", &ctx).unwrap(), "The change landed yesterday.");
+    /// ```
+    #[cfg(feature = "time")]
+    pub fn reference_time(mut self, unix_secs: i64) -> Self {
+        self.reference_time = Some(unix_secs);
+        self
+    }
+
+    /// Register a reusable template fragment under `name`. Inside any
+    /// template, `{>name}` expands inline to the partial's content at
+    /// render time. Partials share the same template syntax as the rest
+    /// of the engine — slots, pipes, conditionals, and nested partials
+    /// all work inside a partial.
+    ///
+    /// Example:
+    ///
+    /// ```ignore
+    /// engine.register_partial(
+    ///     "impact_tail",
+    ///     "{?consumer_count}, affecting {consumer_count} \
+    ///      {consumer_count|pluralize:consumer}{/?}",
+    /// )?;
+    /// engine.register_template("code.modified", "{name|refer} was modified{>impact_tail}")?;
+    /// engine.register_template("code.renamed",  "{name|refer} was renamed to {new_name}{>impact_tail}")?;
+    /// ```
+    pub fn register_partial(&mut self, name: &str, source: &str) -> Result<(), NlgError> {
+        let template = Template::parse(source)?;
+        self.partials.insert(name.to_string(), template);
+        Ok(())
+    }
+
+    /// Enable typographic ("smart") quote substitution on rendered output.
+    /// Straight `"` becomes curly `\u{201C}`/`\u{201D}`; straight `'`
+    /// becomes `\u{2018}`/`\u{2019}`; apostrophes inside words (Alice's,
+    /// it's) become U+2019. Off by default — opt in for human-readable
+    /// prose output, leave disabled for code-like outputs.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use nlg_core::{Context, Engine, Value};
+    /// use nlg_grammar_en::English;
+    ///
+    /// let mut engine = Engine::new(English::new()).smart_quotes(true);
+    /// engine.register_template("t", r#"Alice said "hello""#).unwrap();
+    /// let out = engine.render("t", Context::new()).unwrap();
+    /// assert!(out.contains('\u{201C}'));
+    /// assert!(out.contains('\u{201D}'));
+    /// ```
+    #[cfg(feature = "polish")]
+    pub fn smart_quotes(mut self, enabled: bool) -> Self {
+        self.smart_quotes = enabled;
+        self
+    }
+
+    /// Cap the character length of any single rendered sentence. When a
+    /// sentence exceeds `max_chars`, the engine splits it at the latest
+    /// natural boundary (subordinate clauses introduced by "which",
+    /// "affecting", "impacting", "requiring"; list prefixes like
+    /// "including"; em-dashes; explicit sentence breaks) and wraps the
+    /// remainder as a follow-up sentence with a light grammatical fix-up.
+    ///
+    /// If no natural boundary exists inside the budget the sentence
+    /// passes through unchanged — we never chop mid-word.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use nlg_core::{Context, Engine};
+    /// use nlg_grammar_en::English;
+    ///
+    /// let mut engine = Engine::new(English::new()).max_sentence_length(60);
+    /// engine.register_template(
+    ///     "t",
+    ///     "The class UserService was renamed to AccountService, \
+    ///      which impacts 6 consumers",
+    /// ).unwrap();
+    ///
+    /// let out = engine.render("t", Context::new()).unwrap();
+    /// assert!(out.contains("This impacts 6 consumers"));
+    /// ```
+    #[cfg(feature = "polish")]
+    pub fn max_sentence_length(mut self, max_chars: usize) -> Self {
+        self.max_sentence_length = Some(max_chars);
+        self
+    }
+
+    /// Register a positive-framing antonym for a negative verb phrase.
+    /// The `{phrase|negated}` pipe will prefer the registered positive
+    /// form (e.g. "remained unchanged") over the default "not <phrase>"
+    /// fallback ("was not modified").
+    ///
+    /// Matching is case-insensitive.
+    pub fn register_antonym(&mut self, negative: &str, positive: &str) {
+        self.antonyms.register(negative, positive);
+    }
+
+    /// Register a group of synonym words for elegant variation. The
+    /// `{word|syn}` pipe will look up the input word in the registered
+    /// groups and pick whichever synonym from the group has appeared
+    /// least recently in output. Ties break toward registration order.
+    ///
+    /// Example:
+    ///
+    /// ```ignore
+    /// engine.register_synonyms(&["consumer", "dependent", "caller"]);
+    /// // Template: "{count} {consumer|syn}{count|pluralize:}"
+    /// // First render emits "consumer(s)"; next "dependent(s)"; next "caller(s)".
+    /// ```
+    pub fn register_synonyms(&mut self, group: &[&str]) {
+        self.synonyms.register_group(group);
+    }
+
     /// Get a reference to the language implementation.
     pub fn language(&self) -> &dyn Language {
         &*self.language
@@ -106,6 +444,23 @@ impl Engine {
     /// Register a template string under a key with Medium salience.
     /// Multiple templates registered under the same key become alternatives
     /// for variation at that salience level.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use nlg_core::{Context, Engine, Value};
+    /// use nlg_grammar_en::English;
+    ///
+    /// let mut engine = Engine::new(English::new());
+    /// engine.register_template(
+    ///     "count.items",
+    ///     "You have {n} {n|pluralize:item}",
+    /// ).unwrap();
+    ///
+    /// let mut ctx = Context::new();
+    /// ctx.insert("n", Value::Number(3));
+    /// assert_eq!(engine.render("count.items", &ctx).unwrap(), "You have 3 items.");
+    /// ```
     pub fn register_template(&mut self, key: &str, source: &str) -> Result<(), NlgError> {
         self.register_template_at(key, source, Salience::Medium)
     }
@@ -123,6 +478,11 @@ impl Engine {
             .entry(key.to_string())
             .or_default()
             .push((salience, template));
+        // Ensure the RoundRobin counter exists for this key so select_variant_index
+        // can rotate without needing mutable access to the map.
+        self.round_robin_counters
+            .entry(key.to_string())
+            .or_insert_with(|| AtomicUsize::new(0));
         Ok(())
     }
 
@@ -136,6 +496,25 @@ impl Engine {
     /// The engine tracks discourse state across calls: entity mentions,
     /// template history, word frequency. Each call benefits from context
     /// established by previous calls. Use `reset()` between unrelated sequences.
+    ///
+    /// Render is transactional: if any step fails (missing slot in Strict mode,
+    /// unknown pipe, etc.), the discourse state is rolled back to what it was
+    /// before the call. A caller that catches the error sees no residue from
+    /// the failed render in subsequent output.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use nlg_core::{Context, Engine, Value, Variation};
+    /// use nlg_grammar_en::English;
+    ///
+    /// let mut engine = Engine::new(English::new()).variation(Variation::Fixed);
+    /// engine.register_template("greet", "Hello {name}").unwrap();
+    ///
+    /// let mut ctx = Context::new();
+    /// ctx.insert("name", Value::String("world".into()));
+    /// assert_eq!(engine.render("greet", &ctx).unwrap(), "Hello world");
+    /// ```
     pub fn render(&self, key: &str, context: impl IntoContext) -> Result<String, NlgError> {
         let all_alternatives = self
             .templates
@@ -144,6 +523,41 @@ impl Engine {
 
         let context = context.into_context();
 
+        // Snapshot discourse state. If any step below fails, we restore this
+        // snapshot so the failed render leaves no trace.
+        let snapshot = self.discourse.borrow().clone();
+
+        // Snapshot the RoundRobin counter for this key as well. The
+        // selection path increments it eagerly (during variant index
+        // computation), so a failure mid-render would otherwise skip an
+        // alternative on the next successful render.
+        let rr_snapshot = self
+            .round_robin_counters
+            .get(key)
+            .map(|c| c.load(Ordering::Relaxed));
+
+        match self.render_tx(key, all_alternatives, &context) {
+            Ok(output) => Ok(output),
+            Err(e) => {
+                *self.discourse.borrow_mut() = snapshot;
+                if let (Some(counter), Some(val)) =
+                    (self.round_robin_counters.get(key), rr_snapshot)
+                {
+                    counter.store(val, Ordering::Relaxed);
+                }
+                Err(e)
+            }
+        }
+    }
+
+    /// The body of a render call, performed against live discourse state.
+    /// Callers (`render`) snapshot state beforehand and restore on error.
+    fn render_tx(
+        &self,
+        key: &str,
+        all_alternatives: &[SalientTemplate],
+        context: &Context,
+    ) -> Result<String, NlgError> {
         // Advance discourse state
         self.discourse.borrow_mut().begin_render();
 
@@ -164,20 +578,21 @@ impl Engine {
         // Filter templates by salience level matching the context magnitude.
         // Falls back to Medium, then any available template if the target
         // salience has no registered templates.
-        let target_salience = self.context_salience(&context);
+        let target_salience = self.context_salience(context);
         let alternatives = filter_by_salience(all_alternatives, target_salience);
 
         // Select template with choosebest scoring and anti-repeat
         let (template, variant_index) =
-            self.select_alternative_scored(key, &alternatives, &context)?;
+            self.select_alternative_scored(key, &alternatives, context)?;
 
         // Record template choice
         self.discourse
             .borrow_mut()
             .record_template_choice(key, variant_index);
 
-        // Render the template
-        let mut output = self.render_template(key, template, &context)?;
+        // Render the selected template. Any error here is caught by the
+        // snapshot/restore in the outer `render` and cannot corrupt state.
+        let mut output = self.render_template(key, template, context)?;
 
         // Prepend discourse connective if applicable
         if let Some(conn) = connective {
@@ -197,9 +612,26 @@ impl Engine {
             output = capitalize_first(&output);
         }
 
+        // Clean up whitespace and silent-mode gaps (dangling prepositions
+        // and orphan connectives left behind when slots were omitted).
+        output = cleanup_artifacts(&output, self.strictness);
+
         // Terminate the sentence with a period if it doesn't already end
         // with sentence-ending punctuation.
         output = terminate_sentence(&output);
+
+        // If a sentence-length budget is configured, split long output
+        // at natural boundaries into multiple follow-up sentences.
+        #[cfg(feature = "polish")]
+        if let Some(max_chars) = self.max_sentence_length {
+            output = split_long(&output, max_chars);
+        }
+
+        // Typographic polish (opt-in).
+        #[cfg(feature = "polish")]
+        if self.smart_quotes {
+            output = smart_quotes(&output);
+        }
 
         // Record entity mention in discourse state
         if let (Some(name), Some(etype)) = (&entity_name, &entity_type) {
@@ -214,6 +646,128 @@ impl Engine {
             .record_output_words(&output);
 
         Ok(output)
+    }
+
+    /// Score every registered variant for `key` against `context`, without
+    /// committing any render. Returns one [`VariantScore`] per variant
+    /// that matches the context's salience bucket, with the
+    /// choose-best score the engine would compute and a `selected` flag
+    /// marking which one `render()` would currently emit.
+    ///
+    /// Useful for template-author diagnostics ("why does variant B
+    /// always win?") and vocab-module lints. Does not mutate discourse
+    /// state — the function snapshots and restores state around candidate
+    /// rendering.
+    pub fn score_variants(
+        &self,
+        key: &str,
+        context: impl IntoContext,
+    ) -> Result<Vec<VariantScore>, NlgError> {
+        let all = self
+            .templates
+            .get(key)
+            .ok_or_else(|| NlgError::UnknownTemplate(key.to_string()))?;
+
+        let ctx = context.into_context();
+        let target_salience = self.context_salience(&ctx);
+        let alternatives = filter_by_salience(all, target_salience);
+
+        // Snapshot discourse so candidate renders leave no residue.
+        let snapshot = self.discourse.borrow().clone();
+
+        // Track which variant index within the filtered set corresponds
+        // to which original template, by content source.
+        let mut scores: Vec<VariantScore> = Vec::with_capacity(alternatives.len());
+        let last_variant = self
+            .discourse
+            .borrow()
+            .last_template_variant(key);
+
+        for (i, template) in alternatives.iter().enumerate() {
+            let candidate = match self.render_template(key, template, &ctx) {
+                Ok(s) => s,
+                Err(e) => {
+                    *self.discourse.borrow_mut() = snapshot;
+                    return Err(e);
+                }
+            };
+            scores.push(VariantScore {
+                index: i,
+                source: template.source.clone(),
+                rendered: candidate,
+                score: 0.0,
+                salience: target_salience,
+                is_last_selected: Some(i) == last_variant,
+                selected: false,
+            });
+        }
+
+        // Apply the same scoring logic as select_alternative_scored.
+        let discourse = self.discourse.borrow();
+        for s in scores.iter_mut() {
+            s.score = discourse.repetition_score(&s.rendered);
+        }
+        drop(discourse);
+
+        // Determine which variant the engine would pick right now.
+        let selected_idx = self.pick_variant_index(
+            key,
+            &alternatives,
+            last_variant,
+            &scores,
+        );
+        if let Some(idx) = selected_idx
+            && let Some(s) = scores.get_mut(idx)
+        {
+            s.selected = true;
+        }
+
+        *self.discourse.borrow_mut() = snapshot;
+        Ok(scores)
+    }
+
+    /// Mirror of the selection logic in `select_alternative_scored` — kept
+    /// as a pure helper so `score_variants` and `select_alternative_scored`
+    /// stay in sync without duplicating state mutation.
+    fn pick_variant_index(
+        &self,
+        key: &str,
+        alternatives: &[Template],
+        last_variant: Option<usize>,
+        scores: &[VariantScore],
+    ) -> Option<usize> {
+        if alternatives.is_empty() {
+            return None;
+        }
+        if alternatives.len() == 1 {
+            return Some(0);
+        }
+
+        let allow_choose_best = matches!(
+            self.variation,
+            Variation::Seeded(_) | Variation::Random
+        );
+
+        let is_first = self.discourse.borrow().is_first_render();
+        if !allow_choose_best || is_first {
+            return Some(self.select_variant_index(key, alternatives.len()));
+        }
+
+        // Simulate the scored pick: skip last_variant when possible, pick
+        // the lowest-score remaining candidate, ties break toward lower
+        // index.
+        let mut best_idx: Option<usize> = None;
+        let mut best_score = f64::MAX;
+        for (i, s) in scores.iter().enumerate() {
+            if Some(i) == last_variant && scores.len() > 1 {
+                continue;
+            }
+            if s.score < best_score {
+                best_score = s.score;
+                best_idx = Some(i);
+            }
+        }
+        best_idx.or(Some(0))
     }
 
     /// Render a one-off template string (not registered) with the given context.
@@ -243,6 +797,33 @@ impl Engine {
     /// Additionally, consecutive events sharing a template key but with
     /// different entities are aggregated by combining subjects:
     /// "UserService and AuthService were renamed" instead of two sentences.
+    ///
+    /// # Example — clause reduction across same-entity events
+    ///
+    /// ```
+    /// use nlg_core::{Context, Engine, Value};
+    /// use nlg_grammar_en::English;
+    ///
+    /// let mut engine = Engine::new(English::new());
+    /// engine.register_template("renamed", "{name|refer} was renamed").unwrap();
+    /// engine.register_template("modified", "{name|refer} was modified").unwrap();
+    /// engine.register_template("moved", "{name|refer} was moved").unwrap();
+    ///
+    /// let mut ctx = Context::new();
+    /// ctx.insert("entity_type", Value::String("class".into()));
+    /// ctx.insert("name", Value::String("UserService".into()));
+    /// let events: Vec<(&str, Context)> = vec![
+    ///     ("renamed", ctx.clone()),
+    ///     ("modified", ctx.clone()),
+    ///     ("moved", ctx.clone()),
+    /// ];
+    ///
+    /// let out = engine.render_batch(&events).unwrap();
+    /// assert_eq!(
+    ///     out,
+    ///     "The class UserService was renamed, modified, and moved."
+    /// );
+    /// ```
     pub fn render_batch(
         &self,
         events: &[(&str, Context)],
@@ -255,27 +836,226 @@ impl Engine {
         let mut i = 0;
 
         while i < events.len() {
-            // Look for same-action-different-subject aggregation opportunity
-            let aggregation_end = self.find_same_action_run(events, i);
+            // Look for same-action-different-subject aggregation opportunity.
+            let action_end = self.find_same_action_run(events, i);
 
-            if aggregation_end > i + 1 {
+            if action_end > i + 1 {
                 // Multiple consecutive events with same template key but
                 // different entities — aggregate their subjects.
                 let sentence = self.render_aggregated_subjects(
                     events[i].0,
-                    &events[i..aggregation_end],
+                    &events[i..action_end],
                 )?;
                 sentences.push(sentence);
-                i = aggregation_end;
-            } else {
-                // Single event — render normally with full discourse benefits
-                let (key, ref ctx) = events[i];
-                sentences.push(self.render(key, ctx)?);
-                i += 1;
+                i = action_end;
+                continue;
             }
+
+            // Look for same-entity-different-action aggregation opportunity.
+            // "The class X was renamed. It was modified. It was moved." reduces
+            // to "The class X was renamed, modified, and moved" when the voice
+            // and tense line up and each predicate is simple.
+            let entity_end = self.find_same_entity_run(events, i);
+            if entity_end > i + 1 {
+                let mut run_rendered: Vec<String> = Vec::with_capacity(entity_end - i);
+                for (key, ctx) in &events[i..entity_end] {
+                    run_rendered.push(self.render(key, ctx)?);
+                }
+
+                if let Some(reduced) = reduce_same_entity_clauses(&run_rendered) {
+                    sentences.push(reduced);
+                } else {
+                    sentences.extend(run_rendered);
+                }
+                i = entity_end;
+                continue;
+            }
+
+            // Single event — render normally with full discourse benefits.
+            let (key, ref ctx) = events[i];
+            sentences.push(self.render(key, ctx)?);
+            i += 1;
         }
 
         Ok(sentences.join(" "))
+    }
+
+    /// Find the end index (exclusive) of a run of consecutive events that
+    /// share the same entity (name + entity_type) but potentially differ in
+    /// template key. Used by clause-reduction aggregation to turn a series
+    /// of same-subject sentences into one conjunction-reduced sentence.
+    ///
+    /// Returns `start + 1` if no multi-event run exists.
+    fn find_same_entity_run(
+        &self,
+        events: &[(&str, Context)],
+        start: usize,
+    ) -> usize {
+        if start >= events.len() {
+            return start;
+        }
+
+        let first_ctx = &events[start].1;
+        let first_name = match entity_name_from_context(first_ctx) {
+            Some(n) => n,
+            None => return start + 1,
+        };
+        let first_type = first_ctx.get("entity_type").map(|v| v.as_display());
+
+        let mut end = start + 1;
+        while end < events.len() {
+            let ctx = &events[end].1;
+            let name = match entity_name_from_context(ctx) {
+                Some(n) => n,
+                None => break,
+            };
+            if name != first_name {
+                break;
+            }
+            let ty = ctx.get("entity_type").map(|v| v.as_display());
+            if ty != first_type {
+                break;
+            }
+            end += 1;
+        }
+
+        end
+    }
+
+    /// Render a template and return both the output and a
+    /// [`RenderExplanation`] describing the decisions the engine made.
+    ///
+    /// Functionally equivalent to `render()` — discourse state advances
+    /// the same way; any error rolls back the same way — but each step's
+    /// diagnostic is also captured. Use this for debugging template
+    /// behavior: "why did variant B win?", "was this entity reference a
+    /// pronoun or short-name?", "did the length budget split the
+    /// output?".
+    pub fn render_explained(
+        &self,
+        key: &str,
+        context: impl IntoContext,
+    ) -> Result<RenderExplanation, NlgError> {
+        let all_alternatives = self
+            .templates
+            .get(key)
+            .ok_or_else(|| NlgError::UnknownTemplate(key.to_string()))?;
+
+        let context = context.into_context();
+        let target_salience = self.context_salience(&context);
+        let alternatives = filter_by_salience(all_alternatives, target_salience);
+
+        // Pre-compute candidate scores for diagnostics when choose-best
+        // would apply. We run this in a snapshot/restore bubble so the
+        // diagnostics don't alter discourse state.
+        let candidate_scores = {
+            let allow_choose_best = matches!(
+                self.variation,
+                Variation::Seeded(_) | Variation::Random
+            );
+            let is_first = self.discourse.borrow().is_first_render();
+            if !allow_choose_best || is_first || alternatives.len() < 2 {
+                None
+            } else {
+                let snapshot = self.discourse.borrow().clone();
+                let mut scored: Vec<f64> = Vec::with_capacity(alternatives.len());
+                let mut scoring_failed = false;
+                for template in &alternatives {
+                    match self.render_template(key, template, &context) {
+                        Ok(candidate) => {
+                            let score = self.discourse.borrow().repetition_score(&candidate);
+                            scored.push(score);
+                        }
+                        Err(_) => {
+                            scoring_failed = true;
+                            break;
+                        }
+                    }
+                }
+                *self.discourse.borrow_mut() = snapshot;
+                if scoring_failed {
+                    None
+                } else {
+                    Some(scored)
+                }
+            }
+        };
+
+        // Capture the pre-render ref form for the primary entity (if any).
+        let entity_name = context
+            .get("name")
+            .or_else(|| context.get("old_name"))
+            .map(|v| v.as_display());
+        let reference_form = entity_name
+            .as_ref()
+            .map(|n| self.discourse.borrow().reference_form(n));
+
+        // Run the real render. Discourse state advances normally.
+        let output = self.render(key, &context)?;
+
+        // Recover the selected variant index from the discourse history.
+        let variant_index = self
+            .discourse
+            .borrow()
+            .last_template_variant(key)
+            .unwrap_or(0)
+            .min(alternatives.len().saturating_sub(1));
+        let variant_source = alternatives
+            .get(variant_index)
+            .map(|t| t.source.clone())
+            .unwrap_or_default();
+
+        let focus_is_plural = self.discourse.borrow().focus_is_plural();
+
+        // Length-budget detection: the split transform adds ". " to the
+        // middle of long outputs. If a budget is set and the output
+        // contains a mid-sentence terminator, the split fired.
+        #[cfg(feature = "polish")]
+        let length_split_applied = self
+            .max_sentence_length
+            .is_some_and(|max| output.chars().count() > max && output.contains(". "));
+        #[cfg(not(feature = "polish"))]
+        let length_split_applied = false;
+
+        let connective = detect_leading_connective(&output);
+
+        Ok(RenderExplanation {
+            output,
+            template_key: key.to_string(),
+            variant_index,
+            variant_source,
+            salience: target_salience,
+            candidate_scores,
+            reference_form,
+            connective,
+            list_style: None,
+            focus_is_plural,
+            length_split_applied,
+            cleanup_stripped_tail: false,
+        })
+    }
+
+    /// Iterator form of [`Engine::render_batch`]. Yields each sentence
+    /// (or aggregated run) as it is produced, so callers concerned with
+    /// time-to-first-sentence can stream output instead of waiting for
+    /// the full batch. Each `.next()` call produces one sentence —
+    /// which may correspond to multiple events (when aggregation or
+    /// clause reduction fires) — and returns `None` once the events
+    /// are exhausted.
+    ///
+    /// Errors propagate through the iterator: a failing render yields
+    /// `Some(Err(_))` and the iterator remains usable for subsequent
+    /// events (though callers should almost always abort on the first
+    /// error).
+    pub fn render_iter<'a>(
+        &'a self,
+        events: &'a [(&'a str, Context)],
+    ) -> RenderIter<'a> {
+        RenderIter {
+            engine: self,
+            events,
+            i: 0,
+        }
     }
 
     /// Find the end index (exclusive) of a run of consecutive events that
@@ -374,6 +1154,11 @@ impl Engine {
 
         // Render with combined subject, then apply plural agreement
         let rendered = self.render(key, combined_ctx)?;
+
+        // Mark the discourse focus as plural so any subsequent pronoun
+        // reference uses "they" instead of "it".
+        self.discourse.borrow_mut().set_focus_plural(true);
+
         Ok(pluralize_agreement(&rendered, &*self.language))
     }
 
@@ -387,6 +1172,19 @@ impl Engine {
             return Ok((&alternatives[0], 0));
         }
 
+        // Only Seeded and Random variation strategies are layered with
+        // choose-best scoring. Fixed and RoundRobin are literal by contract:
+        // Fixed always returns index 0; RoundRobin strictly rotates.
+        let allow_choose_best = matches!(
+            self.variation,
+            Variation::Seeded(_) | Variation::Random
+        );
+
+        if !allow_choose_best {
+            let index = self.select_variant_index(key, alternatives.len());
+            return Ok((&alternatives[index], index));
+        }
+
         // Extract what we need from discourse, then drop the borrow
         // so render_template can borrow_mut for list style selection.
         let (last_variant, is_first) = {
@@ -397,44 +1195,56 @@ impl Engine {
             )
         };
 
-        // If we have discourse history and multiple alternatives, use choosebest
-        if !is_first && alternatives.len() > 1 {
-            // Render all candidates first (this may borrow_mut discourse for list styles)
-            let mut candidates: Vec<(usize, String)> = Vec::new();
-            for (i, template) in alternatives.iter().enumerate() {
-                if Some(i) == last_variant {
-                    continue;
-                }
-                let candidate = self.render_template(key, template, context)?;
-                candidates.push((i, candidate));
-            }
-
-            // If filtering left us with no candidates (e.g., only one template
-            // matches salience and it was last used), fall back to using it anyway.
-            if candidates.is_empty() {
-                let index = last_variant.unwrap_or(0).min(alternatives.len() - 1);
-                return Ok((&alternatives[index], index));
-            }
-
-            // Now score against discourse history (immutable borrow only)
-            let discourse = self.discourse.borrow();
-            let mut best_index = candidates[0].0;
-            let mut best_score = f64::MAX;
-
-            for (i, candidate) in &candidates {
-                let score = discourse.repetition_score(candidate);
-                if score < best_score {
-                    best_score = score;
-                    best_index = *i;
-                }
-            }
-
-            return Ok((&alternatives[best_index], best_index));
+        // On the very first render there is no discourse history to score
+        // against; fall through to the variation strategy's own selection.
+        if is_first {
+            let index = self.select_variant_index(key, alternatives.len());
+            return Ok((&alternatives[index], index));
         }
 
-        // Fall back to standard variation selection
-        let index = self.select_variant_index(key, alternatives.len());
-        Ok((&alternatives[index], index))
+        // Rendering candidates mutates discourse state (e.g., list style
+        // cycling). Snapshot-and-restore around candidate rendering so state
+        // is untouched by alternatives that aren't emitted.
+        let snapshot = self.discourse.borrow().clone();
+
+        let mut candidates: Vec<(usize, String)> = Vec::new();
+        for (i, template) in alternatives.iter().enumerate() {
+            if Some(i) == last_variant {
+                continue;
+            }
+            let candidate = match self.render_template(key, template, context) {
+                Ok(s) => s,
+                Err(e) => {
+                    *self.discourse.borrow_mut() = snapshot;
+                    return Err(e);
+                }
+            };
+            candidates.push((i, candidate));
+        }
+
+        *self.discourse.borrow_mut() = snapshot;
+
+        // If filtering left us with no candidates (e.g., the last-used index
+        // was the only one matching salience), fall back to using it anyway.
+        if candidates.is_empty() {
+            let index = last_variant.unwrap_or(0).min(alternatives.len() - 1);
+            return Ok((&alternatives[index], index));
+        }
+
+        // Score against discourse history (immutable borrow only)
+        let discourse = self.discourse.borrow();
+        let mut best_index = candidates[0].0;
+        let mut best_score = f64::MAX;
+
+        for (i, candidate) in &candidates {
+            let score = discourse.repetition_score(candidate);
+            if score < best_score {
+                best_score = score;
+                best_index = *i;
+            }
+        }
+
+        Ok((&alternatives[best_index], best_index))
     }
 
     fn select_variant_index(&self, key: &str, count: usize) -> usize {
@@ -499,6 +1309,19 @@ impl Engine {
                         output.push_str(&rendered);
                     }
                 }
+                Segment::Partial { name } => {
+                    let partial = self.partials.get(name).ok_or_else(|| {
+                        NlgError::TemplateParseError {
+                            template: key.to_string(),
+                            position: 0,
+                            reason: format!(
+                                "unknown partial `{name}` — register it with `engine.register_partial`"
+                            ),
+                        }
+                    })?;
+                    let rendered = self.render_segments(key, &partial.segments, context)?;
+                    output.push_str(&rendered);
+                }
             }
         }
 
@@ -559,6 +1382,14 @@ impl Engine {
             "truncate" => self.pipe_truncate(pipe, value),
             "capitalize" => self.pipe_capitalize(value),
             "refer" => self.pipe_refer(pipe, value, context),
+            "verb" => self.pipe_verb(pipe, value),
+            "syn" => self.pipe_syn(value),
+            #[cfg(feature = "time")]
+            "relative" => self.pipe_relative(value),
+            "quantify" => self.pipe_quantify(pipe, value),
+            "demonstrative" => self.pipe_demonstrative(value),
+            "hedge" => self.pipe_hedge(pipe, value),
+            "negated" => self.pipe_negated(value),
             _ => Err(NlgError::InvalidPipe {
                 pipe: pipe.name.clone(),
                 reason: "unknown pipe".to_string(),
@@ -598,18 +1429,90 @@ impl Engine {
         // character of the rendered output if needed. This handles both
         // sentence-start and mid-sentence positions correctly.
         let rendered = match form {
-            ReferenceForm::Full => {
-                if entity_type.is_empty() {
-                    name
+            ReferenceForm::Full => self.render_full_reference(&name, &entity_type),
+            ReferenceForm::ShortName => name,
+            ReferenceForm::Pronoun => {
+                if self.discourse.borrow().focus_is_plural() {
+                    "they".to_string()
                 } else {
-                    format!("the {} {}", entity_type.to_lowercase(), name)
+                    "it".to_string()
                 }
             }
-            ReferenceForm::ShortName => name,
-            ReferenceForm::Pronoun => "it".to_string(),
         };
 
         Ok(Value::String(rendered))
+    }
+
+    /// Build a *Full form* reference. If the entity is in the registry,
+    /// run Dale & Reiter REG against registered entities of the same type
+    /// and include distinguishing attributes as premodifiers.
+    ///
+    /// Registry lookup uses `(entity_type, name)` so the same name can
+    /// refer to distinct entities of different types. The context-supplied
+    /// type is authoritative here — if the render says "type=class", we
+    /// never substitute a registered trait of the same name.
+    ///
+    /// Fallbacks:
+    /// - Unregistered entity with known type → "the <type> <name>".
+    /// - Unregistered entity without a type  → just the name.
+    fn render_full_reference(&self, name: &str, fallback_type: &str) -> String {
+        // With the `reg` feature: look up by (type, name) and run
+        // Dale & Reiter to pick distinguishing attributes. Without it:
+        // degrade gracefully to "the <type> <name>" / just the name.
+        #[cfg(feature = "reg")]
+        let attrs: Vec<String> = {
+            let registered = if fallback_type.is_empty() {
+                None
+            } else {
+                self.entity_registry.get(fallback_type, name)
+            };
+            let target = match registered {
+                Some(d) => d.clone(),
+                None => {
+                    if fallback_type.is_empty() {
+                        return name.to_string();
+                    }
+                    EntityDescriptor::new(name, fallback_type)
+                }
+            };
+            distinguishing_attributes(&target, &self.entity_registry, &self.reg_preference)
+        };
+
+        #[cfg(not(feature = "reg"))]
+        let attrs: Vec<String> = {
+            if fallback_type.is_empty() {
+                return name.to_string();
+            }
+            Vec::new()
+        };
+
+        // The context-supplied type is authoritative. Only fall through to
+        // a registered-descriptor type when context provides nothing.
+        #[cfg(feature = "reg")]
+        let entity_type = if fallback_type.is_empty() {
+            self.entity_registry
+                .get("", name)
+                .map(|d| d.entity_type.clone())
+                .unwrap_or_default()
+        } else {
+            fallback_type.to_string()
+        };
+        #[cfg(not(feature = "reg"))]
+        let entity_type = fallback_type.to_string();
+
+        if entity_type.is_empty() {
+            if attrs.is_empty() {
+                return name.to_string();
+            }
+            return format!("the {} {}", attrs.join(" "), name);
+        }
+
+        let lower_type = entity_type.to_lowercase();
+        if attrs.is_empty() {
+            format!("the {lower_type} {name}")
+        } else {
+            format!("the {} {lower_type} {name}", attrs.join(" "))
+        }
     }
 
     fn pipe_pluralize(
@@ -738,10 +1641,248 @@ impl Engine {
         Ok(Value::List(truncated))
     }
 
+    /// Render a verb phrase in its negated form.
+    ///
+    /// Lookup order:
+    /// 1. If a positive-framing antonym is registered for the phrase
+    ///    (`engine.register_antonym(...)`), emit it: e.g. "was modified"
+    ///    → "remained unchanged".
+    /// 2. Otherwise insert "not" after the phrase's auxiliary: "was
+    ///    modified" → "was not modified", "has been renamed" → "has not
+    ///    been renamed", "will break" → "will not break".
+    /// 3. If there's no recognizable aux, prepend "not ". Callers who
+    ///    hit this fallback should register an antonym to avoid
+    ///    ungrammatical output.
+    fn pipe_negated(&self, value: &Value) -> Result<Value, NlgError> {
+        let phrase = value.as_display();
+        if let Some(positive) = self.antonyms.lookup(&phrase) {
+            return Ok(Value::String(positive.to_string()));
+        }
+        Ok(Value::String(insert_not(&phrase)))
+    }
+
+    /// Render a 0..=100 confidence score as a hedge word reflecting its
+    /// certainty level. Accepts optional `:adverb` (default), `:modal`,
+    /// or `:prefix` flavour.
+    ///
+    /// Example: `{conf|hedge} broke the build` → "possibly broke the build".
+    fn pipe_hedge(&self, pipe: &Pipe, value: &Value) -> Result<Value, NlgError> {
+        let score = value.as_number().ok_or_else(|| NlgError::InvalidPipe {
+            pipe: "hedge".to_string(),
+            reason: "value must be a 0..=100 integer confidence score".to_string(),
+        })?;
+
+        let mode = match &pipe.arg {
+            None => HedgeMode::Adverb,
+            Some(PipeArg::String(s)) => {
+                parse_hedge_mode(s).ok_or_else(|| NlgError::InvalidPipe {
+                    pipe: "hedge".to_string(),
+                    reason: format!(
+                        "unknown hedge mode `{s}` — expected one of adverb, modal, prefix"
+                    ),
+                })?
+            }
+            Some(PipeArg::Number(_)) => {
+                return Err(NlgError::InvalidPipe {
+                    pipe: "hedge".to_string(),
+                    reason: "hedge argument must be a mode name, not a number".to_string(),
+                });
+            }
+        };
+
+        Ok(Value::String(hedge_fn(score, mode).to_string()))
+    }
+
+    /// Render a count as a natural-language quantifier ("no consumers",
+    /// "a single caller", "over a hundred callers", "thousands of deps").
+    /// Accepts optional `:natural` (default), `:exact`, or `:hedged`
+    /// flavour argument.
+    fn pipe_quantify(&self, pipe: &Pipe, value: &Value) -> Result<Value, NlgError> {
+        let count = value.as_number().ok_or_else(|| NlgError::InvalidPipe {
+            pipe: "quantify".to_string(),
+            reason: "value must be a number".to_string(),
+        })?;
+
+        let mode = match &pipe.arg {
+            None => QuantifyMode::Natural,
+            Some(PipeArg::String(s)) => {
+                parse_quantify_mode(s).ok_or_else(|| NlgError::InvalidPipe {
+                    pipe: "quantify".to_string(),
+                    reason: format!(
+                        "unknown quantify mode `{s}` — expected one of natural, exact, hedged"
+                    ),
+                })?
+            }
+            Some(PipeArg::Number(_)) => {
+                return Err(NlgError::InvalidPipe {
+                    pipe: "quantify".to_string(),
+                    reason: "quantify argument must be a mode name, not a number".to_string(),
+                });
+            }
+        };
+
+        Ok(Value::String(quantify_fn(count, mode, &*self.language)))
+    }
+
+    /// Emit a demonstrative reference to a previously-mentioned action:
+    /// `{rename|demonstrative}` → "this rename" when a prior render has
+    /// happened in the current discourse scope, "the rename" otherwise.
+    ///
+    /// Intended for continuation templates like
+    /// `"{change|demonstrative} affects {n} consumers"`, which reads as
+    /// "this change affects 6 consumers" when following a primary render
+    /// about the change itself. A fresh discourse (after `engine.reset()`
+    /// or on the very first render) falls back to "the X" since there's
+    /// nothing to point back to.
+    fn pipe_demonstrative(&self, value: &Value) -> Result<Value, NlgError> {
+        let noun = value.as_display();
+        if noun.is_empty() {
+            return Ok(Value::String(noun));
+        }
+
+        let determiner = if self.discourse.borrow().has_prior_render() {
+            "this"
+        } else {
+            "the"
+        };
+
+        Ok(Value::String(format!("{determiner} {noun}")))
+    }
+
+    /// Render a timestamp as a relative phrase ("yesterday", "3 weeks ago",
+    /// "in 2 months"). Input is Unix seconds; the engine's reference
+    /// time (set via `reference_time()` or defaulting to system now) is
+    /// used as "now".
+    #[cfg(feature = "time")]
+    fn pipe_relative(&self, value: &Value) -> Result<Value, NlgError> {
+        let ts = value.as_number().ok_or_else(|| NlgError::InvalidPipe {
+            pipe: "relative".to_string(),
+            reason: "value must be a Unix-epoch integer (seconds)".to_string(),
+        })?;
+
+        let now = match self.reference_time {
+            Some(n) => n,
+            None => {
+                // Outside wasm32 we fall through to system time. On
+                // wasm32-unknown-unknown `SystemTime::now()` panics at
+                // runtime, so we surface a clear error instead — WASM
+                // callers should always call `engine.reference_time()`
+                // (or disable the `time` feature entirely).
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_secs() as i64)
+                        .unwrap_or(0)
+                }
+                #[cfg(target_arch = "wasm32")]
+                {
+                    return Err(NlgError::InvalidPipe {
+                        pipe: "relative".to_string(),
+                        reason: "on wasm32 targets the engine needs an \
+                                 explicit reference time — call \
+                                 `engine.reference_time(unix_secs)` before \
+                                 rendering"
+                            .to_string(),
+                    });
+                }
+            }
+        };
+
+        let diff = now - ts;
+        Ok(Value::String(format_relative(diff)))
+    }
+
+    /// Render the value through the synonym registry for elegant variation.
+    ///
+    /// If the input word is in a registered group, pick whichever synonym
+    /// has been used the least in recent output (falling back to
+    /// registration order on ties). If the word isn't registered, pass
+    /// it through unchanged.
+    ///
+    /// Capitalization of the first character is preserved from the input.
+    fn pipe_syn(&self, value: &Value) -> Result<Value, NlgError> {
+        let word = value.as_display();
+        let synonyms = match self.synonyms.synonyms_for(&word) {
+            Some(s) => s,
+            None => return Ok(Value::String(word)),
+        };
+
+        if synonyms.is_empty() {
+            return Ok(Value::String(word));
+        }
+
+        // Pick the synonym with the lowest recent word-frequency score.
+        // First-registered wins on ties for determinism.
+        let discourse = self.discourse.borrow();
+        let mut best = &synonyms[0];
+        let mut best_score = discourse.word_frequency(&synonyms[0]);
+        for syn in &synonyms[1..] {
+            let score = discourse.word_frequency(syn);
+            if score < best_score {
+                best_score = score;
+                best = syn;
+            }
+        }
+
+        // Preserve input capitalization: if the caller passed "Class" we
+        // return "Type", not "type".
+        let result = if word
+            .chars()
+            .next()
+            .map(|c| c.is_uppercase())
+            .unwrap_or(false)
+        {
+            capitalize_first(best)
+        } else {
+            best.clone()
+        };
+
+        Ok(Value::String(result))
+    }
+
     fn pipe_capitalize(&self, value: &Value) -> Result<Value, NlgError> {
         let s = value.as_display();
         let capitalized = capitalize_first(&s);
         Ok(Value::String(capitalized))
+    }
+
+    /// Render a full verb phrase from the value (the base verb) using a
+    /// spec like `past`, `present_perfect`, or `active_present_progressive`.
+    ///
+    /// Defaults: passive voice, third person.
+    ///
+    /// Examples:
+    /// - `{rename|verb:past}` → "was renamed"
+    /// - `{rename|verb:present_perfect}` → "has been renamed"
+    /// - `{rename|verb:active_present_progressive}` → "is renaming"
+    /// - `{rename|verb:conditional}` → "would be renamed"
+    fn pipe_verb(&self, pipe: &Pipe, value: &Value) -> Result<Value, NlgError> {
+        let spec = match &pipe.arg {
+            Some(PipeArg::String(s)) => s.as_str(),
+            _ => {
+                return Err(NlgError::InvalidPipe {
+                    pipe: "verb".to_string(),
+                    reason: "requires a form spec argument, e.g., \
+                             {rename|verb:present_perfect}"
+                        .to_string(),
+                });
+            }
+        };
+
+        let (form, voice) = VerbForm::parse_spec(spec).ok_or_else(|| NlgError::InvalidPipe {
+            pipe: "verb".to_string(),
+            reason: format!(
+                "unknown verb form spec `{spec}` — expected one of past, present, future, \
+                 present_perfect, past_perfect, future_perfect, present_progressive, \
+                 past_progressive, conditional, conditional_perfect \
+                 (optionally prefixed with `active_` or `passive_`)"
+            ),
+        })?;
+
+        let verb = value.as_display();
+        let phrase = self.language.verb_phrase(&verb, form, voice, Person::Third);
+        Ok(Value::String(phrase))
     }
 }
 
@@ -774,6 +1915,359 @@ fn format_truncated_list(
             format!("[{all_joined}]")
         }
     }
+}
+
+/// Auxiliary prefixes that signal a simple passive/perfect/progressive
+/// verb phrase. Listed longest-first so prefix matching grabs "has been"
+/// before "has" and "would have been" before "would have".
+const AUX_PREFIXES: &[&str] = &[
+    "would have been",
+    "will have been",
+    "would have",
+    "will have",
+    "has been",
+    "had been",
+    "have been",
+    "is being",
+    "was being",
+    "are being",
+    "were being",
+    "will be",
+    "would be",
+    "is",
+    "are",
+    "was",
+    "were",
+    "has",
+    "have",
+    "had",
+    "will",
+];
+
+/// Attempt conjunction reduction across a run of same-entity renders.
+///
+/// Given a list of rendered sentences all about the same subject, produce
+/// a single sentence that shares the subject and auxiliary across all
+/// clauses. Example:
+///
+/// ```text
+/// [
+///   "The class UserService was renamed to AccountService.",
+///   "It was modified.",
+///   "It was moved from src/ to lib/.",
+/// ]
+/// ```
+///
+/// reduces to:
+///
+/// ```text
+/// "The class UserService was renamed to AccountService, modified, and moved from src/ to lib/."
+/// ```
+///
+/// Returns `None` and leaves the caller to emit the sentences separately
+/// when reduction would be lossy: mixed auxiliaries, embedded `which`
+/// clauses, connectives that anchor to a previous sentence, or anything
+/// the heuristic can't confidently parse.
+fn reduce_same_entity_clauses(sentences: &[String]) -> Option<String> {
+    if sentences.len() < 2 {
+        return None;
+    }
+
+    // First sentence: find and keep the subject + aux + first predicate.
+    let head = sentences[0].trim_end();
+    let head_body = head.trim_end_matches(['.', '!', '?']);
+    let (head_subject_aux, head_aux, head_predicate) = split_subject_aux(head_body)?;
+
+    if predicate_has_embedded_clause(head_predicate) {
+        return None;
+    }
+
+    // Each subsequent sentence must start with "It <aux> " where the aux
+    // matches the first sentence, and the remaining predicate must be a
+    // simple clause (no embedded "which", no connective prefix spillover).
+    let mut predicates: Vec<String> = vec![head_predicate.to_string()];
+
+    for s in &sentences[1..] {
+        let trimmed = s.trim_end();
+        // Connectives ("Additionally,", "Similarly,", …) get prepended by
+        // the discourse system before we know a same-entity run is about
+        // to be reduced. Strip them and then try to match the pronoun
+        // pattern — the final conjunction ("and") subsumes the
+        // connective's linking role.
+        let without_conn = strip_leading_connective(trimmed);
+
+        let body = without_conn.trim_end_matches(['.', '!', '?']);
+
+        let (aux, predicate) = strip_it_aux_prefix(body)?;
+        if aux != head_aux {
+            return None;
+        }
+        if predicate_has_embedded_clause(predicate) {
+            return None;
+        }
+
+        predicates.push(predicate.to_string());
+    }
+
+    // Join predicates with Oxford comma: "a, b, and c" / "a and b".
+    let joined = match predicates.len() {
+        0 => return None,
+        1 => predicates.into_iter().next().unwrap(),
+        2 => format!("{} and {}", predicates[0], predicates[1]),
+        _ => {
+            let last = predicates.pop().unwrap();
+            let head = predicates.join(", ");
+            format!("{head}, and {last}")
+        }
+    };
+
+    Some(format!("{head_subject_aux} {joined}."))
+}
+
+/// Detect whether a predicate string would be clumsy to reduce because
+/// it carries an embedded subordinate clause or a long list.
+fn predicate_has_embedded_clause(predicate: &str) -> bool {
+    // ", which ..." is the common case to avoid — reducing across a
+    // sentence like "was renamed, which affects 6 consumers" would
+    // produce "was renamed, which affects 6 consumers, modified, and moved"
+    // which parses as the subordinate clause continuing into the next
+    // verb. Same for a handful of other subordinators.
+    let lower = predicate.to_lowercase();
+    const MARKERS: &[&str] = &[
+        ", which",
+        ", affecting",
+        ", impacting",
+        ", requiring",
+        ", including",
+    ];
+    MARKERS.iter().any(|m| lower.contains(m))
+}
+
+/// Detect a leading discourse connective, returning its canonical form
+/// if present. Used by [`Engine::render_explained`] to report which
+/// connective the discourse system prepended.
+fn detect_leading_connective(s: &str) -> Option<&'static str> {
+    const CONNECTIVES: &[&str] = &[
+        "Additionally,",
+        "Furthermore,",
+        "Similarly,",
+        "Likewise,",
+        "Meanwhile,",
+        "However,",
+        "On the other hand,",
+        "It also",
+    ];
+    CONNECTIVES.iter().copied().find(|c| s.starts_with(c))
+}
+
+/// Strip a leading discourse connective that the engine may have
+/// prepended (e.g. "Additionally, …", "Similarly, …"). Returns the
+/// original string when none of the known connectives match.
+fn strip_leading_connective(s: &str) -> &str {
+    const CONNECTIVES: &[&str] = &[
+        "Additionally,",
+        "Furthermore,",
+        "Similarly,",
+        "Likewise,",
+        "Meanwhile,",
+        "However,",
+        "On the other hand,",
+        // "It also" replaces the subject rather than prepending a comma —
+        // handle it specially so the post-strip text still starts with
+        // "it " / "It " for the pronoun match below.
+    ];
+
+    for conn in CONNECTIVES {
+        if let Some(rest) = s.strip_prefix(conn) {
+            return rest.trim_start();
+        }
+    }
+
+    // "It also was modified" — replace "It also" with "It" so the
+    // pronoun+aux matcher can still find its prefix.
+    if let Some(rest) = s.strip_prefix("It also ") {
+        // Leak a tiny static trick: borrow the tail starting from the
+        // "It" position of the original — we build a synthetic view.
+        // To keep lifetimes simple, fall through: callers accept that
+        // "It also <aux>" is handled by treating the connective as
+        // absent and relying on the aux matcher. Return the rest with
+        // a synthetic "It " prefix is not possible without alloc, so
+        // return the original and let the aux matcher fail gracefully.
+        // (Reduction will decline for "It also" forms rather than risk
+        // mis-parsing — acceptable as a v1 limitation.)
+        let _ = rest;
+    }
+
+    s
+}
+
+
+/// Split a head sentence into (full subject + aux prefix, aux word, rest).
+/// Returns None when the sentence doesn't follow the "The X Y was …" or
+/// "X was …" pattern that reduction expects.
+fn split_subject_aux(body: &str) -> Option<(&str, &str, &str)> {
+    for aux in AUX_PREFIXES {
+        let marker = format!(" {aux} ");
+        if let Some(pos) = body.find(&marker) {
+            let subject_aux_end = pos + 1 + aux.len(); // include the aux word
+            let subject_aux = &body[..subject_aux_end];
+            let predicate = body[subject_aux_end..].trim_start();
+            return Some((subject_aux, aux, predicate));
+        }
+    }
+    None
+}
+
+/// Strip a leading "It <aux> " (or "it <aux> ") prefix and return the
+/// aux word along with the remaining predicate. Returns None when the
+/// sentence doesn't follow the pronoun-continuation pattern.
+fn strip_it_aux_prefix(body: &str) -> Option<(&str, &str)> {
+    let rest = body
+        .strip_prefix("It ")
+        .or_else(|| body.strip_prefix("it "))?;
+
+    for aux in AUX_PREFIXES {
+        let marker_with_space = format!("{aux} ");
+        if let Some(tail) = rest.strip_prefix(&marker_with_space) {
+            return Some((aux, tail.trim_start()));
+        }
+        // Aux at end of sentence (no tail content) — skip reduction.
+        if rest == *aux {
+            return None;
+        }
+    }
+    None
+}
+
+/// Clean up rendering artifacts caused by omitted slots.
+///
+/// Two passes:
+/// 1. **Always**: collapse runs of internal whitespace into a single space,
+///    strip whitespace before common punctuation (`,`, `.`, `!`, `?`, `:`,
+///    `;`, `)`, `]`), and trim leading/trailing whitespace. These are safe
+///    transformations no matter which strictness mode is active.
+/// 2. **Silent-mode only**: strip trailing orphan prepositions and
+///    connectives left dangling by missing slots (e.g. `"was modified by "`
+///    → `"was modified"`, `"renamed to "` → `"renamed"`). We only do this
+///    under `Strictness::Silent` because those gaps are the user's
+///    explicit choice to swallow missing slots — the dangling fragments
+///    are artifacts of that choice, not of the template's intent.
+fn cleanup_artifacts(output: &str, strictness: Strictness) -> String {
+    let mut s = collapse_and_tidy(output);
+
+    if strictness == Strictness::Silent {
+        s = strip_dangling_tail_words(&s);
+    }
+
+    s
+}
+
+/// Collapse multi-space runs, strip whitespace before closing punctuation,
+/// and trim outer whitespace.
+fn collapse_and_tidy(s: &str) -> String {
+    // Collapse interior whitespace to single spaces while preserving
+    // meaningful content.
+    let mut result = String::with_capacity(s.len());
+    let mut last_was_space = false;
+    let mut started = false;
+
+    for c in s.chars() {
+        if c.is_whitespace() {
+            if started {
+                last_was_space = true;
+            }
+        } else {
+            if last_was_space {
+                result.push(' ');
+            }
+            result.push(c);
+            last_was_space = false;
+            started = true;
+        }
+    }
+
+    // Strip space before closing punctuation that might have been
+    // introduced by the collapse above (unlikely, but cheap to handle).
+    // Iterate through and skip " <punct>" → "<punct>". Implemented as a
+    // second pass so the first stays simple.
+    let mut tidied = String::with_capacity(result.len());
+    let mut chars = result.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == ' '
+            && let Some(&next) = chars.peek()
+            && matches!(next, ',' | '.' | '!' | '?' | ':' | ';' | ')' | ']')
+        {
+            // drop the space
+            continue;
+        }
+        tidied.push(c);
+    }
+
+    tidied
+}
+
+/// Words that are almost always followed by an argument — if they're
+/// stranded at the very end of an output (optionally before terminal
+/// punctuation), the argument must have been swallowed by Silent mode
+/// and we strip the orphan.
+const ORPHAN_TAIL_WORDS: &[&str] = &[
+    // Prepositions taking an object
+    "by", "to", "from", "in", "on", "at", "of", "with", "for", "into",
+    "onto", "upon", "about", "between", "among", "through", "across",
+    // Coordinating & correlative words that need another clause
+    "and", "or", "but", "nor", "yet",
+    // Subordinating words that need a clause
+    "because", "since", "while", "when", "where", "whether", "unless",
+    "until", "than",
+];
+
+/// Strip trailing words that were left orphaned by omitted slots. Repeats
+/// until no more matching tails remain — handles chained gaps like
+/// `"modified by in"`.
+fn strip_dangling_tail_words(s: &str) -> String {
+    let mut current = s.to_string();
+    loop {
+        // Consider any trailing punctuation separately — we'll preserve it.
+        let (body, tail_punct) = split_trailing_punct(&current);
+        let trimmed_body = body.trim_end();
+
+        // Grab the last word
+        let last_word_start = match trimmed_body.rfind(char::is_whitespace) {
+            Some(idx) => idx + 1,
+            None => {
+                // Single word output — don't touch.
+                return current;
+            }
+        };
+        let last_word = &trimmed_body[last_word_start..];
+        let last_word_lower = last_word.to_lowercase();
+
+        if ORPHAN_TAIL_WORDS.contains(&last_word_lower.as_str()) {
+            // Strip the orphan and any whitespace before it; retain trailing punctuation.
+            let new_body = trimmed_body[..last_word_start].trim_end().to_string();
+            if new_body.is_empty() {
+                // The whole output was orphans — bail out to avoid erasing content.
+                return current;
+            }
+            current = format!("{new_body}{tail_punct}");
+            continue;
+        }
+
+        return current;
+    }
+}
+
+/// Split off a run of terminal sentence punctuation so we can preserve it
+/// around tail-word stripping. Returns `(body, tail_punct)`.
+fn split_trailing_punct(s: &str) -> (&str, &str) {
+    let punct_start = s
+        .char_indices()
+        .rev()
+        .take_while(|(_, c)| matches!(c, '.' | '!' | '?' | ','))
+        .last()
+        .map(|(i, _)| i)
+        .unwrap_or(s.len());
+    (&s[..punct_start], &s[punct_start..])
 }
 
 /// Append a period to the output if it appears to be a sentence without
@@ -963,15 +2457,15 @@ fn pluralize_agreement(output: &str, lang: &dyn Language) -> String {
 
     // Pluralize entity type after "The": "The class UserService, Foo, and Bar"
     // This is fragile — only apply when pattern matches exactly.
-    if let Some(rest) = result.strip_prefix("The ") {
-        if let Some(space_idx) = rest.find(' ') {
-            let type_word = &rest[..space_idx];
-            // Only pluralize if it's a known simple noun (lowercase word)
-            if type_word.chars().all(|c| c.is_lowercase()) && type_word.len() < 15 {
-                let plural = lang.pluralize(type_word, 2);
-                if plural != type_word {
-                    result = format!("The {} {}", plural, &rest[space_idx + 1..]);
-                }
+    if let Some(rest) = result.strip_prefix("The ")
+        && let Some(space_idx) = rest.find(' ')
+    {
+        let type_word = &rest[..space_idx];
+        // Only pluralize if it's a known simple noun (lowercase word)
+        if type_word.chars().all(|c| c.is_lowercase()) && type_word.len() < 15 {
+            let plural = lang.pluralize(type_word, 2);
+            if plural != type_word {
+                result = format!("The {} {}", plural, &rest[space_idx + 1..]);
             }
         }
     }
@@ -1015,14 +2509,20 @@ mod tests {
             }
         }
         fn conjugate(&self, verb: &str, tense: Tense, _person: Person) -> String {
-            match tense {
-                Tense::Past => format!("{verb}ed"),
-                Tense::Present => verb.to_string(),
-                Tense::Future => format!("will {verb}"),
+            match (verb, tense) {
+                ("be", Tense::Past) => "was".to_string(),
+                ("be", Tense::Present) => "is".to_string(),
+                ("have", Tense::Present) => "has".to_string(),
+                (_, Tense::Past) => format!("{verb}ed"),
+                (_, Tense::Present) => verb.to_string(),
+                (_, Tense::Future) => format!("will {verb}"),
             }
         }
         fn past_participle(&self, verb: &str) -> String {
             format!("{verb}ed")
+        }
+        fn present_participle(&self, verb: &str) -> String {
+            format!("{verb}ing")
         }
         fn join_list(&self, items: &[&str], conjunction: Conjunction) -> String {
             let conj = match conjunction {
@@ -1098,7 +2598,9 @@ mod tests {
         engine.register_template("greet", "Hello {name}!").unwrap();
         let ctx = Context::new();
 
-        assert_eq!(engine.render("greet", &ctx).unwrap(), "Hello !");
+        // Silent-mode cleanup collapses the " " before "!" produced by
+        // the omitted slot.
+        assert_eq!(engine.render("greet", &ctx).unwrap(), "Hello!");
     }
 
     #[test]
@@ -1310,16 +2812,22 @@ mod tests {
 
     #[test]
     fn template_anti_repeat_with_multiple_variants() {
-        let mut engine = test_engine();
-        engine.register_template("t", "variant A").unwrap();
-        engine.register_template("t", "variant B").unwrap();
-        engine.register_template("t", "variant C").unwrap();
+        // Choose-best scoring only runs under Seeded/Random variation
+        // (Fixed/RoundRobin are literal by contract). Anti-repeat is
+        // discourse-driven: candidate variants whose words overlap with
+        // recent output are scored worse, so consecutive renders tend to
+        // pick different variants.
+        let mut engine = test_engine().variation(Variation::Seeded(1));
+        engine.register_template("t", "alpha distinct tokens").unwrap();
+        engine.register_template("t", "beta different tokens").unwrap();
+        engine.register_template("t", "gamma unique tokens").unwrap();
 
         let ctx = Context::new();
         let r1 = engine.render("t", &ctx).unwrap();
         let r2 = engine.render("t", &ctx).unwrap();
 
-        // Second render should pick a different variant than the first
+        // Second render must pick a different variant than the first —
+        // choose-best plus explicit last-variant exclusion guarantees it.
         assert_ne!(r1, r2);
     }
 
@@ -1501,6 +3009,933 @@ mod tests {
         assert_eq!(result, "The class Foo was tracked.");
     }
 
+    // ── Explain output ───────────────────────────────────────────────────
+
+    #[test]
+    fn explain_reports_variant_index_and_source() {
+        let mut engine = test_engine();
+        engine.register_template("t", "alpha").unwrap();
+        engine.register_template("t", "beta").unwrap();
+
+        let exp = engine.render_explained("t", Context::new()).unwrap();
+        assert_eq!(exp.template_key, "t");
+        assert_eq!(exp.variant_index, 0);
+        assert_eq!(exp.variant_source, "alpha");
+        assert_eq!(exp.salience, Salience::Medium);
+    }
+
+    #[test]
+    fn explain_reports_reference_form_when_refer_pipe_fires() {
+        let mut engine = test_engine();
+        engine
+            .register_template("t", "{name|refer} was modified")
+            .unwrap();
+        let mut ctx = Context::new();
+        ctx.insert("entity_type", Value::String("class".into()));
+        ctx.insert("name", Value::String("Foo".into()));
+
+        let exp = engine.render_explained("t", &ctx).unwrap();
+        // First mention → Full form.
+        assert_eq!(exp.reference_form, Some(ReferenceForm::Full));
+    }
+
+    #[test]
+    fn explain_captures_connective_on_continuation() {
+        let mut engine = test_engine();
+        engine
+            .register_template("t", "The {entity_type} {name} was renamed")
+            .unwrap();
+        engine
+            .register_template("u", "The {entity_type} {name} was modified")
+            .unwrap();
+        let mut ctx = Context::new();
+        ctx.insert("entity_type", Value::String("class".into()));
+        ctx.insert("name", Value::String("Foo".into()));
+
+        // Prime.
+        engine.render("t", &ctx).unwrap();
+        // Same entity, different action → "Additionally," prepended.
+        let exp = engine.render_explained("u", &ctx).unwrap();
+        assert_eq!(exp.connective, Some("Additionally,"));
+    }
+
+    // ── Streaming render iterator ────────────────────────────────────────
+
+    #[test]
+    fn render_iter_yields_one_sentence_per_event_when_no_aggregation() {
+        let mut engine = test_engine();
+        engine
+            .register_template("a", "Alpha was seen")
+            .unwrap();
+        engine
+            .register_template("b", "Beta was found")
+            .unwrap();
+
+        let events: Vec<(&str, Context)> = vec![("a", Context::new()), ("b", Context::new())];
+        let results: Vec<_> = engine
+            .render_iter(&events)
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        // Two different templates without shared entities — each yields
+        // its own sentence, no aggregation.
+        assert_eq!(results.len(), 2);
+        assert!(results[0].contains("Alpha"));
+        assert!(results[1].contains("Beta"));
+    }
+
+    #[test]
+    fn render_iter_collapses_same_entity_run_into_one_sentence() {
+        let mut engine = test_engine();
+        engine
+            .register_template("renamed", "{name|refer} was renamed")
+            .unwrap();
+        engine
+            .register_template("modified", "{name|refer} was modified")
+            .unwrap();
+
+        let mut ctx = Context::new();
+        ctx.insert("entity_type", Value::String("class".into()));
+        ctx.insert("name", Value::String("Foo".into()));
+        let events: Vec<(&str, Context)> = vec![
+            ("renamed", ctx.clone()),
+            ("modified", ctx.clone()),
+        ];
+        let iter_results: Vec<_> = engine
+            .render_iter(&events)
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        // Expected: exactly one reduced sentence for the same-entity run.
+        assert_eq!(iter_results.len(), 1);
+        assert!(
+            iter_results[0].contains("renamed and modified"),
+            "got: {}",
+            iter_results[0]
+        );
+    }
+
+    // ── Score variants harness ───────────────────────────────────────────
+
+    #[test]
+    fn score_variants_returns_one_entry_per_alternative() {
+        let mut engine = test_engine();
+        engine.register_template("t", "alpha").unwrap();
+        engine.register_template("t", "beta").unwrap();
+        engine.register_template("t", "gamma").unwrap();
+
+        let scores = engine.score_variants("t", Context::new()).unwrap();
+        assert_eq!(scores.len(), 3);
+        let sources: Vec<_> = scores.iter().map(|s| s.source.as_str()).collect();
+        assert_eq!(sources, vec!["alpha", "beta", "gamma"]);
+    }
+
+    #[test]
+    fn score_variants_marks_one_as_selected() {
+        let mut engine = test_engine();
+        engine.register_template("t", "alpha").unwrap();
+        engine.register_template("t", "beta").unwrap();
+
+        let scores = engine.score_variants("t", Context::new()).unwrap();
+        assert_eq!(scores.iter().filter(|s| s.selected).count(), 1);
+    }
+
+    #[test]
+    fn score_variants_does_not_mutate_discourse() {
+        let mut engine = test_engine();
+        engine.register_template("t", "alpha").unwrap();
+        engine.register_template("t", "beta").unwrap();
+
+        // Confirm that scoring doesn't advance render_index or any other
+        // discourse state — a follow-up render must behave as if the
+        // score call never happened.
+        let _ = engine.score_variants("t", Context::new()).unwrap();
+        let r1 = engine.render("t", Context::new()).unwrap();
+        // Fresh discourse: expected Fixed variation returns the first
+        // variant (index 0). Single-word output, so no sentence-end period.
+        assert_eq!(r1, "alpha");
+    }
+
+    #[test]
+    fn score_variants_unknown_key_errors() {
+        let engine = test_engine();
+        let result = engine.score_variants("never_registered", Context::new());
+        assert!(matches!(result, Err(NlgError::UnknownTemplate(_))));
+    }
+
+    // ── Template partials ────────────────────────────────────────────────
+
+    #[test]
+    fn partial_expands_inline() {
+        let mut engine = test_engine();
+        engine
+            .register_partial(
+                "tail",
+                ", affecting {count} {count|pluralize:consumer}",
+            )
+            .unwrap();
+        engine
+            .register_template("t", "The class Foo was modified{>tail}")
+            .unwrap();
+
+        let mut ctx = Context::new();
+        ctx.insert("count", Value::Number(3));
+        assert_eq!(
+            engine.render("t", &ctx).unwrap(),
+            "The class Foo was modified, affecting 3 consumers."
+        );
+    }
+
+    #[test]
+    fn partial_shared_across_templates() {
+        let mut engine = test_engine();
+        engine
+            .register_partial(
+                "tail",
+                ", affecting {count} {count|pluralize:consumer}",
+            )
+            .unwrap();
+        engine
+            .register_template("modified", "The class {name} was modified{>tail}")
+            .unwrap();
+        engine
+            .register_template("renamed", "The class {name} was renamed{>tail}")
+            .unwrap();
+
+        let mut ctx = Context::new();
+        ctx.insert("name", Value::String("Foo".into()));
+        ctx.insert("count", Value::Number(2));
+
+        assert_eq!(
+            engine.render("modified", &ctx).unwrap(),
+            "The class Foo was modified, affecting 2 consumers."
+        );
+        assert_eq!(
+            engine.render("renamed", &ctx).unwrap(),
+            "The class Foo was renamed, affecting 2 consumers."
+        );
+    }
+
+    #[test]
+    fn unknown_partial_errors() {
+        let mut engine = test_engine();
+        engine
+            .register_template("t", "Hello{>missing_partial}")
+            .unwrap();
+        let result = engine.render("t", Context::new());
+        assert!(matches!(
+            result,
+            Err(NlgError::TemplateParseError { .. })
+        ));
+    }
+
+    // ── Sentence-length budget ───────────────────────────────────────────
+
+    #[test]
+    fn length_budget_splits_long_sentence_at_which() {
+        let mut engine = test_engine().max_sentence_length(50);
+        engine
+            .register_template(
+                "t",
+                "The class UserService was renamed to AccountService, \
+                 which impacts 6 consumers",
+            )
+            .unwrap();
+
+        let out = engine.render("t", Context::new()).unwrap();
+        assert!(
+            out.contains("This impacts 6 consumers"),
+            "got: {out}"
+        );
+        assert!(out.contains(". "), "expected a sentence break, got: {out}");
+    }
+
+    #[test]
+    fn length_budget_does_nothing_when_sentence_fits() {
+        let mut engine = test_engine().max_sentence_length(200);
+        engine
+            .register_template("t", "The class Foo was modified")
+            .unwrap();
+
+        let out = engine.render("t", Context::new()).unwrap();
+        assert_eq!(out, "The class Foo was modified.");
+    }
+
+    // ── Negation pipe ────────────────────────────────────────────────────
+
+    #[test]
+    fn negated_pipe_uses_registered_antonym() {
+        let mut engine = test_engine();
+        engine.register_antonym("was modified", "remained unchanged");
+        engine.register_template("t", "The class Foo {p|negated}").unwrap();
+
+        let mut ctx = Context::new();
+        ctx.insert("p", Value::String("was modified".into()));
+        assert_eq!(
+            engine.render("t", &ctx).unwrap(),
+            "The class Foo remained unchanged."
+        );
+    }
+
+    #[test]
+    fn negated_pipe_inserts_not_when_no_antonym() {
+        let mut engine = test_engine();
+        engine.register_template("t", "The class Foo {p|negated}").unwrap();
+
+        let mut ctx = Context::new();
+        ctx.insert("p", Value::String("was modified".into()));
+        assert_eq!(
+            engine.render("t", &ctx).unwrap(),
+            "The class Foo was not modified."
+        );
+    }
+
+    #[test]
+    fn negated_pipe_handles_perfect_aux() {
+        let mut engine = test_engine();
+        engine.register_template("t", "The class Foo {p|negated}").unwrap();
+
+        let mut ctx = Context::new();
+        ctx.insert("p", Value::String("has been renamed".into()));
+        assert_eq!(
+            engine.render("t", &ctx).unwrap(),
+            "The class Foo has not been renamed."
+        );
+    }
+
+    // ── Hedge pipe ───────────────────────────────────────────────────────
+
+    #[test]
+    fn hedge_pipe_default_adverb() {
+        let mut engine = test_engine();
+        engine
+            .register_template("t", "The change {conf|hedge} broke the build")
+            .unwrap();
+
+        let mut ctx = Context::new();
+        ctx.insert("conf", Value::Number(60));
+        assert_eq!(
+            engine.render("t", &ctx).unwrap(),
+            "The change probably broke the build."
+        );
+    }
+
+    #[test]
+    fn hedge_pipe_modal_mode() {
+        let mut engine = test_engine();
+        engine
+            .register_template("t", "The change {conf|hedge:modal} break things")
+            .unwrap();
+
+        let mut ctx = Context::new();
+        ctx.insert("conf", Value::Number(40));
+        assert_eq!(
+            engine.render("t", &ctx).unwrap(),
+            "The change might break things."
+        );
+    }
+
+    #[test]
+    fn hedge_pipe_rejects_unknown_mode() {
+        let mut engine = test_engine();
+        engine.register_template("t", "{c|hedge:bogus}").unwrap();
+        let mut ctx = Context::new();
+        ctx.insert("c", Value::Number(60));
+        assert!(matches!(
+            engine.render("t", &ctx),
+            Err(NlgError::InvalidPipe { .. })
+        ));
+    }
+
+    // ── Anaphora: plural pronouns & demonstratives ───────────────────────
+
+    #[test]
+    fn demonstrative_uses_the_on_first_render() {
+        let mut engine = test_engine();
+        engine
+            .register_template("t", "{noun|demonstrative}")
+            .unwrap();
+        let mut ctx = Context::new();
+        ctx.insert("noun", Value::String("change".into()));
+        // Lowercase — demonstrative never capitalizes; callers that want
+        // the demonstrative at a sentence start combine it with a
+        // leading template word that already capitalizes, or with the
+        // engine's refer-pipe capitalization path.
+        assert_eq!(engine.render("t", &ctx).unwrap(), "the change");
+    }
+
+    #[test]
+    fn demonstrative_uses_this_on_continuation() {
+        let mut engine = test_engine();
+        engine.register_template("prime", "setup").unwrap();
+        engine
+            .register_template("t", "{noun|demonstrative}")
+            .unwrap();
+
+        // Prior render establishes discourse.
+        engine.render("prime", Context::new()).unwrap();
+
+        let mut ctx = Context::new();
+        ctx.insert("noun", Value::String("change".into()));
+        let result = engine.render("t", &ctx).unwrap();
+        // Mid-sentence capitalization isn't applied (template doesn't
+        // start with refer), so the value comes out lowercase.
+        assert_eq!(result, "this change");
+    }
+
+    #[test]
+    fn demonstrative_resets_to_the_after_reset() {
+        let mut engine = test_engine();
+        engine.register_template("prime", "setup").unwrap();
+        engine
+            .register_template("t", "{noun|demonstrative}")
+            .unwrap();
+
+        engine.render("prime", Context::new()).unwrap();
+        engine.reset();
+
+        let mut ctx = Context::new();
+        ctx.insert("noun", Value::String("change".into()));
+        assert_eq!(engine.render("t", &ctx).unwrap(), "the change");
+    }
+
+    // ── Quantify pipe ────────────────────────────────────────────────────
+
+    #[test]
+    fn quantify_pipe_natural_defaults() {
+        // Uses the crate's own TestLang for number_to_words via
+        // "<N>"-style stub. We still exercise the small-number spelling
+        // path via QuantifyMode::Natural's language callback.
+        let mut engine = test_engine();
+        engine.register_template("t", "{n|quantify} consumer").unwrap();
+
+        let mut ctx = Context::new();
+        ctx.insert("n", Value::Number(0));
+        assert_eq!(engine.render("t", &ctx).unwrap(), "no consumer");
+        engine.reset();
+
+        ctx.insert("n", Value::Number(1));
+        assert_eq!(engine.render("t", &ctx).unwrap(), "a single consumer");
+        engine.reset();
+
+        ctx.insert("n", Value::Number(300));
+        assert_eq!(engine.render("t", &ctx).unwrap(), "hundreds of consumer");
+    }
+
+    #[test]
+    fn quantify_pipe_exact_mode() {
+        let mut engine = test_engine();
+        engine
+            .register_template("t", "{n|quantify:exact} callers")
+            .unwrap();
+
+        let mut ctx = Context::new();
+        ctx.insert("n", Value::Number(47));
+        assert_eq!(engine.render("t", &ctx).unwrap(), "47 callers");
+    }
+
+    #[test]
+    fn quantify_pipe_hedged_mode() {
+        let mut engine = test_engine();
+        engine
+            .register_template("t", "{n|quantify:hedged} dependents")
+            .unwrap();
+
+        let mut ctx = Context::new();
+        ctx.insert("n", Value::Number(4));
+        assert_eq!(engine.render("t", &ctx).unwrap(), "a few dependents");
+    }
+
+    #[test]
+    fn quantify_pipe_rejects_unknown_mode() {
+        let mut engine = test_engine();
+        engine.register_template("t", "{n|quantify:bogus}").unwrap();
+        let mut ctx = Context::new();
+        ctx.insert("n", Value::Number(5));
+        assert!(matches!(
+            engine.render("t", &ctx),
+            Err(NlgError::InvalidPipe { .. })
+        ));
+    }
+
+    // ── Relative time pipe ───────────────────────────────────────────────
+
+    #[test]
+    fn relative_pipe_renders_past_phrases() {
+        // Fix the reference time so tests are deterministic.
+        let now: i64 = 1_700_000_000;
+        let mut engine = test_engine().reference_time(now);
+        engine.register_template("t", "{ts|relative}").unwrap();
+
+        let cases = [
+            (now, "just now"),
+            (now - 60, "1 minute ago"),
+            (now - 3600, "an hour ago"),
+            (now - 86400 - 3600, "yesterday"),
+            (now - 3 * 86400, "3 days ago"),
+            (now - 10 * 86400, "last week"),
+            (now - 3 * 30 * 86400, "3 months ago"),
+            (now - 2 * 365 * 86400, "2 years ago"),
+        ];
+
+        for (ts, expected) in cases {
+            let mut ctx = Context::new();
+            ctx.insert("ts", Value::Number(ts));
+            let rendered = engine.render("t", &ctx).unwrap();
+            assert_eq!(rendered, expected, "for ts={ts}");
+            engine.reset();
+        }
+    }
+
+    #[test]
+    fn relative_pipe_renders_future_phrases() {
+        let now: i64 = 1_700_000_000;
+        let mut engine = test_engine().reference_time(now);
+        engine.register_template("t", "{ts|relative}").unwrap();
+
+        let cases = [
+            (now + 3600, "in an hour"),
+            (now + 86400 + 3600, "tomorrow"),
+            (now + 3 * 86400, "in 3 days"),
+            (now + 10 * 86400, "next week"),
+        ];
+
+        for (ts, expected) in cases {
+            let mut ctx = Context::new();
+            ctx.insert("ts", Value::Number(ts));
+            let rendered = engine.render("t", &ctx).unwrap();
+            assert_eq!(rendered, expected, "for ts={ts}");
+            engine.reset();
+        }
+    }
+
+    #[test]
+    fn relative_pipe_rejects_non_numeric() {
+        let mut engine = test_engine().reference_time(1_700_000_000);
+        engine.register_template("t", "{x|relative}").unwrap();
+        let mut ctx = Context::new();
+        ctx.insert("x", Value::String("not a number".into()));
+        let result = engine.render("t", &ctx);
+        assert!(matches!(result, Err(NlgError::InvalidPipe { .. })));
+    }
+
+    // ── Synonym pipe (elegant variation) ─────────────────────────────────
+
+    #[test]
+    fn syn_pipe_passes_through_unregistered_words() {
+        let mut engine = test_engine();
+        engine.register_template("t", "{word|syn}").unwrap();
+
+        let mut ctx = Context::new();
+        ctx.insert("word", Value::String("unregistered".into()));
+        assert_eq!(engine.render("t", &ctx).unwrap(), "unregistered");
+    }
+
+    #[test]
+    fn syn_pipe_rotates_across_renders() {
+        let mut engine = test_engine();
+        engine.register_synonyms(&["class", "type", "kind"]);
+        engine
+            .register_template("t", "the {word|syn} was seen")
+            .unwrap();
+
+        let mut ctx = Context::new();
+        ctx.insert("word", Value::String("class".into()));
+
+        let r1 = engine.render("t", &ctx).unwrap();
+        let r2 = engine.render("t", &ctx).unwrap();
+        let r3 = engine.render("t", &ctx).unwrap();
+
+        // All three synonyms should appear across three renders —
+        // least-recently-used scoring rotates them.
+        let combined = format!("{r1} | {r2} | {r3}");
+        assert!(combined.contains("class"), "got: {combined}");
+        assert!(combined.contains("type"), "got: {combined}");
+        assert!(combined.contains("kind"), "got: {combined}");
+    }
+
+    #[test]
+    fn syn_pipe_preserves_capitalization() {
+        let mut engine = test_engine();
+        engine.register_synonyms(&["class", "type"]);
+        engine.register_template("t", "{word|syn}").unwrap();
+
+        // Uppercase input → uppercase output synonym.
+        let mut ctx = Context::new();
+        ctx.insert("word", Value::String("Class".into()));
+        let first = engine.render("t", &ctx).unwrap();
+        assert!(
+            first.chars().next().unwrap().is_uppercase(),
+            "expected capitalized output, got: {first}"
+        );
+    }
+
+    #[test]
+    fn syn_pipe_deterministic_tie_break_first_registered_wins() {
+        let mut engine = test_engine();
+        engine.register_synonyms(&["alpha", "beta", "gamma"]);
+        engine.register_template("t", "{word|syn}").unwrap();
+
+        // First render, no history → all tied at frequency 0. The
+        // first-registered entry wins.
+        let mut ctx = Context::new();
+        ctx.insert("word", Value::String("alpha".into()));
+        assert_eq!(engine.render("t", &ctx).unwrap(), "alpha");
+    }
+
+    // ── Clause aggregation / conjunction reduction ───────────────────────
+
+    #[test]
+    fn reduce_merges_three_simple_same_entity_passives() {
+        let reduced = reduce_same_entity_clauses(&[
+            "The class UserService was renamed to AccountService.".to_string(),
+            "It was modified.".to_string(),
+            "It was moved from src/ to lib/.".to_string(),
+        ]);
+        assert_eq!(
+            reduced.as_deref(),
+            Some(
+                "The class UserService was renamed to AccountService, \
+                 modified, and moved from src/ to lib/."
+            )
+        );
+    }
+
+    #[test]
+    fn reduce_two_clauses_uses_and_without_oxford_comma() {
+        let reduced = reduce_same_entity_clauses(&[
+            "The class Foo was renamed.".to_string(),
+            "It was modified.".to_string(),
+        ]);
+        assert_eq!(
+            reduced.as_deref(),
+            Some("The class Foo was renamed and modified.")
+        );
+    }
+
+    #[test]
+    fn reduce_rejects_mixed_auxiliaries() {
+        // First sentence uses "was" (simple past passive), second uses
+        // "has been" (present perfect passive). Merging would produce an
+        // ungrammatical "was renamed and been modified".
+        let reduced = reduce_same_entity_clauses(&[
+            "The class Foo was renamed.".to_string(),
+            "It has been modified.".to_string(),
+        ]);
+        assert!(reduced.is_none());
+    }
+
+    #[test]
+    fn reduce_rejects_embedded_which_clauses() {
+        // An embedded subordinate clause would absorb the following
+        // predicate into its own scope if we fused.
+        let reduced = reduce_same_entity_clauses(&[
+            "The class Foo was renamed, which impacts 6 consumers.".to_string(),
+            "It was modified.".to_string(),
+        ]);
+        assert!(reduced.is_none());
+    }
+
+    #[test]
+    fn reduce_strips_connectives_and_merges() {
+        // When the engine's discourse system has prepended "Additionally,"
+        // / "Similarly," / etc. to a follow-up same-entity render, the
+        // reducer strips those connectives — the final conjunction
+        // ("and") linking the predicates subsumes their linking role.
+        let reduced = reduce_same_entity_clauses(&[
+            "The class Foo was renamed.".to_string(),
+            "Additionally, it was modified.".to_string(),
+            "Furthermore, it was moved.".to_string(),
+        ]);
+        assert_eq!(
+            reduced.as_deref(),
+            Some("The class Foo was renamed, modified, and moved.")
+        );
+    }
+
+    #[test]
+    fn reduce_rejects_single_sentence() {
+        let reduced = reduce_same_entity_clauses(&[
+            "The class Foo was renamed.".to_string(),
+        ]);
+        assert!(reduced.is_none());
+    }
+
+    #[test]
+    fn reduce_rejects_when_continuation_has_no_pronoun() {
+        // If a follow-up doesn't start with "It " the entity is being
+        // re-introduced; keep them separate.
+        let reduced = reduce_same_entity_clauses(&[
+            "The class Foo was renamed.".to_string(),
+            "The class Foo was modified.".to_string(),
+        ]);
+        assert!(reduced.is_none());
+    }
+
+    #[test]
+    fn reduce_handles_has_been_perfect_passive() {
+        let reduced = reduce_same_entity_clauses(&[
+            "The class Foo has been renamed.".to_string(),
+            "It has been modified.".to_string(),
+            "It has been moved.".to_string(),
+        ]);
+        assert_eq!(
+            reduced.as_deref(),
+            Some("The class Foo has been renamed, modified, and moved.")
+        );
+    }
+
+    // ── Silent-mode cleanup ─────────────────────────────────────────────
+
+    #[test]
+    fn silent_strips_trailing_dangling_preposition() {
+        let mut engine = test_engine().strictness(Strictness::Silent);
+        engine
+            .register_template("t", "The file was modified by {author}")
+            .unwrap();
+        let ctx = Context::new();
+        assert_eq!(
+            engine.render("t", &ctx).unwrap(),
+            "The file was modified."
+        );
+    }
+
+    #[test]
+    fn silent_strips_dangling_preposition_with_punct() {
+        let mut engine = test_engine().strictness(Strictness::Silent);
+        engine
+            .register_template("t", "The class was renamed to {new_name}.")
+            .unwrap();
+        let ctx = Context::new();
+        assert_eq!(
+            engine.render("t", &ctx).unwrap(),
+            "The class was renamed."
+        );
+    }
+
+    #[test]
+    fn silent_strips_orphan_conjunction() {
+        let mut engine = test_engine().strictness(Strictness::Silent);
+        engine
+            .register_template("t", "The module exports {a} and {b}")
+            .unwrap();
+        let ctx = Context::new();
+        assert_eq!(
+            engine.render("t", &ctx).unwrap(),
+            "The module exports."
+        );
+    }
+
+    #[test]
+    fn silent_strips_chained_orphans() {
+        let mut engine = test_engine().strictness(Strictness::Silent);
+        engine
+            .register_template("t", "The job was scheduled by {a} at {b}")
+            .unwrap();
+        let ctx = Context::new();
+        // Strips "at" then "by" in sequence.
+        assert_eq!(
+            engine.render("t", &ctx).unwrap(),
+            "The job was scheduled."
+        );
+    }
+
+    #[test]
+    fn silent_preserves_content_when_orphans_would_empty_output() {
+        let mut engine = test_engine().strictness(Strictness::Silent);
+        // A template that's only a preposition + slot — nothing to keep.
+        engine.register_template("t", "by {author}").unwrap();
+        let ctx = Context::new();
+        // We refuse to empty the output; the orphan stays.
+        assert_eq!(engine.render("t", &ctx).unwrap(), "by");
+    }
+
+    #[test]
+    fn whitespace_collapsing_runs_regardless_of_strictness() {
+        // Even in Strict mode, internal whitespace runs get normalized
+        // (a safe transformation that doesn't depend on missing slots).
+        let mut engine = test_engine();
+        engine
+            .register_template("t", "The  quick   brown fox")
+            .unwrap();
+        let ctx = Context::new();
+        assert_eq!(
+            engine.render("t", &ctx).unwrap(),
+            "The quick brown fox."
+        );
+    }
+
+    #[test]
+    fn strict_mode_unaffected_by_cleanup_tail_stripping() {
+        // In Strict mode, a missing slot is an error, not an artifact,
+        // so the dangling-preposition strip never runs.
+        let mut engine = test_engine();
+        engine
+            .register_template("t", "modified by {author}")
+            .unwrap();
+        let ctx = Context::new();
+        assert!(engine.render("t", &ctx).is_err());
+    }
+
+    // ── Referring Expression Generation (Dale & Reiter) ─────────────────
+
+    #[test]
+    fn reg_with_no_registry_behaves_as_before() {
+        let mut engine = test_engine();
+        engine
+            .register_template("t", "{name|refer} was modified")
+            .unwrap();
+
+        let mut ctx = Context::new();
+        ctx.insert("entity_type", Value::String("class".into()));
+        ctx.insert("name", Value::String("UserService".into()));
+
+        let result = engine.render("t", &ctx).unwrap();
+        assert_eq!(result, "The class UserService was modified.");
+    }
+
+    #[test]
+    fn reg_adds_distinguisher_when_same_type_registered() {
+        let mut engine = test_engine();
+        engine.register_entity(
+            crate::EntityDescriptor::new("UserService", "class")
+                .with_attribute("layer", "domain"),
+        );
+        engine.register_entity(
+            crate::EntityDescriptor::new("AuthService", "class")
+                .with_attribute("layer", "infra"),
+        );
+        engine
+            .register_template("t", "{name|refer} was modified")
+            .unwrap();
+
+        let mut ctx = Context::new();
+        ctx.insert("entity_type", Value::String("class".into()));
+        ctx.insert("name", Value::String("UserService".into()));
+
+        let result = engine.render("t", &ctx).unwrap();
+        assert_eq!(result, "The domain class UserService was modified.");
+    }
+
+    #[test]
+    fn reg_no_distinguisher_needed_when_types_differ() {
+        let mut engine = test_engine();
+        engine.register_entity(
+            crate::EntityDescriptor::new("UserService", "class")
+                .with_attribute("layer", "domain"),
+        );
+        engine.register_entity(
+            crate::EntityDescriptor::new("UserModule", "module")
+                .with_attribute("layer", "infra"),
+        );
+        engine
+            .register_template("t", "{name|refer} was modified")
+            .unwrap();
+
+        let mut ctx = Context::new();
+        ctx.insert("entity_type", Value::String("class".into()));
+        ctx.insert("name", Value::String("UserService".into()));
+
+        let result = engine.render("t", &ctx).unwrap();
+        // Different types → head noun alone disambiguates, no attribute added.
+        assert_eq!(result, "The class UserService was modified.");
+    }
+
+    #[test]
+    fn reg_preference_order_steers_attribute_choice() {
+        let mut engine = test_engine().attribute_preference(vec!["size".to_string()]);
+        engine.register_entity(
+            crate::EntityDescriptor::new("Foo", "widget")
+                .with_attribute("color", "red")
+                .with_attribute("size", "small"),
+        );
+        engine.register_entity(
+            crate::EntityDescriptor::new("Bar", "widget")
+                .with_attribute("color", "blue")
+                .with_attribute("size", "large"),
+        );
+        engine
+            .register_template("t", "{name|refer} appeared")
+            .unwrap();
+
+        let mut ctx = Context::new();
+        ctx.insert("entity_type", Value::String("widget".into()));
+        ctx.insert("name", Value::String("Foo".into()));
+
+        // Preference says size first; size alone disambiguates.
+        let result = engine.render("t", &ctx).unwrap();
+        assert_eq!(result, "The small widget Foo appeared.");
+    }
+
+    /// Regression: two entities sharing a name but not a type must stay
+    /// independent in the registry. Rendering one must not substitute the
+    /// other's type.
+    #[test]
+    fn reg_same_name_different_type_does_not_cross_contaminate() {
+        let mut engine = test_engine();
+        engine.register_entity(
+            crate::EntityDescriptor::new("UserService", "class")
+                .with_attribute("layer", "domain"),
+        );
+        engine.register_entity(
+            crate::EntityDescriptor::new("UserService", "trait")
+                .with_attribute("scope", "public"),
+        );
+
+        engine
+            .register_template("t", "{name|refer} was modified")
+            .unwrap();
+
+        let mut ctx_class = Context::new();
+        ctx_class.insert("entity_type", Value::String("class".into()));
+        ctx_class.insert("name", Value::String("UserService".into()));
+
+        // Context says class → must render as class, never as trait.
+        let r = engine.render("t", &ctx_class).unwrap();
+        assert!(r.contains("class UserService"), "got: {r}");
+        assert!(!r.contains("trait"), "got: {r}");
+        // With only one class-typed UserService registered (the trait is
+        // a different type), no distinguishing attribute is needed.
+        assert_eq!(r, "The class UserService was modified.");
+
+        engine.reset();
+        let mut ctx_trait = Context::new();
+        ctx_trait.insert("entity_type", Value::String("trait".into()));
+        ctx_trait.insert("name", Value::String("UserService".into()));
+        let r2 = engine.render("t", &ctx_trait).unwrap();
+        assert_eq!(r2, "The trait UserService was modified.");
+    }
+
+    #[test]
+    fn reg_multiple_attributes_needed() {
+        let mut engine = test_engine();
+        engine.register_entity(
+            crate::EntityDescriptor::new("A", "widget")
+                .with_attribute("color", "red")
+                .with_attribute("size", "small"),
+        );
+        engine.register_entity(
+            crate::EntityDescriptor::new("B", "widget")
+                .with_attribute("color", "red")
+                .with_attribute("size", "large"),
+        );
+        engine.register_entity(
+            crate::EntityDescriptor::new("C", "widget")
+                .with_attribute("color", "blue")
+                .with_attribute("size", "small"),
+        );
+        engine = engine.attribute_preference(vec!["color".to_string(), "size".to_string()]);
+        engine
+            .register_template("t", "{name|refer} appeared")
+            .unwrap();
+
+        let mut ctx = Context::new();
+        ctx.insert("entity_type", Value::String("widget".into()));
+        ctx.insert("name", Value::String("A".into()));
+
+        // color rules out C; size then rules out B.
+        let result = engine.render("t", &ctx).unwrap();
+        assert_eq!(result, "The red small widget A appeared.");
+    }
+
     #[test]
     fn refer_no_entity_type_falls_back_to_name() {
         let mut engine = test_engine();
@@ -1516,5 +3951,241 @@ mod tests {
         // Falls back to just the name, with sentence-start capitalization
         // Note: "Something appeared" is 2 words so no period is added
         assert_eq!(result, "Something appeared");
+    }
+
+    // ── Regression tests for codex review findings ───────────────────────
+
+    /// Failed renders must not leave traces in discourse state.
+    #[test]
+    fn failed_render_does_not_mutate_discourse() {
+        let mut engine = test_engine();
+        engine
+            .register_template("ok", "{name|refer} was updated")
+            .unwrap();
+        engine
+            .register_template("bad", "{missing_slot} fails here")
+            .unwrap();
+
+        let mut ctx = Context::new();
+        ctx.insert("entity_type", Value::String("class".into()));
+        ctx.insert("name", Value::String("Foo".into()));
+
+        // Successful render — Foo is now known, render index is 1.
+        let r1 = engine.render("ok", &ctx).unwrap();
+        assert!(r1.contains("class Foo"), "r1 = {r1}");
+
+        // Attempt a failing render. The discourse state must NOT advance.
+        let bad_ctx = Context::new();
+        assert!(engine.render("bad", &bad_ctx).is_err());
+
+        // Next successful render should behave as if the failure never
+        // happened: Foo is still the focus entity at distance 1, so
+        // the pronoun form fires.
+        let r2 = engine.render("ok", &ctx).unwrap();
+        assert!(
+            r2.contains("it") || r2.contains("It"),
+            "Expected pronoun reference after failed render was rolled back, got: {r2}"
+        );
+    }
+
+    /// Regression: a failed render under RoundRobin must not advance the
+    /// rotation counter. The next successful render must pick up exactly
+    /// where the last successful one left off.
+    #[test]
+    fn round_robin_counter_is_transactional_on_failure() {
+        let mut engine = test_engine().variation(Variation::RoundRobin);
+        engine.register_template("ok", "alpha {name}").unwrap();
+        engine.register_template("ok", "beta {name}").unwrap();
+        engine.register_template("ok", "gamma {name}").unwrap();
+
+        let mut ctx = Context::new();
+        ctx.insert("name", Value::String("x".into()));
+        let empty = Context::new();
+
+        // First successful render: alpha
+        assert!(engine.render("ok", &ctx).unwrap().contains("alpha"));
+
+        // A failed render between the two should NOT advance the counter
+        // for "ok" — the missing slot aborts before commit.
+        assert!(engine.render("ok", &empty).is_err());
+
+        // Next successful render must be beta, not gamma.
+        assert!(engine.render("ok", &ctx).unwrap().contains("beta"));
+    }
+
+    /// RoundRobin must rotate through every alternative in order.
+    #[test]
+    fn round_robin_actually_rotates() {
+        let mut engine = test_engine().variation(Variation::RoundRobin);
+        engine.register_template("t", "alpha").unwrap();
+        engine.register_template("t", "beta").unwrap();
+        engine.register_template("t", "gamma").unwrap();
+
+        let ctx = Context::new();
+        let r1 = engine.render("t", &ctx).unwrap();
+        let r2 = engine.render("t", &ctx).unwrap();
+        let r3 = engine.render("t", &ctx).unwrap();
+        let r4 = engine.render("t", &ctx).unwrap();
+
+        // First three should be the three alternatives, in order.
+        assert!(r1.starts_with("alpha"), "r1 = {r1}");
+        // Second and third may pick up connectives; check the template body.
+        assert!(r2.contains("beta"), "r2 = {r2}");
+        assert!(r3.contains("gamma"), "r3 = {r3}");
+        // Fourth wraps back to alpha.
+        assert!(r4.contains("alpha"), "r4 = {r4}");
+    }
+
+    /// Variation::Fixed must always emit the first-registered template body,
+    /// even after discourse history has accumulated.
+    #[test]
+    fn fixed_variation_stays_fixed_across_renders() {
+        let mut engine = test_engine().variation(Variation::Fixed);
+        engine.register_template("t", "alpha body here").unwrap();
+        engine.register_template("t", "beta body here").unwrap();
+
+        let ctx = Context::new();
+        for _ in 0..5 {
+            let rendered = engine.render("t", &ctx).unwrap();
+            assert!(
+                rendered.contains("alpha body here"),
+                "Fixed should always pick the first-registered template, got: {rendered}"
+            );
+            assert!(
+                !rendered.contains("beta"),
+                "Fixed must never emit a later-registered alternative, got: {rendered}"
+            );
+        }
+    }
+
+    // ── Verb pipe tests ──────────────────────────────────────────────────
+
+    #[test]
+    fn verb_pipe_simple_past_passive() {
+        let mut engine = test_engine();
+        engine
+            .register_template("t", "{action|verb:past}")
+            .unwrap();
+
+        let mut ctx = Context::new();
+        ctx.insert("action", Value::String("rename".into()));
+        assert_eq!(engine.render("t", &ctx).unwrap(), "was renameed");
+    }
+
+    #[test]
+    fn verb_pipe_present_perfect_passive() {
+        let mut engine = test_engine();
+        engine
+            .register_template("t", "{action|verb:present_perfect}")
+            .unwrap();
+
+        let mut ctx = Context::new();
+        ctx.insert("action", Value::String("rename".into()));
+        assert_eq!(engine.render("t", &ctx).unwrap(), "has been renameed");
+    }
+
+    #[test]
+    fn verb_pipe_present_progressive_passive() {
+        let mut engine = test_engine();
+        engine
+            .register_template("t", "{action|verb:present_progressive}")
+            .unwrap();
+
+        let mut ctx = Context::new();
+        ctx.insert("action", Value::String("rename".into()));
+        assert_eq!(engine.render("t", &ctx).unwrap(), "is being renameed");
+    }
+
+    #[test]
+    fn verb_pipe_active_voice_prefix() {
+        let mut engine = test_engine();
+        engine
+            .register_template("t", "{action|verb:active_present_perfect}")
+            .unwrap();
+
+        let mut ctx = Context::new();
+        ctx.insert("action", Value::String("rename".into()));
+        assert_eq!(engine.render("t", &ctx).unwrap(), "has renameed");
+    }
+
+    #[test]
+    fn verb_pipe_conditional() {
+        let mut engine = test_engine();
+        engine
+            .register_template("t", "{action|verb:conditional}")
+            .unwrap();
+
+        let mut ctx = Context::new();
+        ctx.insert("action", Value::String("rename".into()));
+        assert_eq!(engine.render("t", &ctx).unwrap(), "would be renameed");
+    }
+
+    #[test]
+    fn verb_pipe_unknown_spec_is_error() {
+        let mut engine = test_engine();
+        engine
+            .register_template("t", "{action|verb:bogus_form}")
+            .unwrap();
+
+        let mut ctx = Context::new();
+        ctx.insert("action", Value::String("rename".into()));
+        let result = engine.render("t", &ctx);
+        assert!(matches!(result, Err(NlgError::InvalidPipe { .. })));
+    }
+
+    #[test]
+    fn verb_pipe_missing_spec_is_error() {
+        let mut engine = test_engine();
+        engine
+            .register_template("t", "{action|verb}")
+            .unwrap();
+
+        let mut ctx = Context::new();
+        ctx.insert("action", Value::String("rename".into()));
+        let result = engine.render("t", &ctx);
+        assert!(matches!(result, Err(NlgError::InvalidPipe { .. })));
+    }
+
+    /// Choose-best scoring must not advance list-style state via candidate
+    /// rendering — only the emitted render counts.
+    #[test]
+    fn candidate_scoring_does_not_advance_list_style() {
+        // Seeded variation triggers choose-best on render 2.
+        let mut engine = test_engine().variation(Variation::Seeded(1));
+        // Two alternatives both consume a list style each; if candidate
+        // rendering mutates state, the cycle is wrong.
+        engine
+            .register_template("t", "alpha uses {items|truncate:1|join}")
+            .unwrap();
+        engine
+            .register_template("t", "beta uses {items|truncate:1|join}")
+            .unwrap();
+
+        let mut ctx = Context::new();
+        ctx.insert(
+            "items",
+            Value::List(vec!["a".into(), "b".into(), "c".into()]),
+        );
+
+        let r1 = engine.render("t", &ctx).unwrap();
+        let r2 = engine.render("t", &ctx).unwrap();
+        let r3 = engine.render("t", &ctx).unwrap();
+
+        // Three renders should show three consecutive list styles.
+        // If candidate scoring leaked state, we'd see the cycle skip ahead
+        // (e.g., render 2's candidate would consume a style, pushing render 3
+        // onto the 4th style instead of the 3rd).
+        let styles: std::collections::HashSet<&str> = [
+            r1.as_str(),
+            r2.as_str(),
+            r3.as_str(),
+        ]
+        .into_iter()
+        .collect();
+        assert_eq!(
+            styles.len(),
+            3,
+            "Expected three distinct list styles across three renders, got: {r1} / {r2} / {r3}"
+        );
     }
 }

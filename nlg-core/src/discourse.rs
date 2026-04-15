@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 /// This is the engine's internal memory — it knows what entities were recently
 /// mentioned, what templates were recently used, what connectives were recently
 /// inserted, and what words appeared in recent output.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct DiscourseState {
     /// Tracks entities by name → (entity_type, render_index_of_last_mention).
     entities: HashMap<String, EntityMention>,
@@ -34,6 +34,10 @@ pub struct DiscourseState {
 
     /// Last list style index used (for cycling).
     last_list_style: usize,
+
+    /// Whether the current focus is a compound/plural subject, so pronoun
+    /// continuations should use "they/them" instead of "it".
+    focus_is_plural: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -45,6 +49,7 @@ struct EntityMention {
 
 /// How an entity should be referred to based on discourse context.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum ReferenceForm {
     /// Full form: "The class UserService"
     Full,
@@ -69,6 +74,7 @@ pub enum DiscourseRelation {
 
 /// List formatting style.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum ListStyle {
     /// "including A, B, and C among others"
     Including,
@@ -132,7 +138,19 @@ impl DiscourseState {
             last_entity_name: None,
             word_history: VecDeque::new(),
             last_list_style: 0,
+            focus_is_plural: false,
         }
+    }
+
+    /// Mark the current focus as a compound/plural subject so the next
+    /// pronoun reference uses "they" rather than "it".
+    pub fn set_focus_plural(&mut self, plural: bool) {
+        self.focus_is_plural = plural;
+    }
+
+    /// Whether the current focus is a plural/compound subject.
+    pub fn focus_is_plural(&self) -> bool {
+        self.focus_is_plural
     }
 
     /// Clear all discourse state. Called between unrelated rendering contexts.
@@ -146,6 +164,8 @@ impl DiscourseState {
     }
 
     /// Record that an entity was mentioned in the current render.
+    /// Resets the focus-plural flag — compound subjects must mark
+    /// themselves explicitly via [`Self::set_focus_plural`].
     pub fn mention_entity(&mut self, name: &str, entity_type: &str) {
         let entry = self.entities.entry(name.to_string()).or_insert(EntityMention {
             entity_type: entity_type.to_string(),
@@ -157,6 +177,7 @@ impl DiscourseState {
         entry.entity_type = entity_type.to_string();
         self.focus_entity = Some(name.to_string());
         self.last_entity_name = Some(name.to_string());
+        self.focus_is_plural = false;
     }
 
     /// Determine how to refer to an entity given discourse history.
@@ -216,6 +237,12 @@ impl DiscourseState {
     }
 
     /// Detect the relationship between the current render and the previous one.
+    ///
+    /// Both entities must be present (and comparable) to assert a "same
+    /// entity" or "different entity" relationship — otherwise the engine
+    /// would incorrectly emit e.g. a *Similarly,* connective for a
+    /// repeated entity-less template, where no entity comparison is
+    /// actually meaningful.
     pub fn detect_relation(
         &self,
         current_key: &str,
@@ -227,15 +254,18 @@ impl DiscourseState {
         };
 
         let last_entity = self.last_entity_name.as_deref();
-        let same_entity = current_entity.is_some() && current_entity == last_entity;
+        let both_have_entities = current_entity.is_some() && last_entity.is_some();
+        let same_entity = both_have_entities && current_entity == last_entity;
+        let different_entity = both_have_entities && current_entity != last_entity;
+
         let same_action = keys_share_action(current_key, last_key);
         let contrasting = keys_contrast(current_key, last_key);
 
         if same_entity && !same_action {
             DiscourseRelation::SameEntityDifferentAction
-        } else if !same_entity && same_action {
+        } else if different_entity && same_action {
             DiscourseRelation::DifferentEntitySameAction
-        } else if contrasting {
+        } else if contrasting && both_have_entities {
             DiscourseRelation::Contrast
         } else {
             DiscourseRelation::None
@@ -314,6 +344,29 @@ impl DiscourseState {
         score
     }
 
+    /// Recency-weighted frequency of a specific word in recent output.
+    /// Higher numbers mean the word has appeared recently and/or often.
+    /// Used to pick the least-recently-used synonym from a registered
+    /// group for elegant variation.
+    pub fn word_frequency(&self, word: &str) -> f64 {
+        let lower = word.to_lowercase();
+        let mut score = 0.0;
+        for (idx, words) in &self.word_history {
+            if !words.contains(&lower) {
+                continue;
+            }
+            let distance = self.render_index.saturating_sub(*idx);
+            let weight = match distance {
+                0 | 1 => 3.0,
+                2 => 2.0,
+                3 => 1.0,
+                _ => 0.5,
+            };
+            score += weight;
+        }
+        score
+    }
+
     /// Select the next list style, cycling to avoid repetition.
     pub fn next_list_style(&mut self) -> ListStyle {
         let style = LIST_STYLES[self.last_list_style % LIST_STYLES.len()];
@@ -324,6 +377,16 @@ impl DiscourseState {
     /// Whether this is the first render (no prior discourse context).
     pub fn is_first_render(&self) -> bool {
         self.render_index <= 1
+    }
+
+    /// Whether a prior render happened in this discourse scope, used by
+    /// the `{noun|demonstrative}` pipe to decide between "this X" and
+    /// "the X". Cleared by `reset()`.
+    pub fn has_prior_render(&self) -> bool {
+        // begin_render has already bumped render_index for the current
+        // render, so strictly greater than 1 means at least one earlier
+        // render contributed to discourse state.
+        self.render_index > 1
     }
 }
 
@@ -462,6 +525,37 @@ mod tests {
     fn no_connective_for_none_relation() {
         let mut state = DiscourseState::new();
         assert!(state.select_connective(&DiscourseRelation::None).is_none());
+    }
+
+    /// Regression: repeated entity-less templates must not be classified
+    /// as DifferentEntitySameAction — that yields spurious "Similarly,"
+    /// connectives where no entity comparison is meaningful.
+    #[test]
+    fn entity_less_repeated_render_produces_no_relation() {
+        let mut state = DiscourseState::new();
+        state.begin_render();
+        state.last_template_key = Some("code.added".to_string());
+        state.last_entity_name = None;
+
+        assert_eq!(
+            state.detect_relation("code.added", None),
+            DiscourseRelation::None
+        );
+    }
+
+    /// Regression: only one side having an entity is also insufficient to
+    /// infer either same-entity or different-entity relationships.
+    #[test]
+    fn one_sided_entity_presence_produces_no_relation() {
+        let mut state = DiscourseState::new();
+        state.begin_render();
+        state.last_template_key = Some("t".to_string());
+        state.last_entity_name = Some("Foo".to_string());
+
+        assert_eq!(
+            state.detect_relation("t", None),
+            DiscourseRelation::None
+        );
     }
 
     #[test]

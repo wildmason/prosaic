@@ -1,19 +1,22 @@
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{parse_macro_input, DeriveInput, Data, Fields, Type, PathArguments, GenericArgument};
+use syn::{parse_macro_input, Data, DeriveInput, Fields, GenericArgument, PathArguments, Type};
 
 /// Derive `IntoContext` for a struct, converting its fields into `Context` key-value pairs.
 ///
 /// Field type mapping:
-/// - `String` / `&str` → `Value::String`
-/// - `i64`, `i32`, `i16`, `i8`, `u64`, `u32`, `u16`, `u8`, `usize`, `isize` → `Value::Number`
+/// - `String` / `&str` / `&'a str` → `Value::String` (borrowed strs are cloned)
+/// - `i8`, `i16`, `i32`, `i64`, `isize`, `u8`, `u16`, `u32`, `u64`, `usize` → `Value::Number`
 /// - `Vec<String>` → `Value::List`
+/// - `Option<T>` where `T` is any of the above → inserted only when `Some(_)`
 ///
-/// Fields with `Option<T>` are only inserted if `Some`.
+/// Unsupported field types produce a compile-time error so template slots
+/// cannot silently disappear.
 #[proc_macro_derive(IntoContext)]
 pub fn derive_into_context(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     let name = &input.ident;
+    let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
 
     let fields = match &input.data {
         Data::Struct(data) => match &data.fields {
@@ -37,38 +40,44 @@ pub fn derive_into_context(input: TokenStream) -> TokenStream {
         }
     };
 
-    let insertions: Vec<_> = fields
-        .iter()
-        .filter_map(|field| {
-            let field_name = field.ident.as_ref()?;
-            let key = field_name.to_string();
-            let ty = &field.ty;
+    let mut insertions = Vec::with_capacity(fields.len());
+    for field in fields {
+        let field_name = match &field.ident {
+            Some(ident) => ident,
+            None => continue,
+        };
+        let key = field_name.to_string();
+        let ty = &field.ty;
 
-            if let Some(inner_ty) = extract_option_inner(ty) {
-                // Option<T> — only insert if Some
-                let conversion = value_conversion_for_type(inner_ty, &quote!(val));
-                conversion.map(|conv| {
-                    quote! {
-                        if let Some(val) = self.#field_name {
-                            ctx.insert(#key, #conv);
-                        }
-                    }
-                })
-            } else {
-                let conversion = value_conversion_for_type(ty, &quote!(self.#field_name));
-                conversion.map(|conv| {
-                    quote! {
+        let conversion = if let Some(inner_ty) = extract_option_inner(ty) {
+            match value_conversion_for_type(inner_ty, &quote!(val)) {
+                Some(conv) => quote! {
+                    if let ::core::option::Option::Some(val) = self.#field_name {
                         ctx.insert(#key, #conv);
                     }
-                })
+                },
+                None => {
+                    return unsupported_field_error(field_name, inner_ty, true);
+                }
             }
-        })
-        .collect();
+        } else {
+            match value_conversion_for_type(ty, &quote!(self.#field_name)) {
+                Some(conv) => quote! {
+                    ctx.insert(#key, #conv);
+                },
+                None => {
+                    return unsupported_field_error(field_name, ty, false);
+                }
+            }
+        };
+
+        insertions.push(conversion);
+    }
 
     let expanded = quote! {
-        impl nlg_core::IntoContext for #name {
-            fn into_context(self) -> nlg_core::Context {
-                let mut ctx = nlg_core::Context::new();
+        impl #impl_generics ::nlg_core::IntoContext for #name #ty_generics #where_clause {
+            fn into_context(self) -> ::nlg_core::Context {
+                let mut ctx = ::nlg_core::Context::new();
                 #(#insertions)*
                 ctx
             }
@@ -78,16 +87,38 @@ pub fn derive_into_context(input: TokenStream) -> TokenStream {
     TokenStream::from(expanded)
 }
 
+fn unsupported_field_error(
+    field: &syn::Ident,
+    ty: &Type,
+    was_option: bool,
+) -> TokenStream {
+    let wrapper = if was_option { "Option<…>" } else { "" };
+    let message = format!(
+        "IntoContext: field `{field}` has unsupported type {wrapper}`{ty}`. \
+         Supported types are String, &str, integer types, Vec<String>, and \
+         Option<T> wrapping any of the above.",
+        field = field,
+        wrapper = wrapper,
+        ty = quote!(#ty),
+    );
+    syn::Error::new_spanned(field, message)
+        .to_compile_error()
+        .into()
+}
+
 fn value_conversion_for_type(
     ty: &Type,
     accessor: &proc_macro2::TokenStream,
 ) -> Option<proc_macro2::TokenStream> {
     if is_type(ty, "String") {
-        Some(quote! { nlg_core::Value::String(#accessor) })
+        Some(quote! { ::nlg_core::Value::String(#accessor) })
+    } else if is_str_reference(ty) {
+        // `&str` / `&'a str` — clone into an owned String so it fits Value.
+        Some(quote! { ::nlg_core::Value::String((#accessor).to_string()) })
     } else if is_numeric_type(ty) {
-        Some(quote! { nlg_core::Value::Number(#accessor as i64) })
+        Some(quote! { ::nlg_core::Value::Number(#accessor as i64) })
     } else if is_vec_string(ty) {
-        Some(quote! { nlg_core::Value::List(#accessor) })
+        Some(quote! { ::nlg_core::Value::List(#accessor) })
     } else {
         None
     }
@@ -107,8 +138,7 @@ fn is_type(ty: &Type, name: &str) -> bool {
 
 fn is_numeric_type(ty: &Type) -> bool {
     let numeric_types = [
-        "i8", "i16", "i32", "i64", "i128", "isize",
-        "u8", "u16", "u32", "u64", "u128", "usize",
+        "i8", "i16", "i32", "i64", "isize", "u8", "u16", "u32", "u64", "usize",
     ];
     if let Type::Path(type_path) = ty {
         type_path
@@ -122,31 +152,32 @@ fn is_numeric_type(ty: &Type) -> bool {
 }
 
 fn is_vec_string(ty: &Type) -> bool {
-    if let Type::Path(type_path) = ty {
-        if let Some(seg) = type_path.path.segments.last() {
-            if seg.ident == "Vec" {
-                if let PathArguments::AngleBracketed(args) = &seg.arguments {
-                    if let Some(GenericArgument::Type(inner)) = args.args.first() {
-                        return is_type(inner, "String");
-                    }
-                }
-            }
-        }
+    if let Type::Path(type_path) = ty
+        && let Some(seg) = type_path.path.segments.last()
+        && seg.ident == "Vec"
+        && let PathArguments::AngleBracketed(args) = &seg.arguments
+        && let Some(GenericArgument::Type(inner)) = args.args.first()
+    {
+        return is_type(inner, "String");
+    }
+    false
+}
+
+fn is_str_reference(ty: &Type) -> bool {
+    if let Type::Reference(r) = ty {
+        return is_type(&r.elem, "str");
     }
     false
 }
 
 fn extract_option_inner(ty: &Type) -> Option<&Type> {
-    if let Type::Path(type_path) = ty {
-        if let Some(seg) = type_path.path.segments.last() {
-            if seg.ident == "Option" {
-                if let PathArguments::AngleBracketed(args) = &seg.arguments {
-                    if let Some(GenericArgument::Type(inner)) = args.args.first() {
-                        return Some(inner);
-                    }
-                }
-            }
-        }
+    if let Type::Path(type_path) = ty
+        && let Some(seg) = type_path.path.segments.last()
+        && seg.ident == "Option"
+        && let PathArguments::AngleBracketed(args) = &seg.arguments
+        && let Some(GenericArgument::Type(inner)) = args.args.first()
+    {
+        return Some(inner);
     }
     None
 }

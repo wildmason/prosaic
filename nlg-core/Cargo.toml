@@ -7,8 +7,44 @@ description = "General-purpose natural language generation from structured data"
 
 [dependencies]
 thiserror = "2"
+serde = { version = "1", features = ["derive"], optional = true }
+
+[features]
+default = ["time", "polish", "reg"]
+
+# Optional serde Serialize/Deserialize on Context, Value, EntityDescriptor,
+# RenderExplanation, VariantScore, and all configuration enums — enables
+# sending engine artefacts across JSON/MessagePack/etc. boundaries.
+serde = ["dep:serde"]
+
+# Relative-time pipe (`{ts|relative}`) and `engine.reference_time()`.
+# When disabled, the `relative` pipe is not registered and attempting
+# to use it in a template returns an `InvalidPipe` error at render
+# time. `SystemTime::now()` is also not referenced, so this feature
+# must be disabled for WASM targets that lack system time.
+time = []
+
+# Post-processing polish passes: smart quotes (`engine.smart_quotes`)
+# and sentence-length budgeting (`engine.max_sentence_length`). When
+# disabled, the corresponding builder methods are unavailable.
+polish = []
+
+# Referring-expression generation (Dale & Reiter): entity registry,
+# attribute preference order, and the same-type distractor walk inside
+# `{name|refer}`. When disabled, Full-form references render without
+# disambiguating attributes even when multiple same-type entities are
+# known. The bare `refer` pipe still produces Full/Short/Pronoun forms
+# from discourse state.
+reg = []
 
 [dev-dependencies]
 nlg-derive = { path = "../nlg-derive" }
 nlg-grammar-en = { path = "../nlg-grammar-en" }
 nlg-vocab-code = { path = "../nlg-vocab-code" }
+proptest = "1"
+serde_json = "1"
+criterion = { version = "0.5", default-features = false, features = ["cargo_bench_support"] }
+
+[[bench]]
+name = "engine"
+harness = false

@@ -110,6 +110,59 @@ pub fn past_participle(verb: &str) -> String {
     regular_past(verb)
 }
 
+/// Return the present participle (-ing form) of a verb.
+///
+/// Rules applied in order:
+/// 1. Known irregular mappings (e.g. "be" → "being", "lie" → "lying").
+/// 2. Ends in -ie → drop -ie, add -ying ("die" → "dying").
+/// 3. Ends in -e (but not -ee/-ye/-oe) → drop the -e, add -ing.
+/// 4. Short CVC words double the final consonant ("stop" → "stopping").
+/// 5. Default: append -ing.
+pub fn present_participle(verb: &str) -> String {
+    let lower = verb.to_lowercase();
+
+    // Irregular -ie → -y + ing (lie → lying, die → dying, tie → tying)
+    if lower.ends_with("ie") && verb.len() > 2 {
+        return format!("{}ying", &verb[..verb.len() - 2]);
+    }
+
+    // Specific verbs whose participle doesn't follow simple rules
+    const IRREGULAR_PARTICIPLES: &[(&str, &str)] = &[
+        ("be", "being"),
+        ("see", "seeing"),
+        ("agree", "agreeing"),
+        ("flee", "fleeing"),
+        ("free", "freeing"),
+        ("canoe", "canoeing"),
+        ("shoe", "shoeing"),
+        ("tiptoe", "tiptoeing"),
+        ("age", "aging"),
+    ];
+    for &(base, participle) in IRREGULAR_PARTICIPLES {
+        if lower == base {
+            return participle.to_string();
+        }
+    }
+
+    // Ends in -e (but not a doubled -ee or -oe which keep the e) → drop e, add -ing
+    if lower.ends_with('e')
+        && !lower.ends_with("ee")
+        && !lower.ends_with("oe")
+        && !lower.ends_with("ye")
+        && verb.len() > 1
+    {
+        return format!("{}ing", &verb[..verb.len() - 1]);
+    }
+
+    // CVC short words double the final consonant
+    if should_double_final_consonant(&lower) {
+        let last = lower.chars().last().unwrap();
+        return format!("{verb}{last}ing");
+    }
+
+    format!("{verb}ing")
+}
+
 fn past_tense(verb: &str) -> String {
     let lower = verb.to_lowercase();
 
@@ -368,5 +421,59 @@ mod tests {
         assert_eq!(past_participle("put"), "put");
         assert_eq!(past_participle("set"), "set");
         assert_eq!(past_participle("split"), "split");
+    }
+
+    // Present participle tests
+
+    #[test]
+    fn regular_present_participle() {
+        assert_eq!(present_participle("walk"), "walking");
+        assert_eq!(present_participle("talk"), "talking");
+        assert_eq!(present_participle("play"), "playing");
+        assert_eq!(present_participle("read"), "reading");
+    }
+
+    #[test]
+    fn present_participle_drops_silent_e() {
+        assert_eq!(present_participle("rename"), "renaming");
+        assert_eq!(present_participle("write"), "writing");
+        assert_eq!(present_participle("make"), "making");
+        assert_eq!(present_participle("move"), "moving");
+        assert_eq!(present_participle("create"), "creating");
+    }
+
+    #[test]
+    fn present_participle_doubles_final_consonant() {
+        assert_eq!(present_participle("stop"), "stopping");
+        assert_eq!(present_participle("plan"), "planning");
+        assert_eq!(present_participle("run"), "running");
+        assert_eq!(present_participle("sit"), "sitting");
+    }
+
+    #[test]
+    fn present_participle_ie_becomes_ying() {
+        assert_eq!(present_participle("lie"), "lying");
+        assert_eq!(present_participle("die"), "dying");
+        assert_eq!(present_participle("tie"), "tying");
+    }
+
+    #[test]
+    fn present_participle_keeps_ee_and_oe() {
+        assert_eq!(present_participle("see"), "seeing");
+        assert_eq!(present_participle("agree"), "agreeing");
+        assert_eq!(present_participle("canoe"), "canoeing");
+    }
+
+    #[test]
+    fn present_participle_be() {
+        assert_eq!(present_participle("be"), "being");
+    }
+
+    #[test]
+    fn present_participle_ends_in_y_unchanged() {
+        // -y verbs keep the y: "play" → "playing" (no change to y)
+        assert_eq!(present_participle("fly"), "flying");
+        assert_eq!(present_participle("try"), "trying");
+        assert_eq!(present_participle("carry"), "carrying");
     }
 }

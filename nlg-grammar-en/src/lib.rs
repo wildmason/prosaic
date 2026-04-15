@@ -41,6 +41,10 @@ impl Language for English {
         conjugate::past_participle(verb)
     }
 
+    fn present_participle(&self, verb: &str) -> String {
+        conjugate::present_participle(verb)
+    }
+
     fn join_list(&self, items: &[&str], conjunction: Conjunction) -> String {
         lists::join_list(items, conjunction)
     }

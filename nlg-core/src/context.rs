@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 /// A value that can be inserted into a rendering context.
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Value {
     String(String),
     Number(i64),
@@ -37,6 +38,8 @@ impl Value {
 
 /// Holds the key-value pairs passed to a template for rendering.
 #[derive(Debug, Clone, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(transparent))]
 pub struct Context {
     values: HashMap<String, Value>,
 }

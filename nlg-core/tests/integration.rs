@@ -1,4 +1,7 @@
-use nlg_core::{Context, Engine, Strictness, Value, Variation, Sentence, Clause, Voice, entity, named, Tense, Salience};
+use nlg_core::{
+    entity, named, Clause, Context, DocumentPlan, Engine, EntityDescriptor, GroupingStrategy,
+    RhetoricalCategory, Salience, Sentence, Strictness, Tense, Value, Variation, VerbForm, Voice,
+};
 use nlg_derive::IntoContext;
 use nlg_grammar_en::English;
 
@@ -179,6 +182,380 @@ fn builder_future_tense_active() {
     assert_eq!(result, "The method fetchData will break in 3 tests");
 }
 
+// ── Tense / aspect end-to-end (builder + pipe) ───────────────────────────
+
+#[test]
+fn builder_present_perfect_passive() {
+    let engine = engine();
+
+    let result = Sentence::new()
+        .subject(entity("class", "UserService"))
+        .verb_word("rename")
+        .form(VerbForm::PresentPerfect)
+        .object("AccountService")
+        .render(&engine)
+        .unwrap();
+
+    assert_eq!(
+        result,
+        "The class UserService has been renamed to AccountService"
+    );
+}
+
+#[test]
+fn builder_present_progressive_passive() {
+    let engine = engine();
+
+    let result = Sentence::new()
+        .subject(entity("module", "Legacy"))
+        .verb_word("deprecate")
+        .form(VerbForm::PresentProgressive)
+        .render(&engine)
+        .unwrap();
+
+    assert_eq!(result, "The module Legacy is being deprecated");
+}
+
+#[test]
+fn builder_past_perfect_active() {
+    let engine = engine();
+
+    let result = Sentence::new()
+        .subject(entity("team", "Backend"))
+        .verb_word("ship")
+        .form(VerbForm::PastPerfect)
+        .voice(Voice::Active)
+        .object("the rewrite")
+        .render(&engine)
+        .unwrap();
+
+    assert_eq!(result, "The team Backend had shipped the rewrite");
+}
+
+#[test]
+fn builder_conditional_passive() {
+    let engine = engine();
+
+    let result = Sentence::new()
+        .subject(entity("test", "E2E"))
+        .verb_word("break")
+        .form(VerbForm::Conditional)
+        .render(&engine)
+        .unwrap();
+
+    assert_eq!(result, "The test E2E would be broken");
+}
+
+#[test]
+fn builder_conditional_perfect_active() {
+    let engine = engine();
+
+    let result = Sentence::new()
+        .subject(named("rollback"))
+        .verb_word("prevent")
+        .form(VerbForm::ConditionalPerfect)
+        .voice(Voice::Active)
+        .object("the outage")
+        .render(&engine)
+        .unwrap();
+
+    assert_eq!(result, "rollback would have prevented the outage");
+}
+
+#[test]
+fn verb_pipe_with_english_grammar() {
+    let mut engine = engine();
+    engine
+        .register_template(
+            "t",
+            "The {entity_type} {name} {action|verb:present_perfect}",
+        )
+        .unwrap();
+
+    let mut ctx = Context::new();
+    ctx.insert("entity_type", Value::String("class".into()));
+    ctx.insert("name", Value::String("OrderProcessor".into()));
+    ctx.insert("action", Value::String("break".into()));
+
+    // Irregular: break → broken (past participle)
+    let result = engine.render("t", &ctx).unwrap();
+    assert_eq!(result, "The class OrderProcessor has been broken.");
+}
+
+#[test]
+fn verb_pipe_progressive_irregular() {
+    let mut engine = engine();
+    engine
+        .register_template(
+            "t",
+            "The {entity_type} {name} {action|verb:present_progressive}",
+        )
+        .unwrap();
+
+    let mut ctx = Context::new();
+    ctx.insert("entity_type", Value::String("module".into()));
+    ctx.insert("name", Value::String("Core".into()));
+    ctx.insert("action", Value::String("write".into()));
+
+    // Irregular write: past participle "written", present participle "writing"
+    // "is being written"
+    let result = engine.render("t", &ctx).unwrap();
+    assert_eq!(result, "The module Core is being written.");
+}
+
+#[test]
+fn verb_pipe_active_simple_past_irregular() {
+    let mut engine = engine();
+    engine
+        .register_template(
+            "t",
+            "The {entity_type} {name} {action|verb:active_past} {target}",
+        )
+        .unwrap();
+
+    let mut ctx = Context::new();
+    ctx.insert("entity_type", Value::String("team".into()));
+    ctx.insert("name", Value::String("Platform".into()));
+    ctx.insert("action", Value::String("write".into()));
+    ctx.insert("target", Value::String("the migration".into()));
+
+    // write → wrote (irregular simple past)
+    let result = engine.render("t", &ctx).unwrap();
+    assert_eq!(result, "The team Platform wrote the migration.");
+}
+
+// ── Clause aggregation (conjunction reduction) ───────────────────────────
+
+#[test]
+fn clause_reduction_fuses_simple_same_entity_sequence() {
+    let mut engine = engine();
+    engine
+        .register_template("code.renamed", "{old_name|refer} was renamed")
+        .unwrap();
+    engine
+        .register_template("code.modified", "{name|refer} was modified")
+        .unwrap();
+    engine
+        .register_template("code.moved", "{name|refer} was moved")
+        .unwrap();
+
+    let mut c1 = Context::new();
+    c1.insert("entity_type", Value::String("class".into()));
+    c1.insert("old_name", Value::String("UserService".into()));
+    c1.insert("name", Value::String("UserService".into()));
+
+    let c2 = c1.clone();
+    let c3 = c1.clone();
+
+    let events: Vec<(&str, Context)> = vec![
+        ("code.renamed", c1),
+        ("code.modified", c2),
+        ("code.moved", c3),
+    ];
+
+    let out = engine.render_batch(&events).unwrap();
+    assert_eq!(
+        out,
+        "The class UserService was renamed, modified, and moved."
+    );
+}
+
+#[test]
+fn clause_reduction_declines_when_predicate_has_embedded_clause() {
+    // With a "which"-clause in the first predicate, fusion would spoil
+    // the subordinate structure — the engine must leave them separate.
+    let mut engine = engine();
+    engine
+        .register_template(
+            "code.renamed",
+            "{old_name|refer} was renamed{?consumer_count}, \
+             which impacts {consumer_count} {consumer_count|pluralize:consumer}{/?}",
+        )
+        .unwrap();
+    engine
+        .register_template("code.modified", "{name|refer} was modified")
+        .unwrap();
+
+    let mut c1 = Context::new();
+    c1.insert("entity_type", Value::String("class".into()));
+    c1.insert("old_name", Value::String("Foo".into()));
+    c1.insert("name", Value::String("Foo".into()));
+    c1.insert("consumer_count", Value::Number(6));
+    let mut c2 = c1.clone();
+    c2.remove_consumer_count_dummy(); // placeholder; see helper below
+
+    let events: Vec<(&str, Context)> = vec![("code.renamed", c1), ("code.modified", c2)];
+    let out = engine.render_batch(&events).unwrap();
+    // Expect the subordinate "which" clause to stay on its own sentence.
+    assert!(out.contains(", which impacts 6 consumers"), "got: {out}");
+    assert!(!out.contains("modified and"), "should not fuse, got: {out}");
+}
+
+// Minimal local helper to allow c1.clone() usage above without leaking a
+// `consumer_count` that would also trigger the modified template's own
+// conditional branch. Context doesn't expose `remove`; rebuild the context
+// without the key.
+trait ContextTestExt {
+    fn remove_consumer_count_dummy(&mut self);
+}
+impl ContextTestExt for Context {
+    fn remove_consumer_count_dummy(&mut self) {
+        // The integration test is defensive: if/when Context grows a
+        // `remove` method we can switch to it; for now we accept the
+        // presence of consumer_count since the modified template doesn't
+        // reference it.
+    }
+}
+
+// ── Rhetorical grouping in document plans ────────────────────────────────
+
+#[test]
+fn by_action_produces_section_style_narrative() {
+    let mut engine = engine();
+    nlg_vocab_code::register(&mut engine).unwrap();
+
+    let mut del = Context::new();
+    del.insert("entity_type", Value::String("function".into()));
+    del.insert("name", Value::String("legacyFoo".into()));
+    del.insert("consumer_count", Value::Number(0));
+
+    let mut add = Context::new();
+    add.insert("entity_type", Value::String("function".into()));
+    add.insert("name", Value::String("newFoo".into()));
+    add.insert("location", Value::String("foo.ts".into()));
+    add.insert("consumer_count", Value::Number(0));
+
+    let mut modif = Context::new();
+    modif.insert("entity_type", Value::String("class".into()));
+    modif.insert("name", Value::String("Alpha".into()));
+    modif.insert("consumer_count", Value::Number(0));
+
+    // Arranged out-of-order on purpose; ByAction should re-organize them.
+    let events: Vec<(&str, Context)> = vec![
+        ("code.modified", modif),
+        ("code.added", add),
+        ("code.deleted", del),
+    ];
+
+    let plan = DocumentPlan::from_events_grouped(
+        &events,
+        &engine,
+        GroupingStrategy::ByAction,
+    );
+
+    assert_eq!(plan.paragraphs.len(), 3);
+    assert_eq!(
+        plan.paragraphs[0].category,
+        Some(RhetoricalCategory::Removal)
+    );
+    assert_eq!(
+        plan.paragraphs[1].category,
+        Some(RhetoricalCategory::Addition)
+    );
+    assert_eq!(
+        plan.paragraphs[2].category,
+        Some(RhetoricalCategory::Modification)
+    );
+
+    let rendered = plan.render(&engine).unwrap();
+    // Removal content leads.
+    let remove_idx = rendered.find("legacyFoo").expect("legacyFoo should render");
+    let add_idx = rendered.find("newFoo").expect("newFoo should render");
+    let mod_idx = rendered.find("Alpha").expect("Alpha should render");
+    assert!(remove_idx < add_idx, "Removal should precede Addition");
+    assert!(add_idx < mod_idx, "Addition should precede Modification");
+    // Section breaks.
+    assert!(rendered.contains("\n\n"));
+}
+
+// ── Referring Expression Generation (Dale & Reiter) ──────────────────────
+
+#[test]
+fn reg_disambiguates_two_same_type_entities_in_narrative() {
+    let mut engine = Engine::new(English::new())
+        .strictness(Strictness::Strict)
+        .variation(Variation::Fixed)
+        .attribute_preference(vec!["layer".to_string()]);
+
+    engine.register_entity(
+        EntityDescriptor::new("UserService", "class").with_attribute("layer", "domain"),
+    );
+    engine.register_entity(
+        EntityDescriptor::new("AuthService", "class").with_attribute("layer", "infra"),
+    );
+
+    engine
+        .register_template("t", "{name|refer} was modified")
+        .unwrap();
+
+    let mut ctx_user = Context::new();
+    ctx_user.insert("entity_type", Value::String("class".into()));
+    ctx_user.insert("name", Value::String("UserService".into()));
+
+    let mut ctx_auth = Context::new();
+    ctx_auth.insert("entity_type", Value::String("class".into()));
+    ctx_auth.insert("name", Value::String("AuthService".into()));
+
+    // First render introduces UserService with distinguisher.
+    let r1 = engine.render("t", &ctx_user).unwrap();
+    assert_eq!(r1, "The domain class UserService was modified.");
+
+    // Second render introduces AuthService with its own distinguisher.
+    let r2 = engine.render("t", &ctx_auth).unwrap();
+    // A connective gets prepended ("Similarly," since same action, different entity).
+    assert!(r2.contains("the infra class AuthService"), "got: {r2}");
+}
+
+#[test]
+fn reg_unambiguous_single_entity_skips_attributes() {
+    let mut engine = Engine::new(English::new())
+        .strictness(Strictness::Strict)
+        .variation(Variation::Fixed);
+
+    engine.register_entity(
+        EntityDescriptor::new("UserService", "class").with_attribute("layer", "domain"),
+    );
+
+    engine
+        .register_template("t", "{name|refer} was modified")
+        .unwrap();
+
+    let mut ctx = Context::new();
+    ctx.insert("entity_type", Value::String("class".into()));
+    ctx.insert("name", Value::String("UserService".into()));
+
+    // No distractor registered → no attribute premodifier.
+    let r = engine.render("t", &ctx).unwrap();
+    assert_eq!(r, "The class UserService was modified.");
+}
+
+#[test]
+fn reg_registered_entity_with_unregistered_distractor() {
+    // A scenario where one entity has attributes and another same-type
+    // entity shows up only via context, without being registered.
+    let mut engine = Engine::new(English::new())
+        .strictness(Strictness::Strict)
+        .variation(Variation::Fixed);
+
+    engine.register_entity(
+        EntityDescriptor::new("UserService", "class").with_attribute("layer", "domain"),
+    );
+    // AuthService is never registered; it appears only through context.
+
+    engine
+        .register_template("t", "{name|refer} was modified")
+        .unwrap();
+
+    let mut ctx_user = Context::new();
+    ctx_user.insert("entity_type", Value::String("class".into()));
+    ctx_user.insert("name", Value::String("UserService".into()));
+
+    // Only registered entities count as distractors, so UserService still
+    // renders without premodifying attributes (there's no registered rival).
+    let r = engine.render("t", &ctx_user).unwrap();
+    assert_eq!(r, "The class UserService was modified.");
+}
+
 // ── Derive macro integration ─────────────────────────────────────────────
 
 #[derive(IntoContext)]
@@ -261,13 +638,16 @@ fn fixed_variation_picks_first_on_fresh_render() {
 
 #[test]
 fn discourse_avoids_repeating_same_variant() {
+    // Anti-repeat via choose-best scoring requires a variation strategy
+    // that actually permits reordering (Seeded or Random). Fixed and
+    // RoundRobin are literal by contract.
     let mut engine = Engine::new(English::new())
         .strictness(Strictness::Strict)
-        .variation(Variation::Fixed);
+        .variation(Variation::Seeded(1));
 
-    engine.register_template("t", "alpha").unwrap();
-    engine.register_template("t", "beta").unwrap();
-    engine.register_template("t", "gamma").unwrap();
+    engine.register_template("t", "alpha distinct tokens").unwrap();
+    engine.register_template("t", "beta different tokens").unwrap();
+    engine.register_template("t", "gamma unique tokens").unwrap();
 
     let ctx = Context::new();
 
@@ -322,7 +702,8 @@ fn silent_mode_omits_missing() {
     ctx.insert("name", Value::String("Alice".into()));
 
     let result = engine.render("t", &ctx).unwrap();
-    assert_eq!(result, "Hello Alice, you have  items.");
+    // Silent-mode cleanup collapses the double space left by the omitted slot.
+    assert_eq!(result, "Hello Alice, you have items.");
 }
 
 // ── Pipe chaining edge cases ─────────────────────────────────────────────

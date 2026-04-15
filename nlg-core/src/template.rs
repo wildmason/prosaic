@@ -27,6 +27,11 @@ pub enum Segment {
         condition_key: String,
         inner: Vec<Segment>,
     },
+    /// A partial inclusion `{>name}` — expands at render time using a
+    /// partial registered via `engine.register_partial`. Enables sharing
+    /// template fragments across many templates (e.g. a trailing
+    /// "affecting N consumers" clause reused across vocab entries).
+    Partial { name: String },
 }
 
 /// A parsed template ready for rendering.
@@ -75,6 +80,7 @@ fn parse_segments(source: &str, start: usize, end: usize) -> Result<Vec<Segment>
 
         let content_start = i + 1;
         let is_conditional = content_start < bytes.len() && bytes[content_start] == b'?';
+        let is_partial = content_start < bytes.len() && bytes[content_start] == b'>';
         let is_closing = content_start + 1 < bytes.len()
             && bytes[content_start] == b'/'
             && bytes[content_start + 1] == b'?';
@@ -85,6 +91,32 @@ fn parse_segments(source: &str, start: usize, end: usize) -> Result<Vec<Segment>
                 position: start + i,
                 reason: "unexpected closing `{/?}` without opening".to_string(),
             });
+        }
+
+        if is_partial {
+            let name_start = content_start + 1; // after `>`
+            let name_end = slice[name_start..]
+                .find('}')
+                .map(|rel| name_start + rel)
+                .ok_or_else(|| NlgError::TemplateParseError {
+                    template: source.to_string(),
+                    position: start + i,
+                    reason: "unclosed `{>`".to_string(),
+                })?;
+
+            let name = slice[name_start..name_end].trim().to_string();
+            if name.is_empty() {
+                return Err(NlgError::TemplateParseError {
+                    template: source.to_string(),
+                    position: start + i,
+                    reason: "empty partial name".to_string(),
+                });
+            }
+
+            segments.push(Segment::Partial { name });
+            i = name_end + 1;
+            literal_start = i;
+            continue;
         }
 
         if is_conditional {
@@ -441,6 +473,27 @@ mod tests {
     #[test]
     fn parse_empty_conditional_key_is_error() {
         let result = Template::parse("{?}content{/?}");
+        assert!(matches!(result, Err(NlgError::TemplateParseError { .. })));
+    }
+
+    // ── Partial tests ───────────────────────────────────────────────────
+
+    #[test]
+    fn parse_partial_reference() {
+        let t = Template::parse("start {>tail} end").unwrap();
+        assert_eq!(t.segments.len(), 3);
+        assert!(matches!(&t.segments[1], Segment::Partial { name } if name == "tail"));
+    }
+
+    #[test]
+    fn parse_empty_partial_name_is_error() {
+        let result = Template::parse("{>}");
+        assert!(matches!(result, Err(NlgError::TemplateParseError { .. })));
+    }
+
+    #[test]
+    fn parse_unclosed_partial_is_error() {
+        let result = Template::parse("{>tail");
         assert!(matches!(result, Err(NlgError::TemplateParseError { .. })));
     }
 }
