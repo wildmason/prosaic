@@ -414,6 +414,54 @@ impl ContextTestExt for Context {
     }
 }
 
+// FCR Phase 1: "It also" connective end-to-end ──────────────────────────
+//
+// Four same-entity events on the same session. The discourse system cycles
+// connectives in pool order: sentence 2 → "Additionally,", sentence 3 →
+// "Furthermore,", sentence 4 → "It also". The reducer must strip all three
+// and fuse the four predicates.
+#[test]
+fn clause_reduction_accepts_it_also_connective_end_to_end() {
+    let mut engine = engine();
+    engine
+        .register_template("code.renamed", "{old_name|refer} was renamed")
+        .unwrap();
+    engine
+        .register_template("code.modified", "{name|refer} was modified")
+        .unwrap();
+    engine
+        .register_template("code.moved", "{name|refer} was moved")
+        .unwrap();
+    engine
+        .register_template("code.archived", "{name|refer} was archived")
+        .unwrap();
+
+    let base_ctx = {
+        let mut c = Context::new();
+        c.insert("entity_type", Value::String("class".into()));
+        c.insert("old_name", Value::String("DataStore".into()));
+        c.insert("name", Value::String("DataStore".into()));
+        c
+    };
+
+    let events: Vec<(&str, Context)> = vec![
+        ("code.renamed", base_ctx.clone()),
+        ("code.modified", base_ctx.clone()),
+        ("code.moved", base_ctx.clone()),
+        ("code.archived", base_ctx.clone()),
+    ];
+    let mut session = Session::new();
+
+    let out = engine.render_batch(&mut session, &events).unwrap();
+    // All four predicates should fuse into one sentence. The "It also" on
+    // sentence 4 is the key case — without FCR Phase 1 it would bail out
+    // and we'd get two separate results.
+    assert_eq!(
+        out,
+        "The class DataStore was renamed, modified, moved, and archived."
+    );
+}
+
 // ── Rhetorical grouping in document plans ────────────────────────────────
 
 #[test]

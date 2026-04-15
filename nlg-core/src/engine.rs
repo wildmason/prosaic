@@ -2066,8 +2066,8 @@ fn reduce_same_entity_clauses(sentences: &[String]) -> Option<String> {
         // pattern — the final conjunction ("and") subsumes the
         // connective's linking role.
         let without_conn = strip_leading_connective(trimmed);
-
-        let body = without_conn.trim_end_matches(['.', '!', '?']);
+        let without_conn_str: &str = &without_conn;
+        let body = without_conn_str.trim_end_matches(['.', '!', '?']);
 
         let (aux, predicate) = strip_it_aux_prefix(body)?;
         if aux != head_aux {
@@ -2133,8 +2133,10 @@ fn detect_leading_connective(s: &str) -> Option<&'static str> {
 
 /// Strip a leading discourse connective that the engine may have
 /// prepended (e.g. "Additionally, …", "Similarly, …"). Returns the
-/// original string when none of the known connectives match.
-fn strip_leading_connective(s: &str) -> &str {
+/// original string as `Borrowed` when none of the known connectives
+/// match, or an `Owned` rewrite for connectives that require synthesis
+/// (currently only `"It also"`, which becomes `"It …"`).
+fn strip_leading_connective(s: &str) -> std::borrow::Cow<'_, str> {
     const CONNECTIVES: &[&str] = &[
         "Additionally,",
         "Furthermore,",
@@ -2143,33 +2145,22 @@ fn strip_leading_connective(s: &str) -> &str {
         "Meanwhile,",
         "However,",
         "On the other hand,",
-        // "It also" replaces the subject rather than prepending a comma —
-        // handle it specially so the post-strip text still starts with
-        // "it " / "It " for the pronoun match below.
     ];
 
     for conn in CONNECTIVES {
         if let Some(rest) = s.strip_prefix(conn) {
-            return rest.trim_start();
+            return std::borrow::Cow::Borrowed(rest.trim_start());
         }
     }
 
-    // "It also was modified" — replace "It also" with "It" so the
-    // pronoun+aux matcher can still find its prefix.
+    // "It also was modified" — rewrite to "It was modified" so the
+    // pronoun+aux matcher can find its prefix. This requires an
+    // allocation because we are synthesising a new prefix.
     if let Some(rest) = s.strip_prefix("It also ") {
-        // Leak a tiny static trick: borrow the tail starting from the
-        // "It" position of the original — we build a synthetic view.
-        // To keep lifetimes simple, fall through: callers accept that
-        // "It also <aux>" is handled by treating the connective as
-        // absent and relying on the aux matcher. Return the rest with
-        // a synthetic "It " prefix is not possible without alloc, so
-        // return the original and let the aux matcher fail gracefully.
-        // (Reduction will decline for "It also" forms rather than risk
-        // mis-parsing — acceptable as a v1 limitation.)
-        let _ = rest;
+        return std::borrow::Cow::Owned(format!("It {}", rest.trim_start()));
     }
 
-    s
+    std::borrow::Cow::Borrowed(s)
 }
 
 
@@ -2398,7 +2389,8 @@ fn lowercase_first_in_place(output: &mut String) {
 
 /// Try to replace "The {type} {name} was ..." with a connective like "It also was ..."
 fn prepend_replacing_subject_in_place(output: &mut String, connective: &str) {
-    // Look for pattern: "The <word> <word> was" or "The <word> <word> has"
+    // Case 1: full NP subject "The <type> <name> …" — strip the two-word NP
+    // and replace with the connective.
     if let Some(rest) = output.strip_prefix("The ") {
         // Skip entity_type and name (two words)
         let words: Vec<&str> = rest.splitn(3, ' ').collect();
@@ -2412,6 +2404,19 @@ fn prepend_replacing_subject_in_place(output: &mut String, connective: &str) {
             return;
         }
     }
+
+    // Case 2: the render already emitted a pronoun subject ("it was …").
+    // Replace the leading "it " so the connective doesn't duplicate the
+    // subject — e.g. "It also " + "it was archived" → "It also was archived".
+    if let Some(rest) = output.strip_prefix("it ") {
+        let mut buf = String::with_capacity(connective.len() + 1 + rest.len());
+        buf.push_str(connective);
+        buf.push(' ');
+        buf.push_str(rest);
+        std::mem::swap(output, &mut buf);
+        return;
+    }
+
     // Fallback: lowercase the first char then prepend the connective.
     lowercase_first_in_place(output);
     let mut buf = String::with_capacity(connective.len() + 1 + output.len());
@@ -3839,6 +3844,37 @@ mod tests {
         assert_eq!(
             reduced.as_deref(),
             Some("The class Foo has been renamed, modified, and moved.")
+        );
+    }
+
+    // ── FCR: "It also" connective handling (Phase 1) ────────────────────
+
+    #[test]
+    fn reduce_accepts_it_also_connective() {
+        // "It also was modified" should strip to "It was modified" so the
+        // pronoun+aux matcher accepts it — FCR Phase 1.
+        let reduced = reduce_same_entity_clauses(&[
+            "The class UserService was renamed.".to_string(),
+            "It also was modified.".to_string(),
+        ]);
+        assert_eq!(
+            reduced.as_deref(),
+            Some("The class UserService was renamed and modified.")
+        );
+    }
+
+    #[test]
+    fn reduce_accepts_mixed_discourse_connectives() {
+        // "Additionally," on one sentence, "It also" on the next — both
+        // must be stripped before the pronoun+aux match fires.
+        let reduced = reduce_same_entity_clauses(&[
+            "The class Foo was renamed.".to_string(),
+            "Additionally, it was modified.".to_string(),
+            "It also was moved.".to_string(),
+        ]);
+        assert_eq!(
+            reduced.as_deref(),
+            Some("The class Foo was renamed, modified, and moved.")
         );
     }
 
