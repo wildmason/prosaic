@@ -462,6 +462,48 @@ fn clause_reduction_accepts_it_also_connective_end_to_end() {
     );
 }
 
+// FCR Phase 2: full-NP repetition end-to-end ────────────────────────────
+//
+// When templates hard-code the full NP (no `refer` pipe) or when the
+// discourse layer re-introduces the full subject, the second sentence
+// repeats "The class X was …" verbatim. The Phase 2 fallback in
+// reduce_same_entity_clauses must still fuse them.
+#[test]
+fn clause_reduction_accepts_full_np_repetition_end_to_end() {
+    let mut engine = engine();
+    // Templates write "The class {name} was …" explicitly — no refer pipe.
+    // Both sentences will carry the full NP, so the pronoun matcher
+    // declines and the full-NP fallback (FCR Phase 2) must accept them.
+    engine
+        .register_template("op.a", "The class {name} was renamed")
+        .unwrap();
+    engine
+        .register_template("op.b", "The class {name} was modified")
+        .unwrap();
+    engine
+        .register_template("op.c", "The class {name} was moved")
+        .unwrap();
+
+    let base_ctx = {
+        let mut c = Context::new();
+        c.insert("entity_type", Value::String("class".into()));
+        c.insert("name", Value::String("Gateway".into()));
+        c
+    };
+
+    let events: Vec<(&str, Context)> = vec![
+        ("op.a", base_ctx.clone()),
+        ("op.b", base_ctx.clone()),
+        ("op.c", base_ctx.clone()),
+    ];
+    let mut session = Session::new();
+
+    let out = engine.render_batch(&mut session, &events).unwrap();
+    // Without Phase 2 the three full-NP sentences would fail reduction and
+    // be emitted separately. With Phase 2 they fuse.
+    assert_eq!(out, "The class Gateway was renamed, modified, and moved.");
+}
+
 // ── Rhetorical grouping in document plans ────────────────────────────────
 
 #[test]

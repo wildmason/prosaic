@@ -2069,7 +2069,22 @@ fn reduce_same_entity_clauses(sentences: &[String]) -> Option<String> {
         let without_conn_str: &str = &without_conn;
         let body = without_conn_str.trim_end_matches(['.', '!', '?']);
 
-        let (aux, predicate) = strip_it_aux_prefix(body)?;
+        // Try pronoun form first ("It was …" / "it was …").
+        let (aux, predicate) = match strip_it_aux_prefix(body) {
+            Some(parsed) => parsed,
+            None => {
+                // Fallback: full-NP repetition — the head's subject+aux
+                // prefix appears verbatim in the follower. This covers the
+                // case where Centering Rule 1 demoted the pronoun (e.g.
+                // after a session reset or long entity gap). FCR Phase 2.
+                let remainder = strip_head_subject_prefix(body, head_subject_aux)?;
+                if remainder.is_empty() {
+                    return None;
+                }
+                // aux is implicitly head_aux since we matched head_subject_aux.
+                (head_aux, remainder)
+            }
+        };
         if aux != head_aux {
             return None;
         }
@@ -2196,6 +2211,42 @@ fn strip_it_aux_prefix(body: &str) -> Option<(&str, &str)> {
         // Aux at end of sentence (no tail content) — skip reduction.
         if rest == *aux {
             return None;
+        }
+    }
+    None
+}
+
+/// If `body` begins with `subject_aux` followed by a space, return the
+/// remaining predicate. Used as a fallback path in
+/// [`reduce_same_entity_clauses`] when the pronoun matcher declines — e.g.
+/// when Centering Rule 1 demoted the follower to a full NP or a session
+/// reset broke the pronoun chain.
+///
+/// The match is tried both verbatim and with the first character of
+/// `subject_aux` lowercased. The discourse system lowercases the first
+/// letter of a rendered sentence when it prepends a comma-style connective
+/// (`"Additionally, the class X was …"`), so the verbatim capital-T match
+/// would otherwise fail in that path.
+///
+/// Example: `body = "the class Foo was modified"`, `subject_aux = "The class Foo was"` →
+/// returns `Some("modified")`.
+fn strip_head_subject_prefix<'a>(body: &'a str, subject_aux: &str) -> Option<&'a str> {
+    let with_space = format!("{subject_aux} ");
+    if let Some(rest) = body.strip_prefix(with_space.as_str()) {
+        return Some(rest.trim_start());
+    }
+    // The discourse system lowercases the first char of the sentence when
+    // prepending a comma-style connective. Try the lowercase-first variant.
+    let mut lowercased = subject_aux.to_string();
+    if let Some(first) = lowercased.chars().next()
+        && first.is_uppercase()
+    {
+        let first_len = first.len_utf8();
+        let lower: String = first.to_lowercase().collect();
+        lowercased.replace_range(0..first_len, &lower);
+        let with_space_lower = format!("{lowercased} ");
+        if let Some(rest) = body.strip_prefix(with_space_lower.as_str()) {
+            return Some(rest.trim_start());
         }
     }
     None
@@ -3824,14 +3875,18 @@ mod tests {
     }
 
     #[test]
-    fn reduce_rejects_when_continuation_has_no_pronoun() {
-        // If a follow-up doesn't start with "It " the entity is being
-        // re-introduced; keep them separate.
+    fn reduce_accepts_full_np_repetition_same_entity() {
+        // Full-NP repetition is now accepted by FCR Phase 2: the follower
+        // repeats the head's subject+aux prefix verbatim (e.g. after a
+        // session reset that demoted the pronoun). The two predicates fuse.
         let reduced = reduce_same_entity_clauses(&[
             "The class Foo was renamed.".to_string(),
             "The class Foo was modified.".to_string(),
         ]);
-        assert!(reduced.is_none());
+        assert_eq!(
+            reduced.as_deref(),
+            Some("The class Foo was renamed and modified.")
+        );
     }
 
     #[test]
@@ -3876,6 +3931,69 @@ mod tests {
             reduced.as_deref(),
             Some("The class Foo was renamed, modified, and moved.")
         );
+    }
+
+    // ── FCR: full-NP repetition (Phase 2) ───────────────────────────────
+
+    #[test]
+    fn reduce_accepts_full_np_repetition() {
+        let reduced = reduce_same_entity_clauses(&[
+            "The class Foo was renamed.".to_string(),
+            "The class Foo was modified.".to_string(),
+        ]);
+        assert_eq!(
+            reduced.as_deref(),
+            Some("The class Foo was renamed and modified.")
+        );
+    }
+
+    #[test]
+    fn reduce_accepts_full_np_repetition_three_clauses() {
+        let reduced = reduce_same_entity_clauses(&[
+            "The class Foo was renamed.".to_string(),
+            "The class Foo was modified.".to_string(),
+            "The class Foo was moved.".to_string(),
+        ]);
+        assert_eq!(
+            reduced.as_deref(),
+            Some("The class Foo was renamed, modified, and moved.")
+        );
+    }
+
+    #[test]
+    fn reduce_mixed_np_and_pronoun_accepted() {
+        // Head full NP, follower 1 pronoun, follower 2 full NP — all reduce.
+        let reduced = reduce_same_entity_clauses(&[
+            "The class Foo was renamed.".to_string(),
+            "It was modified.".to_string(),
+            "The class Foo was moved.".to_string(),
+        ]);
+        assert_eq!(
+            reduced.as_deref(),
+            Some("The class Foo was renamed, modified, and moved.")
+        );
+    }
+
+    #[test]
+    fn reduce_rejects_different_np_repetition() {
+        // Head is "The class Foo was renamed", follower is "The class Bar was modified" —
+        // different NPs; the subject+aux prefix doesn't match, so no fusion.
+        let reduced = reduce_same_entity_clauses(&[
+            "The class Foo was renamed.".to_string(),
+            "The class Bar was modified.".to_string(),
+        ]);
+        assert_eq!(reduced, None);
+    }
+
+    #[test]
+    fn reduce_rejects_full_np_with_embedded_clause() {
+        // The predicate_has_embedded_clause safety check must still fire
+        // on the full-NP fallback path — FCR Phase 2.
+        let reduced = reduce_same_entity_clauses(&[
+            "The class Foo was renamed.".to_string(),
+            "The class Foo was modified, which affects 6 consumers.".to_string(),
+        ]);
+        assert_eq!(reduced, None);
     }
 
     // ── Silent-mode cleanup ─────────────────────────────────────────────
