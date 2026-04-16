@@ -16,7 +16,9 @@ use crate::length::split_long_in_place;
 use crate::punctuation::smart_quotes_in_place;
 use crate::quantify::{parse_mode as parse_quantify_mode, quantify as quantify_fn, QuantifyMode};
 #[cfg(feature = "reg")]
-use crate::reg::{distinguishing_attributes, EntityDescriptor, EntityRegistry};
+use crate::reg::{
+    distinguishing_attributes, distinguishing_subgraph, EntityDescriptor, EntityRegistry,
+};
 use crate::salience::{Salience, SalienceThresholds};
 use crate::synonyms::SynonymRegistry;
 use crate::template::{Pipe, PipeArg, Segment, Template};
@@ -1905,8 +1907,10 @@ impl Engine {
     }
 
     /// Build a *Full form* reference. If the entity is in the registry,
-    /// run Dale & Reiter REG against registered entities of the same type
-    /// and include distinguishing attributes as premodifiers.
+    /// run the configured REG algorithm against registered entities of the
+    /// same type and include distinguishing attributes as premodifiers. When
+    /// the graph-based algorithm is configured and attributes alone do not
+    /// disambiguate, one relation clause is appended as a postmodifier.
     ///
     /// Registry lookup uses `(entity_type, name)` so the same name can
     /// refer to distinct entities of different types. The context-supplied
@@ -1917,11 +1921,11 @@ impl Engine {
     /// - Unregistered entity with known type → "the <type> <name>".
     /// - Unregistered entity without a type  → just the name.
     fn render_full_reference(&self, name: &str, fallback_type: &str) -> String {
-        // With the `reg` feature: look up by (type, name) and run
-        // Dale & Reiter to pick distinguishing attributes. Without it:
-        // degrade gracefully to "the <type> <name>" / just the name.
+        // With the `reg` feature: look up by (type, name) and run the
+        // selected REG algorithm. Without it: degrade gracefully to
+        // "the <type> <name>" / just the name.
         #[cfg(feature = "reg")]
-        let attrs: Vec<String> = {
+        let (attrs, relation): (Vec<String>, Option<(String, String)>) = {
             let registered = if fallback_type.is_empty() {
                 None
             } else {
@@ -1936,15 +1940,32 @@ impl Engine {
                     EntityDescriptor::new(name, fallback_type)
                 }
             };
-            distinguishing_attributes(&target, &self.entity_registry, &self.reg_preference)
+            match self.reg_algorithm {
+                RegAlgorithm::DaleReiter => (
+                    distinguishing_attributes(
+                        &target,
+                        &self.entity_registry,
+                        &self.reg_preference,
+                    ),
+                    None,
+                ),
+                RegAlgorithm::GraphBased => {
+                    let desc = distinguishing_subgraph(
+                        &target,
+                        &self.entity_registry,
+                        &self.reg_preference,
+                    );
+                    (desc.attributes, desc.relation)
+                }
+            }
         };
 
         #[cfg(not(feature = "reg"))]
-        let attrs: Vec<String> = {
+        let (attrs, relation): (Vec<String>, Option<(String, String)>) = {
             if fallback_type.is_empty() {
                 return name.to_string();
             }
-            Vec::new()
+            (Vec::new(), None)
         };
 
         // The context-supplied type is authoritative. Only fall through to
@@ -1969,10 +1990,17 @@ impl Engine {
         }
 
         let lower_type = entity_type.to_lowercase();
-        if attrs.is_empty() {
+        let base = if attrs.is_empty() {
             format!("the {lower_type} {name}")
         } else {
             format!("the {} {lower_type} {name}", attrs.join(" "))
+        };
+
+        // Append relation clause when the graph-based algorithm selected one.
+        if let Some((label, target_name)) = relation {
+            format!("{base} {label} {target_name}")
+        } else {
+            base
         }
     }
 
