@@ -101,26 +101,58 @@ pub fn singularize_es(word: &str) -> String {
         return format!("{stem}z");
     }
 
-    // -es suffix: drop -es when it was added for consonant/stressed-vowel stems
+    // -es suffix: distinguish vowel-stem plurals (clase+s, nombre+s) from
+    // consonant-stem plurals (color+es, papel+es).
+    //
+    // Algorithm:
+    //  1. Strip -s  → candidate_s  ("clase", "colore", "nombre")
+    //  2. If candidate_s does NOT end in 'e', it's a non-e vowel stem → strip -s
+    //  3. If candidate_s ends in 'e':
+    //     a. Strip the 'e' → deep_stem ("clas", "color", "nombr")
+    //     b. If deep_stem ends in a consonant that can legally end a Spanish word
+    //        (r, l, n, s, d, m, t, x) AND is not part of an illegal final cluster
+    //        (i.e., the char before it is also a vowel or the stem is short),
+    //        return deep_stem (the -es was the true plural suffix).
+    //     c. Otherwise return candidate_s (the -s was the true plural suffix).
     if lower.ends_with("es") && lower.len() > 3 {
-        let candidate = &word[..word.len() - 2];
-        // Only strip -es if the remaining form looks like a real stem
-        // (i.e., doesn't leave just 1 char, and the penultimate char is consonant-like)
-        let cand_chars: Vec<char> = candidate.chars().collect();
-        if cand_chars.len() >= 2 {
-            let last_cand = *cand_chars.last().unwrap();
-            // If stem ends in vowel it was likely -e+s or stressed vowel+es
-            match last_cand {
-                'a' | 'e' | 'i' | 'o' | 'u' => {
-                    // Could be "clase" → "clases" (stem = "clase"), strip the s only
-                    if lower.ends_with('s') && !lower.ends_with("es") {
-                        return word[..word.len() - 1].to_string();
+        let strip_s = &word[..word.len() - 1];
+        let strip_s_chars: Vec<char> = strip_s.chars().collect();
+        let strip_s_last = strip_s_chars.last().copied().unwrap_or(' ');
+
+        match strip_s_last {
+            // Non-e vowel stem (shouldn't normally occur for -es words, but safe path)
+            'a' | 'i' | 'o' | 'u' | 'á' | 'é' | 'í' | 'ó' | 'ú' => {
+                return strip_s.to_string();
+            }
+            'e' => {
+                // Strip the trailing 'e' to get the deep stem
+                let deep_stem = &strip_s[..strip_s.len() - 1];
+                let deep_chars: Vec<char> = deep_stem.chars().collect();
+                if deep_chars.len() >= 2 {
+                    let deep_last = *deep_chars.last().unwrap();
+                    let deep_prev = deep_chars[deep_chars.len() - 2];
+                    // A legal Spanish word-final consonant preceded by a vowel
+                    // indicates the -es was the plural suffix (color, papel, mes).
+                    let legal_word_final = matches!(
+                        deep_last,
+                        'r' | 'l' | 'n' | 's' | 'd' | 'm' | 't' | 'x' | 'f' | 'z' | 'b'
+                    );
+                    let prev_is_vowel = matches!(
+                        deep_prev,
+                        'a' | 'e' | 'i' | 'o' | 'u' | 'á' | 'é' | 'í' | 'ó' | 'ú'
+                    );
+                    if legal_word_final && prev_is_vowel {
+                        // "colore" → deep="color", last='r', prev='o' → strip -es
+                        return deep_stem.to_string();
                     }
-                    // "clases" → "clase": strip trailing s
-                    return word[..word.len() - 1].to_string();
                 }
-                _ => {
-                    // Consonant stem: strip -es
+                // Otherwise preserve the -e (it was part of the original stem)
+                return strip_s.to_string();
+            }
+            _ => {
+                // Ends in consonant after stripping -s: strip -es
+                let candidate = &word[..word.len() - 2];
+                if candidate.len() >= 2 {
                     return candidate.to_string();
                 }
             }

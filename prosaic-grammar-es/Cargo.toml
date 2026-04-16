@@ -7,3 +7,6 @@ description = "Spanish grammar layer for the Prosaic NLG engine"
 
 [dependencies]
 prosaic-core = { path = "../prosaic-core", default-features = false }
+
+[dev-dependencies]
+prosaic-grammar-es = { path = "." }
