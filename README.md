@@ -9,11 +9,7 @@ Takes structured events and produces **natural-sounding** English text, not just
 Many NLG libraries produce grammatical-but-robotic output like *"The class UserService was modified. The class UserService was renamed. The class UserService was moved."* This crate's engine is **discourse-aware** — it remembers what it just said and adapts subsequent output:
 
 ```text
-The class UserService was renamed to AccountService, which impacts 6 direct consumers
-  including ProfileComponent, SettingsComponent, and AdminModule among others.
-Additionally, changes to it affect 3 dependents
-  ProfilePage, SettingsPage, and AuthModule.
-It has been updated (3 consumers may need review: ProfilePage, SettingsPage, AuthModule).
+The class UserService was renamed to AccountService, which impacts 6 direct consumers including ProfileComponent, SettingsComponent, and AdminModule among others. Additionally, changes to it affect 3 dependents ProfilePage, SettingsPage, and AuthModule. It has been updated (3 consumers may need review: ProfilePage, SettingsPage, AuthModule).
 ```
 
 Notice: **pronouns** on second and third mentions, a **discourse connective** ("Additionally") linking related events, **list style variation** ("including … among others" vs bracketed), and **different template variants** chosen each time.
