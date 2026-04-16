@@ -142,3 +142,26 @@ fn choose_pipe_accepted_by_whitelist() {
     };
     assert!(tpl.contains("|choose"));
 }
+
+// ── Phase 5: Entity slot compatibility ───────────────────────────────────────
+// The macro validates slot names and pipe names at compile time but is
+// agnostic to Value types — entity-valued slots are structurally identical
+// to string-valued slots from the macro's perspective.
+
+#[test]
+fn prosaic_template_macro_accepts_entity_slot() {
+    let tpl = prosaic_template! {
+        template: "Welcome, {user}!",
+        slots: [user],
+    };
+    assert_eq!(tpl, "Welcome, {user}!");
+}
+
+#[test]
+fn entity_slot_with_refer_pipe_accepted() {
+    let tpl = prosaic_template! {
+        template: "{user|refer} modified the system.",
+        slots: [user],
+    };
+    assert!(tpl.contains("{user|refer}"));
+}

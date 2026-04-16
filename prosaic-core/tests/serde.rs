@@ -4,6 +4,7 @@
 #![cfg(feature = "serde")]
 
 use prosaic_core::{
+    agreement::{AgreementFeatures, Definiteness, Gender, Number},
     Context, EntityDescriptor, GroupingStrategy, HedgeMode, ListStyle, QuantifyMode,
     ReferenceForm, RhetoricalCategory, Salience, Tense, Value, VerbForm, Voice,
 };
@@ -124,4 +125,75 @@ fn enums_serialize_to_names() {
             "\"GraphBased\""
         );
     }
+}
+
+// ── Value::Entity serde tests ─────────────────────────────────────────────────
+
+#[test]
+fn value_entity_roundtrips() {
+    let v = Value::Entity {
+        name: "UserService".into(),
+        features: AgreementFeatures::default()
+            .with_gender(Gender::Fem)
+            .with_number(Number::Singular)
+            .with_definiteness(Definiteness::Definite),
+    };
+    let json = serde_json::to_string(&v).unwrap();
+    let back: Value = serde_json::from_str(&json).unwrap();
+    assert_eq!(v, back);
+}
+
+#[test]
+fn value_entity_without_features_deserializes() {
+    // Legacy-style payload without the features field — serde(default) must handle it.
+    let json = r#"{"Entity":{"name":"X"}}"#;
+    let v: Value = serde_json::from_str(json).unwrap();
+    match v {
+        Value::Entity { name, features } => {
+            assert_eq!(name, "X");
+            assert_eq!(features, AgreementFeatures::default());
+        }
+        _ => panic!("expected Value::Entity"),
+    }
+}
+
+#[test]
+fn value_entity_features_field_serializes() {
+    // Confirm the JSON shape so the format is explicit and won't silently change.
+    let v = Value::Entity {
+        name: "Foo".into(),
+        features: AgreementFeatures::new().with_gender(Gender::Masc),
+    };
+    let json = serde_json::to_string(&v).unwrap();
+    // Must contain the entity name
+    assert!(json.contains("\"name\":\"Foo\""), "json: {json}");
+    // Must contain the features field (even though most are default/Unknown)
+    assert!(json.contains("\"features\""), "json: {json}");
+    // Must be the Entity variant
+    assert!(json.contains("\"Entity\""), "json: {json}");
+}
+
+#[test]
+fn agreement_features_roundtrip() {
+    let f = AgreementFeatures::new()
+        .with_gender(Gender::Fem)
+        .with_number(Number::Plural)
+        .with_definiteness(Definiteness::Indefinite);
+    let json = serde_json::to_string(&f).unwrap();
+    let back: AgreementFeatures = serde_json::from_str(&json).unwrap();
+    assert_eq!(f, back);
+}
+
+#[test]
+fn agreement_enums_serialize_to_variant_names() {
+    assert_eq!(serde_json::to_string(&Gender::Fem).unwrap(), "\"Fem\"");
+    assert_eq!(serde_json::to_string(&Gender::Masc).unwrap(), "\"Masc\"");
+    assert_eq!(
+        serde_json::to_string(&Number::Singular).unwrap(),
+        "\"Singular\""
+    );
+    assert_eq!(
+        serde_json::to_string(&Definiteness::Definite).unwrap(),
+        "\"Definite\""
+    );
 }
