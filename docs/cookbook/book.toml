@@ -1,0 +1,10 @@
+[book]
+title = "Prosaic Cookbook"
+description = "Recipes for deterministic prose generation with the Prosaic engine"
+authors = ["Matthew MacKinnon"]
+language = "en"
+src = "src"
+
+[output.html]
+default-theme = "rust"
+git-repository-url = "https://github.com/wildmason/prosaic"
