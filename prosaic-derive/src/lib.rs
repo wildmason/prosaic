@@ -241,7 +241,7 @@ const VALID_PIPES: &[&str] = &[
 /// - Compile-fail tests require an external `trybuild` harness (deferred to v2).
 #[proc_macro]
 pub fn prosaic_template(input: TokenStream) -> TokenStream {
-    let parsed = parse_macro_input!(input as NlgTemplateInput);
+    let parsed = parse_macro_input!(input as ProsaicTemplateInput);
 
     match validate_template(&parsed) {
         Ok(()) => {
@@ -252,12 +252,12 @@ pub fn prosaic_template(input: TokenStream) -> TokenStream {
     }
 }
 
-struct NlgTemplateInput {
+struct ProsaicTemplateInput {
     template: LitStr,
     slots: Vec<Ident>,
 }
 
-impl Parse for NlgTemplateInput {
+impl Parse for ProsaicTemplateInput {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let mut template: Option<LitStr> = None;
         let mut slots: Option<Vec<Ident>> = None;
@@ -293,11 +293,11 @@ impl Parse for NlgTemplateInput {
         })?;
         let slots = slots.unwrap_or_default();
 
-        Ok(NlgTemplateInput { template, slots })
+        Ok(ProsaicTemplateInput { template, slots })
     }
 }
 
-fn validate_template(input: &NlgTemplateInput) -> syn::Result<()> {
+fn validate_template(input: &ProsaicTemplateInput) -> syn::Result<()> {
     let template_str = input.template.value();
     let span = input.template.span();
 

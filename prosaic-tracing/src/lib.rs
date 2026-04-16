@@ -1,6 +1,6 @@
 //! Bridge `tracing` events to natural language prose via the prosaic engine.
 //!
-//! `prosaic-tracing` provides [`NlgLayer`], a [`tracing_subscriber::Layer`] that
+//! `prosaic-tracing` provides [`ProsaicLayer`], a [`tracing_subscriber::Layer`] that
 //! intercepts tracing events, converts their fields into an [`prosaic_core::Context`],
 //! and renders prose via a registered [`prosaic_core::Engine`].
 //!
@@ -9,7 +9,7 @@
 //! ```rust
 //! use prosaic_core::{Engine, Strictness};
 //! use prosaic_grammar_en::English;
-//! use prosaic_tracing::NlgLayer;
+//! use prosaic_tracing::ProsaicLayer;
 //! use tracing_subscriber::prelude::*;
 //!
 //! let mut engine = Engine::new(English::new()).strictness(Strictness::Silent);
@@ -21,7 +21,7 @@
 //!     .unwrap();
 //!
 //! let buf: Vec<u8> = Vec::new();
-//! let layer = NlgLayer::new(engine, buf);
+//! let layer = ProsaicLayer::new(engine, buf);
 //! let subscriber = tracing_subscriber::registry().with(layer);
 //! tracing::subscriber::with_default(subscriber, || {
 //!     tracing::warn!(
@@ -49,15 +49,15 @@ use prosaic_core::{Context, Engine, Session, Value};
 /// skipped — not every tracing event needs prose output.
 ///
 /// Rendered prose is written to the configured writer, one line per event.
-pub struct NlgLayer<W: Write + Send + 'static> {
+pub struct ProsaicLayer<W: Write + Send + 'static> {
     engine: Engine,
     session: Mutex<Session>,
     writer: Mutex<W>,
     key_mapper: Box<dyn Fn(&tracing::Metadata<'_>) -> String + Send + Sync>,
 }
 
-impl<W: Write + Send + 'static> NlgLayer<W> {
-    /// Create a new [`NlgLayer`] with the given engine and writer.
+impl<W: Write + Send + 'static> ProsaicLayer<W> {
+    /// Create a new [`ProsaicLayer`] with the given engine and writer.
     ///
     /// The default key mapper derives the template key as
     /// `"{target}.{name}"` from the event metadata.
@@ -118,7 +118,7 @@ impl tracing::field::Visit for FieldVisitor<'_> {
     }
 }
 
-impl<S, W> tracing_subscriber::Layer<S> for NlgLayer<W>
+impl<S, W> tracing_subscriber::Layer<S> for ProsaicLayer<W>
 where
     S: tracing::Subscriber,
     W: Write + Send + 'static,
@@ -194,7 +194,7 @@ mod tests {
             .unwrap();
 
         let buf = TestWriter::new();
-        let layer = NlgLayer::new(engine, buf.clone());
+        let layer = ProsaicLayer::new(engine, buf.clone());
 
         let subscriber = tracing_subscriber::registry().with(layer);
         tracing::subscriber::with_default(subscriber, || {
@@ -210,7 +210,7 @@ mod tests {
     fn silently_skips_events_without_matching_template() {
         let engine = Engine::new(English::new());
         let buf = TestWriter::new();
-        let layer = NlgLayer::new(engine, buf.clone());
+        let layer = ProsaicLayer::new(engine, buf.clone());
 
         let subscriber = tracing_subscriber::registry().with(layer);
         tracing::subscriber::with_default(subscriber, || {
@@ -231,7 +231,7 @@ mod tests {
             .unwrap();
 
         let buf = TestWriter::new();
-        let layer = NlgLayer::new(engine, buf.clone()).key_mapper(|_meta| "custom.key".to_string());
+        let layer = ProsaicLayer::new(engine, buf.clone()).key_mapper(|_meta| "custom.key".to_string());
 
         let subscriber = tracing_subscriber::registry().with(layer);
         tracing::subscriber::with_default(subscriber, || {
@@ -253,7 +253,7 @@ mod tests {
 
         let buf = TestWriter::new();
         let layer =
-            NlgLayer::new(engine, buf.clone()).key_mapper(|_| "t.e".to_string());
+            ProsaicLayer::new(engine, buf.clone()).key_mapper(|_| "t.e".to_string());
 
         let subscriber = tracing_subscriber::registry().with(layer);
         tracing::subscriber::with_default(subscriber, || {
@@ -274,7 +274,7 @@ mod tests {
             .unwrap();
 
         let buf = TestWriter::new();
-        let layer = NlgLayer::new(engine, buf.clone()).key_mapper(|_| "t.big".to_string());
+        let layer = ProsaicLayer::new(engine, buf.clone()).key_mapper(|_| "t.big".to_string());
 
         let subscriber = tracing_subscriber::registry().with(layer);
         tracing::subscriber::with_default(subscriber, || {

@@ -1,0 +1,17 @@
+Post-refactor performance baseline — captured 2026-04-15 after:
+  - Engine/Session split (commits 1790764, 67584e1, 6991b41)
+  - Perf sweep: filter_by_salience borrowed, ahash Context, O(1) SynonymRegistry,
+    u32 word_history interner (commits d7a9f3b, 33527d5, 0ecd8f4, 13bbe8b)
+  - Buffer flatten (commits 8b37ed6, d76dad7, a3318cd, 9e34c37)
+  - ctx! macro + IntoValue (commits b5cd870, c50a4fb)
+
+Criterion results (cargo bench --bench engine):
+
+  render_single_rename_medium             16.159 µs – 16.470 µs – 16.828 µs
+  render_batch_same_action_aggregation    35.930 µs – 36.856 µs – 37.712 µs
+  reg_fifty_distractors_single_render     16.825 µs – 17.379 µs – 17.914 µs
+  document_plan_by_entity                 93.506 µs – 95.881 µs – 98.553 µs
+  clause_reduction_three_same_entity      28.215 µs – 28.452 µs – 28.745 µs
+
+These are the "after" numbers for the allocation/buffer-flatten work. Future
+changes should diff against these. Hardware: Matt's Windows 11 box.
