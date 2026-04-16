@@ -1966,9 +1966,13 @@ impl Engine {
             let sentence = self.render(session, key, ctx)?;
             // If a marker was prepended AND the sentence starts with a
             // capitalised determiner, lowercase the first letter so the
-            // marker's capitalisation leads.
+            // marker's capitalisation leads. Also strip any automatic
+            // discourse connective the engine would have prepended — the
+            // explicit RST marker replaces it, otherwise we'd get
+            // "Furthermore, Similarly, ..." style duplications.
             if i > 0 && relation.is_some() {
-                output.push_str(&lowercase_first_if_determiner(&sentence));
+                let without_conn = strip_leading_connective(&sentence);
+                output.push_str(&lowercase_first_if_determiner(&without_conn));
             } else {
                 output.push_str(&sentence);
             }
@@ -6269,6 +6273,29 @@ mod render_batch_with_relations_tests {
         let events: Vec<(&str, Context, Option<RstRelation>)> = vec![];
         let out = engine.render_batch_with_relations(&mut s, &events).unwrap();
         assert_eq!(out, "");
+    }
+
+    #[test]
+    fn rst_marker_strips_auto_connective_to_avoid_double_prepend() {
+        // Two renders that would normally trigger an automatic "Similarly,"
+        // connective (different entity, same action). With an explicit RST
+        // Elaboration marker, the output should start with "Furthermore, "
+        // — not "Furthermore, Similarly, ".
+        let mut engine = make_engine();
+        engine
+            .register_template("t", "The class {name} was modified")
+            .unwrap();
+        let mut s = Session::new();
+        let events = vec![
+            ("t", ctx_with_name("Foo"), None),
+            ("t", ctx_with_name("Bar"), Some(RstRelation::Elaboration)),
+        ];
+        let out = engine.render_batch_with_relations(&mut s, &events).unwrap();
+        assert!(out.contains("Furthermore, "), "got: {out}");
+        assert!(
+            !out.contains("Furthermore, Similarly,") && !out.contains("Furthermore, Likewise,"),
+            "RST marker should suppress / strip auto-connective; got: {out}"
+        );
     }
 }
 
