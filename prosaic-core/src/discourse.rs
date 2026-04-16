@@ -109,12 +109,12 @@ pub enum ReferenceForm {
     Pronoun,
     /// Demonstrative determiner + type: "this class" / (lang-specific).
     /// Reserved slot for future discourse rules; not currently emitted by
-    /// [`DiscourseState::reference_form`].
+    /// `DiscourseState::reference_form`.
     Demonstrative,
     /// Zero realization: surface is empty. Used by pro-drop languages
     /// (Japanese, colloquial Spanish/Italian) where the pronoun is
     /// recoverable from context and the slot emits nothing.
-    /// Not currently emitted by the default [`DiscourseState::reference_form`];
+    /// Not currently emitted by the default `DiscourseState::reference_form`;
     /// language-specific discourse extensions may choose this form.
     Zero,
 }
