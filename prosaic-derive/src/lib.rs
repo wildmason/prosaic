@@ -193,6 +193,7 @@ fn extract_option_inner(ty: &Type) -> Option<&Type> {
 /// Kept in sync with `engine.rs::apply_pipe`. Used by `prosaic_template!` for
 /// compile-time pipe validation.
 const VALID_PIPES: &[&str] = &[
+    "plural",
     "pluralize",
     "article",
     "join",

@@ -7,7 +7,7 @@ use crate::session::Session;
 use crate::context::{Context, IntoContext, Value};
 use crate::discourse::{ListStyle, ReferenceForm};
 use crate::error::ProsaicError;
-use crate::language::{Conjunction, Language, Person, VerbForm};
+use crate::language::{Conjunction, Language, Person, PluralCategory, VerbForm};
 use crate::antonyms::{insert_not, AntonymRegistry};
 use crate::hedge::{hedge as hedge_fn, parse_mode as parse_hedge_mode, HedgeMode};
 #[cfg(feature = "polish")]
@@ -562,6 +562,7 @@ impl<'e, 's> RenderCtx<'e, 's> {
         context: &Context,
     ) -> Result<Value, ProsaicError> {
         match pipe.name.as_str() {
+            "plural" => self.pipe_plural(pipe, value),
             "pluralize" => self.pipe_pluralize(pipe, value, context),
             "article" => self.pipe_article(value),
             "join" => self.pipe_join(pipe, value),
@@ -889,6 +890,36 @@ impl<'e, 's> RenderCtx<'e, 's> {
         })? as usize;
 
         Ok(Value::String(self.engine.language.pluralize(word, count)))
+    }
+
+    /// CLDR-aware plural pipe: `{count|plural:noun}`.
+    ///
+    /// Reads the slot as an integer, classifies it with
+    /// [`Language::plural_category`], then returns the correct word form
+    /// via [`Language::pluralize_with_category`]. Unlike `|pluralize`, this
+    /// pipe is category-aware and ready for non-English grammars that
+    /// distinguish more than two number categories.
+    fn pipe_plural(&self, pipe: &Pipe, value: &Value) -> Result<Value, ProsaicError> {
+        let noun = match &pipe.arg {
+            Some(PipeArg::String(s)) => s.as_str(),
+            _ => {
+                return Err(ProsaicError::InvalidPipe {
+                    pipe: "plural".to_string(),
+                    reason: "requires a singular noun argument, e.g., {count|plural:service}"
+                        .to_string(),
+                });
+            }
+        };
+
+        let count = value.as_number().ok_or_else(|| ProsaicError::InvalidPipe {
+            pipe: "plural".to_string(),
+            reason: "requires a numeric slot value".to_string(),
+        })?;
+
+        let category: PluralCategory = self.engine.language.plural_category(count);
+        Ok(Value::String(
+            self.engine.language.pluralize_with_category(noun, category),
+        ))
     }
 
     fn pipe_article(&self, value: &Value) -> Result<Value, ProsaicError> {
@@ -4879,6 +4910,88 @@ mod tests {
             .render_inline(&mut session, "{level|choose: no_equals_here}", &ctx)
             .unwrap_err();
         assert!(matches!(err, ProsaicError::InvalidPipe { .. }));
+    }
+
+    // ── |plural pipe ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn plural_pipe_singular_for_one() {
+        let engine = test_engine();
+        let mut session = test_session();
+        let mut ctx = Context::new();
+        ctx.insert("count", Value::Number(1));
+        let out = engine
+            .render_inline(&mut session, "{count|plural:service}", &ctx)
+            .unwrap();
+        assert!(out.contains("service"));
+        assert!(!out.contains("services"));
+    }
+
+    #[test]
+    fn plural_pipe_plural_for_many() {
+        let engine = test_engine();
+        let mut session = test_session();
+        let mut ctx = Context::new();
+        ctx.insert("count", Value::Number(5));
+        let out = engine
+            .render_inline(&mut session, "{count|plural:service}", &ctx)
+            .unwrap();
+        assert!(out.contains("services"));
+    }
+
+    #[test]
+    fn plural_pipe_plural_for_zero() {
+        // English: 0 → Other → plural form
+        let engine = test_engine();
+        let mut session = test_session();
+        let mut ctx = Context::new();
+        ctx.insert("count", Value::Number(0));
+        let out = engine
+            .render_inline(&mut session, "{count|plural:service}", &ctx)
+            .unwrap();
+        assert!(out.contains("services"));
+    }
+
+    #[test]
+    fn plural_pipe_requires_noun_arg() {
+        let engine = test_engine().strictness(Strictness::Strict);
+        let mut session = test_session();
+        let mut ctx = Context::new();
+        ctx.insert("count", Value::Number(3));
+        let err = engine
+            .render_inline(&mut session, "{count|plural}", &ctx)
+            .unwrap_err();
+        assert!(matches!(err, ProsaicError::InvalidPipe { .. }));
+    }
+
+    #[test]
+    fn plural_pipe_requires_numeric_value() {
+        let engine = test_engine().strictness(Strictness::Strict);
+        let mut session = test_session();
+        let mut ctx = Context::new();
+        ctx.insert("word", Value::String("hello".into()));
+        let err = engine
+            .render_inline(&mut session, "{word|plural:service}", &ctx)
+            .unwrap_err();
+        assert!(matches!(err, ProsaicError::InvalidPipe { .. }));
+    }
+
+    #[test]
+    fn plural_pipe_and_pluralize_pipe_coexist() {
+        // Both pipes must remain functional — neither replaces the other.
+        let engine = test_engine();
+        let mut session = test_session();
+        let mut ctx = Context::new();
+        ctx.insert("count", Value::Number(2));
+        let plural_out = engine
+            .render_inline(&mut session, "{count|plural:item}", &ctx)
+            .unwrap();
+        session.reset();
+        let pluralize_out = engine
+            .render_inline(&mut session, "{count|pluralize:item}", &ctx)
+            .unwrap();
+        // Under English (TestLang) both pipes should produce "items" for count=2.
+        assert_eq!(plural_out, pluralize_out);
     }
 }
 

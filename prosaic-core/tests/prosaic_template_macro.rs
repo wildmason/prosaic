@@ -165,3 +165,29 @@ fn entity_slot_with_refer_pipe_accepted() {
     };
     assert!(tpl.contains("{user|refer}"));
 }
+
+// ── Phase 6: |plural pipe whitelist ──────────────────────────────────────────
+
+#[test]
+fn plural_pipe_accepted_by_whitelist() {
+    let tpl = prosaic_template! {
+        template: "{count|plural:service} affected",
+        slots: [count],
+    };
+    assert!(tpl.contains("|plural"));
+}
+
+#[test]
+fn plural_and_pluralize_both_accepted() {
+    // Both pipes must be in the whitelist and coexist without conflict.
+    let tpl_plural = prosaic_template! {
+        template: "{count|plural:item} changed",
+        slots: [count],
+    };
+    let tpl_pluralize = prosaic_template! {
+        template: "{count|pluralize:item} changed",
+        slots: [count],
+    };
+    assert!(tpl_plural.contains("|plural"));
+    assert!(tpl_pluralize.contains("|pluralize"));
+}
