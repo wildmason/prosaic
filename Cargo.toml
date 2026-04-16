@@ -10,6 +10,7 @@ members = [
     "prosaic-vocab-git",
     "prosaic-vocab-pr",
     "prosaic-vocab-release",
+    "prosaic-wasm",
     "prosaic-cli",
     "prosaic-tracing",
 ]
