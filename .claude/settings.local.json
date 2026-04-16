@@ -1,8 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "Bash(mkdir -p \"C:\\\\Users\\\\Matt\\\\.claude\\\\swarm\\\\.context\")",
-      "Bash(mkdir -p docs/swarm)"
-    ]
-  }
-}
