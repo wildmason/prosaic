@@ -1,9 +1,88 @@
-# Swarm: research — further tangible improvement vectors for the nlg library
+# Swarm: research — further tangible improvement vectors for the prosaic library
 
 **Date:** 2026-04-15
 **Mode:** research
 **Protocol:** convergent
 **Iterations:** 1 explore round + 1 synthesis round with peer handshakes
+
+---
+
+## Implementation Status (updated 2026-04-15)
+
+> All v1 items shipped in a single session. Project renamed from `nlg` to `prosaic` and published at `github.com/wildmason/prosaic`.
+
+### Shared infrastructure — ALL SHIPPED
+
+- [x] Engine/Session split (`Session` owns `DiscourseState`; `Engine` is `Send + Sync`)
+- [x] u32 symbol-table interner for word history
+- [x] Flatten render pipeline to one String buffer + `fmt::Write`
+- [x] `filter_by_salience` returns `Vec<&Template>` (no clone)
+- [x] `ahash` swap on `Context` HashMap
+- [x] Invert `SynonymRegistry` to O(1)
+- [ ] `itoa`/`ryu` direct-format (deferred — marginal gain until higher-throughput workloads surface)
+
+### Tier 1 (v1) — ALL SHIPPED
+
+- [x] `ctx!` + `IntoValue` macros
+- [x] `prosaic_template!` compile-time slot + pipe validator
+- [x] Reference-free PARENT faithfulness metric
+- [x] `assert_faithful!` macro
+- [x] `Engine::with_faithfulness_gate` runtime gate
+- [x] Centering Rule 1 enforcement (Cb tracking + pronoun gating)
+- [x] Unified `{slot|choose: key=value, default=value}` pipe
+- [x] Graph-based REG (Krahmer 2003) — opt-in second backend with relations
+- [x] Forward conjunction reduction (ELLEIPO safe subset: "It also" + full-NP repetition)
+- [x] `prosaic-vocab-release` (10 event types)
+- [x] `prosaic-vocab-pr` (8 event types)
+- [x] CLI `--preset=changelog|release-notes|digest` bundles
+- [x] `prosaic-tracing` bridge (tracing events → prose)
+- [ ] Cookbook mdBook site + feature-deployment matrix (deferred — content work, pending user input on recipe priorities)
+- [ ] Vocab crate `templates::en::MODULE` namespace layout (convention documented but not yet enforced in code)
+
+### Tier 1.5 (v1.5) — NOT STARTED
+
+- [ ] `AgreementFeatures` struct + `Value::Entity` variant
+- [ ] Plural REG with `Language::plural_description` hook
+- [ ] `Language::plural_category` + `pluralize_with_category` behind `locale` feature flag (icu4x-backed)
+- [ ] Split `ReferenceForm` into policy + `Language::realize_reference`
+- [ ] `prosaic-grammar-es` (first non-English grammar crate)
+- [ ] `ctx!` macro `entity()` syntax (reserved in v1, activated in v1.5)
+- [ ] Phase-2 RosaeNLG migration recipe for Spanish
+
+### Tier 2 (v2) — NOT STARTED
+
+- [ ] `prosaic-grammar-de` (case declension axis)
+- [ ] `prosaic-vocab-code-es` + Spanish vocab siblings
+- [ ] RST-labeled DocumentPlan extension
+- [ ] Temporal anchoring across paragraphs
+- [ ] Full ELLEIPO with gapping
+- [ ] Full Centering Theory (Cb/Cf with transition classification)
+- [ ] `#[prosaic_template_compiled]` monomorphized render fn
+- [ ] `parallel` Cargo feature (rayon at paragraph level, batch-only)
+- [ ] `no_std + alloc` path
+- [ ] `prosaic-wasm` member crate
+
+### Tier 3 — NOT STARTED / DEFERRED
+
+- [ ] `prosaic-polish-llm` (hybrid LLM paraphrase, type-enforced Paraphraser + Verifier)
+- [ ] `prosaic-vocab-alerts`, `prosaic-vocab-db` (demand-gated)
+- [ ] `prosaic-vocab-finance` (deferred until paying pilot)
+- [ ] LSP server (deferred)
+- [ ] pyo3 / napi-rs bindings (deferred until adoption)
+- [x] ~~Grammatical Framework as realization backend~~ **REJECTED**
+- [x] ~~MessageFormat 2.0 as template surface~~ **REJECTED** (semantics cherry-picked into `|plural` pipe instead)
+- [x] ~~SimpleNLG phrasal realizer as replacement~~ **REJECTED**
+- [x] ~~SDRT over RST~~ **REJECTED**
+- [ ] PGO / BOLT (deferred)
+- [ ] Full WordNet integration (deferred)
+
+### Resolved coordination points
+
+- **Crate name:** `prosaic` (was `nlg`; renamed and published to GitHub)
+- **Spanish timing:** deferred to v1.5 (English-only v1 shipped)
+- **LLM polish crate name:** `prosaic-polish-llm` (resolved from `nlg-polish-llm` vs `nlg-hybrid`)
+
+---
 
 ## Team
 
