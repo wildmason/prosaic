@@ -295,6 +295,18 @@ pub struct Engine {
     faithfulness_threshold: Option<f32>,
 }
 
+/// Per-call render options used by internal paths that need to suppress
+/// specific engine behaviours. Not part of the public API — exposed only
+/// through wrapping methods like `render_batch_with_relations`.
+#[derive(Debug, Clone, Copy, Default)]
+struct RenderOptions {
+    /// Skip automatic discourse connective selection and prepending.
+    /// The session's `connective_history` ring buffer is **not** advanced.
+    /// Used when an explicit RST marker will replace the auto-connective
+    /// so session state stays consistent with the emitted prose.
+    suppress_auto_connective: bool,
+}
+
 /// Bundle of an immutable engine reference and mutable session state,
 /// used internally to thread session through all render helpers without
 /// duplicating parameters everywhere.
@@ -310,11 +322,18 @@ impl<'e, 's> RenderCtx<'e, 's> {
 
     /// The body of a render call, performed against live session state.
     /// Callers snapshot state beforehand and restore on error.
-    fn render_tx(
+    ///
+    /// Per-call options (currently only whether to suppress the engine's
+    /// automatic discourse connective) are used by
+    /// `render_batch_with_relations` when an explicit RST marker will be
+    /// applied, so the session never records a connective that isn't
+    /// actually emitted.
+    fn render_tx_with_options(
         &mut self,
         key: &str,
         all_alternatives: &[SalientTemplate],
         context: &Context,
+        options: RenderOptions,
     ) -> Result<String, ProsaicError> {
         // Advance discourse state
         self.session.discourse.begin_render();
@@ -326,12 +345,20 @@ impl<'e, 's> RenderCtx<'e, 's> {
             .map(|v| v.as_display());
         let entity_type = context.get("entity_type").map(|v| v.as_display());
 
-        // Detect discourse connective
-        let relation = self
-            .session
-            .discourse
-            .detect_relation(key, entity_name.as_deref());
-        let connective = self.session.discourse.select_connective(&relation);
+        // Detect discourse connective — but only select (and advance the
+        // no-repeat ring buffer) when the caller hasn't asked us to
+        // suppress it. Skipping both the detect and select avoids
+        // polluting `connective_history` with a connective that will
+        // never reach the output.
+        let connective = if options.suppress_auto_connective {
+            None
+        } else {
+            let relation = self
+                .session
+                .discourse
+                .detect_relation(key, entity_name.as_deref());
+            self.session.discourse.select_connective(&relation)
+        };
 
         // Filter templates by salience level matching the context magnitude.
         let target_salience = self.engine.context_salience(context);
@@ -1730,6 +1757,20 @@ impl Engine {
         key: &str,
         context: impl IntoContext,
     ) -> Result<String, ProsaicError> {
+        self.render_with_options(session, key, context, RenderOptions::default())
+    }
+
+    /// Internal: render with explicit options. Used by batch rendering
+    /// paths that need to adjust default behaviours (e.g. suppressing
+    /// the automatic discourse connective when an RST marker is being
+    /// applied). Mirrors `render`'s snapshot/restore semantics.
+    fn render_with_options(
+        &self,
+        session: &mut Session,
+        key: &str,
+        context: impl IntoContext,
+        options: RenderOptions,
+    ) -> Result<String, ProsaicError> {
         let all_alternatives = self
             .templates
             .get(key)
@@ -1737,7 +1778,12 @@ impl Engine {
         let context = context.into_context();
 
         let snapshot = session.clone();
-        match RenderCtx::new(self, session).render_tx(key, all_alternatives, &context) {
+        match RenderCtx::new(self, session).render_tx_with_options(
+            key,
+            all_alternatives,
+            &context,
+            options,
+        ) {
             Ok(output) => {
                 // Update temporal anchor after a successful render so that
                 // render errors don't corrupt state. The anchor is set whenever
@@ -1976,16 +2022,26 @@ impl Engine {
                     output.push(' ');
                 }
             }
-            let sentence = self.render(session, key, ctx)?;
-            // If a marker was prepended AND the sentence starts with a
-            // capitalised determiner, lowercase the first letter so the
-            // marker's capitalisation leads. Also strip any automatic
-            // discourse connective the engine would have prepended — the
-            // explicit RST marker replaces it, otherwise we'd get
-            // "Furthermore, Similarly, ..." style duplications.
+            // When an explicit RST marker is being applied, suppress the
+            // engine's automatic discourse connective at the source —
+            // otherwise `connective_history` advances and output words
+            // include text ("Similarly,", "However,") that was never
+            // emitted, subtly poisoning anti-repetition scoring and
+            // later connective selection.
+            let options = if i > 0 && relation.is_some() {
+                RenderOptions {
+                    suppress_auto_connective: true,
+                }
+            } else {
+                RenderOptions::default()
+            };
+            let sentence = self.render_with_options(session, key, ctx, options)?;
+
+            // If an RST marker was prepended AND the sentence starts with
+            // a capitalised determiner, lowercase the first letter so the
+            // marker's capitalisation leads naturally.
             if i > 0 && relation.is_some() {
-                let without_conn = strip_leading_connective(&sentence);
-                output.push_str(&lowercase_first_if_determiner(&without_conn));
+                output.push_str(&lowercase_first_if_determiner(&sentence));
             } else {
                 output.push_str(&sentence);
             }
@@ -6465,6 +6521,86 @@ mod render_batch_with_relations_tests {
         assert!(
             !out.contains("Furthermore, Similarly,") && !out.contains("Furthermore, Likewise,"),
             "RST marker should suppress / strip auto-connective; got: {out}"
+        );
+    }
+
+    fn ctx_with_entity(name: &str) -> Context {
+        // Like ctx_with_name but also sets entity_type so that
+        // discourse.mention_entity fires and detect_relation can
+        // classify the inter-render link.
+        let mut c = Context::new();
+        c.insert("entity_type", Value::String("class".into()));
+        c.insert("name", Value::String(name.into()));
+        c
+    }
+
+    #[test]
+    fn rst_render_leaves_session_free_of_unemitted_connective() {
+        // Regression: render_batch_with_relations previously let the
+        // underlying render() select an auto-connective (advancing the
+        // no-repeat ring buffer) and record its words, then stripped
+        // the connective from the surface. Session state was then
+        // inconsistent with emitted prose.
+        //
+        // Post-fix: a follow-up render that shares the same discourse
+        // relation should be free to pick the connective that would
+        // have been used during the RST render, because the RST call
+        // never advanced the history.
+        let mut engine = make_engine();
+        engine
+            .register_template("t", "The class {name} was modified")
+            .unwrap();
+        let mut s = Session::new();
+
+        // First two events: the second carries an RST marker that
+        // should suppress the auto-connective selection.
+        let events = vec![
+            ("t", ctx_with_entity("Foo"), None),
+            ("t", ctx_with_entity("Bar"), Some(RstRelation::Elaboration)),
+        ];
+        let _ = engine.render_batch_with_relations(&mut s, &events).unwrap();
+
+        // A subsequent plain render with a different entity on the same
+        // template key would classify as DifferentEntitySameAction →
+        // connective pool SAME_ACTION_CONNECTIVES = ["Similarly,", "Likewise,"].
+        // Because the RST render did NOT consume any connective, the
+        // next render must still pick the first available ("Similarly,").
+        let exp = engine
+            .render_explained(&mut s, "t", &ctx_with_entity("Baz"))
+            .unwrap();
+        assert_eq!(
+            exp.connective,
+            Some("Similarly,"),
+            "RST render leaked connective history; got connective={:?}, output={}",
+            exp.connective,
+            exp.output
+        );
+    }
+
+    #[test]
+    fn rst_render_does_not_record_unemitted_connective_words() {
+        // Regression: repetition scoring previously saw the stripped
+        // auto-connective's words ("Similarly") in word_history. After
+        // the fix, a follow-up render's repetition scoring must not be
+        // biased against words that never reached the output.
+        let mut engine = make_engine().variation(Variation::Seeded(42));
+        engine
+            .register_template("t", "The class {name} was modified")
+            .unwrap();
+        let mut s = Session::new();
+
+        let events = vec![
+            ("t", ctx_with_entity("Foo"), None),
+            ("t", ctx_with_entity("Bar"), Some(RstRelation::Elaboration)),
+        ];
+        let _ = engine.render_batch_with_relations(&mut s, &events).unwrap();
+
+        // "similarly" should never have been recorded in word history
+        // by the RST render — its word_frequency must be zero.
+        assert_eq!(
+            s.discourse.word_frequency("similarly"),
+            0.0,
+            "RST render leaked 'similarly' into word history"
         );
     }
 }
