@@ -11,7 +11,12 @@ use syn::{
 ///
 /// Field type mapping:
 /// - `String` / `&str` / `&'a str` → `Value::String` (borrowed strs are cloned)
-/// - `i8`, `i16`, `i32`, `i64`, `isize`, `u8`, `u16`, `u32`, `u64`, `usize` → `Value::Number`
+/// - `i8`, `i16`, `i32`, `i64`, `isize`, `u8`, `u16`, `u32` → `Value::Number`
+///   via infallible `as i64` cast
+/// - `u64`, `usize` → `Value::Number` via **saturating** conversion:
+///   values above `i64::MAX` (≈9.2 × 10¹⁸) saturate to `i64::MAX` rather
+///   than wrapping to a negative. If you need the raw bit pattern, convert
+///   explicitly in host code before constructing the context.
 /// - `Vec<String>` → `Value::List`
 /// - `Option<T>` where `T` is any of the above → inserted only when `Some(_)`
 ///
@@ -116,8 +121,17 @@ fn value_conversion_for_type(
     } else if is_str_reference(ty) {
         // `&str` / `&'a str` — clone into an owned String so it fits Value.
         Some(quote! { ::prosaic_core::Value::String((#accessor).to_string()) })
-    } else if is_numeric_type(ty) {
+    } else if is_safe_numeric_type(ty) {
         Some(quote! { ::prosaic_core::Value::Number(#accessor as i64) })
+    } else if is_wide_numeric_type(ty) {
+        // u64 / usize may exceed i64::MAX on 64-bit platforms — saturate
+        // to i64::MAX rather than silently wrapping to a negative number.
+        Some(quote! {
+            ::prosaic_core::Value::Number(
+                ::core::convert::TryFrom::try_from(#accessor)
+                    .unwrap_or(::core::primitive::i64::MAX)
+            )
+        })
     } else if is_vec_string(ty) {
         Some(quote! { ::prosaic_core::Value::List(#accessor) })
     } else {
@@ -137,16 +151,34 @@ fn is_type(ty: &Type, name: &str) -> bool {
     }
 }
 
-fn is_numeric_type(ty: &Type) -> bool {
-    let numeric_types = [
-        "i8", "i16", "i32", "i64", "isize", "u8", "u16", "u32", "u64", "usize",
-    ];
+/// Numeric types whose full range fits in `i64` via an infallible `as` cast.
+///
+/// `isize` is included because on 32-bit targets it's `i32` (fits trivially)
+/// and on 64-bit it equals `i64` (same range). `usize` and `u64` go through
+/// the wide path because on 64-bit they may exceed `i64::MAX`.
+fn is_safe_numeric_type(ty: &Type) -> bool {
+    let safe = ["i8", "i16", "i32", "i64", "isize", "u8", "u16", "u32"];
     if let Type::Path(type_path) = ty {
         type_path
             .path
             .segments
             .last()
-            .is_some_and(|seg| numeric_types.contains(&seg.ident.to_string().as_str()))
+            .is_some_and(|seg| safe.contains(&seg.ident.to_string().as_str()))
+    } else {
+        false
+    }
+}
+
+/// Numeric types that require a saturating `TryFrom<_, i64>` conversion
+/// because they can exceed `i64::MAX` on 64-bit platforms.
+fn is_wide_numeric_type(ty: &Type) -> bool {
+    let wide = ["u64", "usize"];
+    if let Type::Path(type_path) = ty {
+        type_path
+            .path
+            .segments
+            .last()
+            .is_some_and(|seg| wide.contains(&seg.ident.to_string().as_str()))
     } else {
         false
     }

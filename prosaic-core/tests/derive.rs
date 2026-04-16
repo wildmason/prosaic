@@ -98,3 +98,46 @@ fn derive_numeric_types() {
     assert_eq!(ctx.get("b"), Some(&Value::Number(20)));
     assert_eq!(ctx.get("c"), Some(&Value::Number(-5)));
 }
+
+#[derive(IntoContext)]
+struct WideNumerics {
+    big_u64: u64,
+    big_usize: usize,
+}
+
+#[test]
+fn derive_u64_saturates_at_i64_max() {
+    // Regression: without saturation, u64::MAX silently becomes -1 via `as i64`.
+    let event = WideNumerics {
+        big_u64: u64::MAX,
+        big_usize: 7,
+    };
+    let ctx = event.into_context();
+    assert_eq!(ctx.get("big_u64"), Some(&Value::Number(i64::MAX)));
+    assert_eq!(ctx.get("big_usize"), Some(&Value::Number(7)));
+}
+
+#[test]
+fn derive_usize_saturates_at_i64_max_on_64bit() {
+    // On 64-bit platforms usize::MAX exceeds i64::MAX and must saturate.
+    // On 32-bit it fits exactly and round-trips.
+    let event = WideNumerics {
+        big_u64: 42,
+        big_usize: usize::MAX,
+    };
+    let ctx = event.into_context();
+    let expected = i64::try_from(usize::MAX).unwrap_or(i64::MAX);
+    assert_eq!(ctx.get("big_u64"), Some(&Value::Number(42)));
+    assert_eq!(ctx.get("big_usize"), Some(&Value::Number(expected)));
+}
+
+#[test]
+fn derive_u64_in_i64_range_is_exact() {
+    let event = WideNumerics {
+        big_u64: 1_000_000_u64,
+        big_usize: 2_000_000_usize,
+    };
+    let ctx = event.into_context();
+    assert_eq!(ctx.get("big_u64"), Some(&Value::Number(1_000_000)));
+    assert_eq!(ctx.get("big_usize"), Some(&Value::Number(2_000_000)));
+}

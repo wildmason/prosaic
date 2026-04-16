@@ -110,8 +110,11 @@ impl Context {
 /// to a supported primitive first (e.g. via `Display`) or use the longer form
 /// `Value::String("...".into())`.
 ///
-/// Note: `u64` is intentionally excluded — the conversion to `i64` can
-/// overflow silently. Callers with a `u64` should cast explicitly (`v as i64`).
+/// Numeric conversion: `i8`..`i64`, `u8`..`u32`, and `isize` go through an
+/// infallible `as i64` cast (their full range fits). `u64` and `usize` use a
+/// **saturating** `TryFrom` conversion — values above `i64::MAX` clamp to
+/// `i64::MAX` rather than wrapping to a negative. If you need the raw bit
+/// pattern, construct a `Value::Number(v as i64)` explicitly.
 pub trait IntoValue {
     fn into_value(self) -> Value;
 }
@@ -141,7 +144,21 @@ macro_rules! impl_into_value_int {
         })*
     };
 }
-impl_into_value_int!(i8, i16, i32, i64, isize, u8, u16, u32, usize);
+impl_into_value_int!(i8, i16, i32, i64, isize, u8, u16, u32);
+
+// Saturating impls for unsigned wide integers (on 64-bit, usize == u64 and
+// values above i64::MAX would silently wrap to negative under a raw `as` cast).
+impl IntoValue for u64 {
+    fn into_value(self) -> Value {
+        Value::Number(i64::try_from(self).unwrap_or(i64::MAX))
+    }
+}
+
+impl IntoValue for usize {
+    fn into_value(self) -> Value {
+        Value::Number(i64::try_from(self).unwrap_or(i64::MAX))
+    }
+}
 
 impl IntoValue for bool {
     fn into_value(self) -> Value {
@@ -444,6 +461,34 @@ mod into_value_tests {
     fn bool_becomes_number_zero_or_one() {
         assert_eq!(true.into_value(), Value::Number(1));
         assert_eq!(false.into_value(), Value::Number(0));
+    }
+
+    #[test]
+    fn u64_saturates_at_i64_max() {
+        // u64::MAX is outside i64 range → saturate to i64::MAX, not silently wrap.
+        let v: Value = u64::MAX.into_value();
+        assert_eq!(v, Value::Number(i64::MAX));
+    }
+
+    #[test]
+    fn u64_in_range_is_exact() {
+        let v: Value = 1_234_567_u64.into_value();
+        assert_eq!(v, Value::Number(1_234_567));
+    }
+
+    #[test]
+    fn usize_saturates_at_i64_max_on_64bit() {
+        // On 64-bit platforms usize == u64 and usize::MAX saturates; on 32-bit
+        // platforms usize fits in i64 trivially, and the value is preserved.
+        let v: Value = usize::MAX.into_value();
+        let expected = i64::try_from(usize::MAX).unwrap_or(i64::MAX);
+        assert_eq!(v, Value::Number(expected));
+    }
+
+    #[test]
+    fn usize_in_range_is_exact() {
+        let v: Value = 42_usize.into_value();
+        assert_eq!(v, Value::Number(42));
     }
 
     #[test]
