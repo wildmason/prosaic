@@ -191,3 +191,25 @@ fn plural_and_pluralize_both_accepted() {
     assert!(tpl_plural.contains("|plural"));
     assert!(tpl_pluralize.contains("|pluralize"));
 }
+
+#[test]
+fn demonstrative_pipe_accepted() {
+    // The `demonstrative` pipe is recognised by the runtime — the macro
+    // must not reject templates that use it.
+    let tpl = prosaic_template! {
+        template: "{change|demonstrative} affects {n} consumers",
+        slots: [change, n],
+    };
+    assert!(tpl.contains("|demonstrative"));
+}
+
+#[test]
+fn since_last_pipe_accepted() {
+    // Regression: time-feature-gated pipes are whitelisted as the macro's
+    // superset. Runtime gating happens in the engine.
+    let tpl = prosaic_template! {
+        template: "{name} changed {ts|since_last}",
+        slots: [name, ts],
+    };
+    assert!(tpl.contains("|since_last"));
+}

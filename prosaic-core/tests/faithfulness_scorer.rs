@@ -5,7 +5,9 @@
 //! unit tests — Rust would see two copies of prosaic-core and the Language
 //! trait bound would fail.
 
-use prosaic_core::{FaithfulnessScore, PolarityDrift, ctx, score_faithfulness};
+#[cfg(feature = "serde")]
+use prosaic_core::{FaithfulnessScore, PolarityDrift};
+use prosaic_core::{ctx, score_faithfulness};
 use prosaic_grammar_en::English;
 
 fn lang() -> English {

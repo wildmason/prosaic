@@ -188,6 +188,13 @@ fn extract_option_inner(ty: &Type) -> Option<&Type> {
 /// Pipe names that the NLG engine's `apply_pipe` dispatch recognises.
 /// Kept in sync with `engine.rs::apply_pipe`. Used by `prosaic_template!` for
 /// compile-time pipe validation.
+///
+/// Note on feature-gated pipes: `relative` and `since_last` are only
+/// registered by the runtime when the `time` feature is active on
+/// `prosaic-core`. The macro validates the superset so templates that
+/// target time-enabled builds still compile; callers who compile
+/// `prosaic-core` without `time` will receive an `InvalidPipe` error at
+/// render time if those pipes appear in a template.
 const VALID_PIPES: &[&str] = &[
     "plural",
     "pluralize",
@@ -206,6 +213,7 @@ const VALID_PIPES: &[&str] = &[
     "hedge",
     "negated",
     "choose",
+    "demonstrative",
 ];
 
 /// Compile-time-validated template string.
