@@ -143,28 +143,39 @@ impl EntityRegistry {
     }
 }
 
-/// Dale & Reiter's Incremental Algorithm.
+/// Output of the graph-based REG algorithm.
 ///
-/// Returns the ordered list of attribute values that should premodify the
-/// head noun, in the order they should appear. The head noun (entity type)
-/// is always included implicitly — callers render it alongside the name
-/// themselves: `"the <attrs joined by space> <type> <name>"`.
+/// Contains the attribute values chosen to premodify the head noun
+/// (same as Dale & Reiter output), and an optional relation clause to
+/// append as a postmodifier when attributes alone do not disambiguate.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct SubgraphDescription {
+    /// Attribute values to include as premodifiers, in preference order.
+    /// May be empty when the entity is the only one of its type.
+    pub attributes: Vec<String>,
+    /// Distinguishing relation, if one was needed: `(label, target_name)`.
+    ///
+    /// The label is inserted verbatim into the surface form after the head
+    /// noun — e.g. `Some(("that calls", "AuthService"))` renders as
+    /// `"that calls AuthService"`.
+    pub relation: Option<(String, String)>,
+}
+
+/// Shared core of both REG algorithms.
 ///
-/// Algorithm:
-/// 1. Filter distractors to those sharing the target's entity type (the
-///    type is always the head noun, so same-type entities are the only
-///    candidates that could still be confused).
-/// 2. Walk attributes in preference order. For each attribute the target
-///    has, include it if it rules out at least one remaining distractor.
-/// 3. Stop when no distractors remain.
-/// 4. If the attribute list is exhausted with distractors still present,
-///    return whatever was chosen — the result may still be ambiguous but
-///    uses all available discriminating information.
-pub fn distinguishing_attributes(
+/// Runs the Dale & Reiter incremental attribute selection and returns
+/// both the chosen attribute values AND the surviving distractor set after
+/// those attributes have been applied. The surviving set is empty when
+/// attributes alone disambiguate; non-empty when they do not.
+///
+/// Both [`distinguishing_attributes`] and [`distinguishing_subgraph`] call
+/// this helper so the distractor-survival semantics are identical and
+/// cannot diverge.
+pub(crate) fn incremental_attributes_with_remaining<'a>(
     target: &EntityDescriptor,
-    registry: &EntityRegistry,
+    registry: &'a EntityRegistry,
     preference_order: &[String],
-) -> Vec<String> {
+) -> (Vec<String>, Vec<&'a EntityDescriptor>) {
     // Build distractor set: all registry entries with the same type,
     // excluding the target itself.
     let mut distractors: Vec<&EntityDescriptor> = registry
@@ -174,7 +185,7 @@ pub fn distinguishing_attributes(
 
     // If nothing could confuse the target, no distinguishers needed.
     if distractors.is_empty() {
-        return Vec::new();
+        return (Vec::new(), Vec::new());
     }
 
     // Determine the attribute walk order: explicit preference first, then
@@ -211,7 +222,86 @@ pub fn distinguishing_attributes(
         }
     }
 
-    chosen
+    (chosen, distractors)
+}
+
+/// Dale & Reiter's Incremental Algorithm.
+///
+/// Returns the ordered list of attribute values that should premodify the
+/// head noun, in the order they should appear. The head noun (entity type)
+/// is always included implicitly — callers render it alongside the name
+/// themselves: `"the <attrs joined by space> <type> <name>"`.
+///
+/// Algorithm:
+/// 1. Filter distractors to those sharing the target's entity type (the
+///    type is always the head noun, so same-type entities are the only
+///    candidates that could still be confused).
+/// 2. Walk attributes in preference order. For each attribute the target
+///    has, include it if it rules out at least one remaining distractor.
+/// 3. Stop when no distractors remain.
+/// 4. If the attribute list is exhausted with distractors still present,
+///    return whatever was chosen — the result may still be ambiguous but
+///    uses all available discriminating information.
+pub fn distinguishing_attributes(
+    target: &EntityDescriptor,
+    registry: &EntityRegistry,
+    preference_order: &[String],
+) -> Vec<String> {
+    let (attrs, _) = incremental_attributes_with_remaining(target, registry, preference_order);
+    attrs
+}
+
+/// Krahmer et al. 2003 graph-based greedy REG algorithm.
+///
+/// Extends Dale & Reiter by also considering labeled directed relations
+/// between entities. When attributes alone do not fully disambiguate the
+/// target from all same-type distractors, the algorithm appends one
+/// distinguishing relation clause.
+///
+/// Algorithm:
+/// 1. Run D&R attribute selection (`incremental_attributes_with_remaining`).
+/// 2. If no distractors survive the attribute filter, return early — no
+///    relation needed (identical behaviour to D&R for this case).
+/// 3. Walk the target's relations in insertion order. Pick the first
+///    relation `(label, target_name)` that none of the surviving
+///    distractors also hold.
+/// 4. If all of the target's relations are shared with at least one
+///    surviving distractor, return the best-effort attribute list with
+///    no relation (may still be ambiguous — greedy fallback).
+///
+/// Complexity: O(|distractors| × (|attributes| + |relations|)) — linear
+/// in registry size. No backtracking, no B&B.
+pub fn distinguishing_subgraph(
+    target: &EntityDescriptor,
+    registry: &EntityRegistry,
+    preference_order: &[String],
+) -> SubgraphDescription {
+    let (attrs, remaining) =
+        incremental_attributes_with_remaining(target, registry, preference_order);
+
+    // Attributes alone were sufficient — no relation needed.
+    if remaining.is_empty() {
+        return SubgraphDescription { attributes: attrs, relation: None };
+    }
+
+    // Walk target's relations in insertion order. Pick the first relation
+    // that no surviving distractor also holds.
+    for (label, target_name) in &target.relations {
+        let any_shared = remaining.iter().any(|d| {
+            d.relations
+                .iter()
+                .any(|(l, t)| l == label && t == target_name)
+        });
+        if !any_shared {
+            return SubgraphDescription {
+                attributes: attrs,
+                relation: Some((label.clone(), target_name.clone())),
+            };
+        }
+    }
+
+    // Exhausted — return best-effort (may still be ambiguous).
+    SubgraphDescription { attributes: attrs, relation: None }
 }
 
 #[cfg(test)]
@@ -442,5 +532,108 @@ mod tests {
     fn default_has_empty_relations() {
         let e = EntityDescriptor::default();
         assert!(e.relations.is_empty());
+    }
+
+    // ── distinguishing_subgraph (graph-based REG) ─────────────────────────
+
+    #[test]
+    fn graph_reg_no_distractors_returns_empty() {
+        let target = EntityDescriptor::new("Foo", "class");
+        let registry = reg_with(vec![target.clone()]);
+        let desc = distinguishing_subgraph(&target, &registry, &[]);
+        assert!(desc.attributes.is_empty());
+        assert!(desc.relation.is_none());
+    }
+
+    #[test]
+    fn graph_reg_falls_back_to_dale_reiter_when_attributes_suffice() {
+        let target = EntityDescriptor::new("UserService", "class")
+            .with_attribute("layer", "domain");
+        let other = EntityDescriptor::new("AuthService", "class")
+            .with_attribute("layer", "infra");
+        let registry = reg_with(vec![target.clone(), other]);
+        let desc = distinguishing_subgraph(&target, &registry, &[]);
+        assert_eq!(desc.attributes, vec!["domain".to_string()]);
+        assert!(desc.relation.is_none());
+    }
+
+    #[test]
+    fn graph_reg_adds_relation_when_attributes_dont_disambiguate() {
+        // Two handlers, both in the same layer, differentiated only by
+        // what they call.
+        let target = EntityDescriptor::new("LoginHandler", "function")
+            .with_attribute("layer", "api")
+            .with_relation("calls", "AuthService");
+        let other = EntityDescriptor::new("LogoutHandler", "function")
+            .with_attribute("layer", "api")
+            .with_relation("calls", "SessionService");
+        let registry = reg_with(vec![target.clone(), other]);
+        let desc = distinguishing_subgraph(&target, &registry, &[]);
+        // Attributes alone don't distinguish (both are `api` layer), so
+        // the relation must be included.
+        assert_eq!(
+            desc.relation,
+            Some(("calls".to_string(), "AuthService".to_string()))
+        );
+    }
+
+    #[test]
+    fn graph_reg_skips_shared_relation_picks_next() {
+        // Two handlers, both call the same logging service; but target has
+        // an additional distinguishing relation.
+        let target = EntityDescriptor::new("LoginHandler", "function")
+            .with_relation("calls", "LogService")
+            .with_relation("tests", "LoginTests");
+        let other = EntityDescriptor::new("LogoutHandler", "function")
+            .with_relation("calls", "LogService")
+            .with_relation("tests", "LogoutTests");
+        let registry = reg_with(vec![target.clone(), other]);
+        let desc = distinguishing_subgraph(&target, &registry, &[]);
+        assert_eq!(
+            desc.relation,
+            Some(("tests".to_string(), "LoginTests".to_string()))
+        );
+    }
+
+    #[test]
+    fn graph_reg_gives_up_when_nothing_distinguishes() {
+        // Two identical entities — no attributes, no distinguishing
+        // relations.
+        let target = EntityDescriptor::new("Foo", "thing")
+            .with_relation("calls", "X");
+        let other = EntityDescriptor::new("Bar", "thing")
+            .with_relation("calls", "X");
+        let registry = reg_with(vec![target.clone(), other]);
+        let desc = distinguishing_subgraph(&target, &registry, &[]);
+        // Returns whatever attributes D&R could find (none here) and no
+        // relation — greedy fallback.
+        assert!(desc.relation.is_none());
+    }
+
+    #[test]
+    fn graph_reg_combines_attributes_and_relation() {
+        // Three handlers:
+        // - Target:      layer=api, calls=AuthService
+        // - Distractor1: layer=api, calls=SessionService (differs by relation)
+        // - Distractor2: layer=web, calls=AuthService    (differs by attribute)
+        //
+        // D&R picks `layer=api` to exclude distractor2, leaving distractor1.
+        // Graph-based adds `calls=AuthService` to exclude distractor1.
+        let target = EntityDescriptor::new("LoginHandler", "function")
+            .with_attribute("layer", "api")
+            .with_relation("calls", "AuthService");
+        let d1 = EntityDescriptor::new("LogoutHandler", "function")
+            .with_attribute("layer", "api")
+            .with_relation("calls", "SessionService");
+        let d2 = EntityDescriptor::new("ProfileHandler", "function")
+            .with_attribute("layer", "web")
+            .with_relation("calls", "AuthService");
+        let registry = reg_with(vec![target.clone(), d1, d2]);
+        let desc = distinguishing_subgraph(&target, &registry, &[]);
+        assert_eq!(desc.attributes, vec!["api".to_string()]);
+        assert_eq!(
+            desc.relation,
+            Some(("calls".to_string(), "AuthService".to_string()))
+        );
     }
 }

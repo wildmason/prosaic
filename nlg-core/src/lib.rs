@@ -75,7 +75,10 @@ pub use document::{
     default_classifier, DocumentPlan, GroupingStrategy, Paragraph, RhetoricalCategory,
 };
 #[cfg(feature = "reg")]
-pub use reg::{distinguishing_attributes, EntityDescriptor, EntityRegistry};
+pub use reg::{
+    distinguishing_attributes, distinguishing_subgraph,
+    EntityDescriptor, EntityRegistry, SubgraphDescription,
+};
 pub use synonyms::SynonymRegistry;
 #[cfg(feature = "time")]
 pub use time::format_relative;
