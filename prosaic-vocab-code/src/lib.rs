@@ -3,9 +3,11 @@ use prosaic_core::{Engine, ProsaicError};
 /// English-language templates for code-analysis events.
 ///
 /// Each locale module exposes a `register` function with the same signature,
-/// enabling future locale-aware dispatch (e.g. `es::register`, `de::register`)
-/// without changing callers.
+/// enabling locale-aware dispatch without changing callers.
 pub mod en;
+
+/// Spanish-language templates for code-analysis events.
+pub mod es;
 
 /// Register code-analysis vocabulary templates into an engine.
 ///
@@ -20,6 +22,14 @@ pub mod en;
 /// callers can opt into a specific locale via `register_locale`.
 pub fn register(engine: &mut Engine) -> Result<(), ProsaicError> {
     en::register(engine)
+}
+
+/// Register Spanish code-analysis vocabulary templates into an engine.
+///
+/// Provides the same template keys as [`register`] but with idiomatic
+/// Spanish surface text for use with a Spanish grammar layer.
+pub fn register_es(engine: &mut Engine) -> Result<(), ProsaicError> {
+    es::register(engine)
 }
 
 #[cfg(test)]
@@ -304,6 +314,187 @@ mod tests {
         assert!(
             result.contains("affect") || result.contains("review") || result.contains("dependent"),
             "Expected medium-salience impact clause, got: {result}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests_es {
+    use super::*;
+    use prosaic_core::{Context, Engine, Session, Strictness, Value, Variation};
+    use prosaic_grammar_es::Spanish;
+
+    fn test_engine() -> Engine {
+        let mut engine = Engine::new(Spanish::new())
+            .strictness(Strictness::Strict)
+            .variation(Variation::Fixed);
+        register_es(&mut engine).unwrap();
+        engine
+    }
+
+    #[test]
+    fn rename_event() {
+        let engine = test_engine();
+        let mut ctx = Context::new();
+        ctx.insert("entity_type", Value::String("clase".into()));
+        ctx.insert("old_name", Value::String("Foo".into()));
+        ctx.insert("new_name", Value::String("Foobar".into()));
+        ctx.insert("consumer_count", Value::Number(6));
+        ctx.insert(
+            "consumers",
+            Value::List(vec![
+                "Baz".into(), "Qux".into(), "Quux".into(),
+                "Corge".into(), "Grault".into(), "Garply".into(),
+            ]),
+        );
+        let mut session = Session::new();
+
+        let result = engine.render(&mut session, "code.renamed", &ctx).unwrap();
+        assert!(result.contains("fue renombrado a") || result.contains("ahora se llama") || result.contains("ha sido renombrado a"),
+            "Expected Spanish rename phrase, got: {result}");
+        assert!(result.contains("Foobar"), "Expected new name, got: {result}");
+    }
+
+    #[test]
+    fn rename_event_includes_consumer_count() {
+        let engine = test_engine();
+        let mut ctx = Context::new();
+        ctx.insert("entity_type", Value::String("clase".into()));
+        ctx.insert("old_name", Value::String("Foo".into()));
+        ctx.insert("new_name", Value::String("Foobar".into()));
+        ctx.insert("consumer_count", Value::Number(6));
+        ctx.insert(
+            "consumers",
+            Value::List(vec![
+                "Baz".into(), "Qux".into(), "Quux".into(),
+            ]),
+        );
+        let mut session = Session::new();
+
+        let result = engine.render(&mut session, "code.renamed", &ctx).unwrap();
+        assert!(result.contains("6"), "Expected consumer count in output, got: {result}");
+    }
+
+    #[test]
+    fn delete_event() {
+        let engine = test_engine();
+        let mut ctx = Context::new();
+        ctx.insert("entity_type", Value::String("interfaz".into()));
+        ctx.insert("name", Value::String("UserProfile".into()));
+        ctx.insert("consumer_count", Value::Number(3));
+        ctx.insert(
+            "consumers",
+            Value::List(vec![
+                "UserService".into(), "ProfilePage".into(), "AdminPanel".into(),
+            ]),
+        );
+        let mut session = Session::new();
+
+        let result = engine.render(&mut session, "code.deleted", &ctx).unwrap();
+        assert!(result.contains("fue eliminado") || result.contains("ha sido eliminado") || result.contains("ya no existe"),
+            "Expected Spanish delete phrase, got: {result}");
+        assert!(result.contains("UserProfile"), "Expected entity name, got: {result}");
+    }
+
+    #[test]
+    fn add_event() {
+        let engine = test_engine();
+        let mut ctx = Context::new();
+        ctx.insert("entity_type", Value::String("servicio".into()));
+        ctx.insert("name", Value::String("AuthGuard".into()));
+        ctx.insert("location", Value::String("src/guards/auth.guard.ts".into()));
+        let mut session = Session::new();
+
+        let result = engine.render(&mut session, "code.added", &ctx).unwrap();
+        assert!(result.contains("AuthGuard"), "got: {result}");
+        assert!(result.contains("src/guards/auth.guard.ts"), "got: {result}");
+        assert!(result.contains("servicio"), "Expected entity type in Spanish, got: {result}");
+    }
+
+    #[test]
+    fn modify_event() {
+        let engine = test_engine();
+        let mut ctx = Context::new();
+        ctx.insert("entity_type", Value::String("método".into()));
+        ctx.insert("name", Value::String("processOrder".into()));
+        ctx.insert("consumer_count", Value::Number(4));
+        ctx.insert(
+            "consumers",
+            Value::List(vec![
+                "OrderPage".into(), "CartService".into(),
+                "CheckoutFlow".into(), "OrderHistory".into(),
+            ]),
+        );
+        let mut session = Session::new();
+
+        let result = engine.render(&mut session, "code.modified", &ctx).unwrap();
+        assert!(result.contains("fue modificado") || result.contains("ha sido actualizado") || result.contains("afectan"),
+            "Expected Spanish modify phrase, got: {result}");
+        assert!(result.contains("processOrder"), "got: {result}");
+    }
+
+    #[test]
+    fn move_event() {
+        let engine = test_engine();
+        let mut ctx = Context::new();
+        ctx.insert("entity_type", Value::String("clase".into()));
+        ctx.insert("name", Value::String("Logger".into()));
+        ctx.insert("old_location", Value::String("src/utils/logger.ts".into()));
+        ctx.insert("new_location", Value::String("src/core/logger.ts".into()));
+        ctx.insert("consumer_count", Value::Number(12));
+        ctx.insert(
+            "consumers",
+            Value::List(vec![
+                "AppModule".into(), "AuthService".into(),
+                "UserService".into(), "OrderService".into(),
+            ]),
+        );
+        let mut session = Session::new();
+
+        let result = engine.render(&mut session, "code.moved", &ctx).unwrap();
+        assert!(result.contains("Logger"), "got: {result}");
+        assert!(result.contains("src/utils/logger.ts") || result.contains("src/core/logger.ts"),
+            "Expected location in output, got: {result}");
+        assert!(result.contains("12"), "Expected consumer count, got: {result}");
+    }
+
+    #[test]
+    fn signature_changed_event() {
+        let engine = test_engine();
+        let mut ctx = Context::new();
+        ctx.insert("entity_type", Value::String("método".into()));
+        ctx.insert("name", Value::String("getUser".into()));
+        ctx.insert("consumer_count", Value::Number(5));
+        ctx.insert(
+            "consumers",
+            Value::List(vec![
+                "ProfileController".into(), "AuthMiddleware".into(),
+                "UserTest".into(), "AdminPanel".into(), "SettingsPage".into(),
+            ]),
+        );
+        let mut session = Session::new();
+
+        let result = engine.render(&mut session, "code.signature_changed", &ctx).unwrap();
+        assert!(result.contains("getUser"), "got: {result}");
+        assert!(result.contains("firma") || result.contains("invocador"),
+            "Expected Spanish signature/caller terms, got: {result}");
+    }
+
+    #[test]
+    fn low_salience_terse_output() {
+        let engine = test_engine();
+        let mut ctx = Context::new();
+        ctx.insert("entity_type", Value::String("clase".into()));
+        ctx.insert("name", Value::String("Trivial".into()));
+        ctx.insert("consumer_count", Value::Number(1));
+        ctx.insert("consumers", Value::List(vec!["OnlyConsumer".into()]));
+        let mut session = Session::new();
+
+        let result = engine.render(&mut session, "code.modified", &ctx).unwrap();
+        // Low salience: should drop the impact clause
+        assert!(
+            !result.contains("afectan"),
+            "Low salience should drop impact clause, got: {result}"
         );
     }
 }

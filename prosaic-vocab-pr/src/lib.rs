@@ -24,9 +24,11 @@ use prosaic_core::{Engine, ProsaicError};
 /// English-language templates for PR-narrative events.
 ///
 /// Each locale module exposes a `register` function with the same signature,
-/// enabling future locale-aware dispatch (e.g. `es::register`, `de::register`)
-/// without changing callers.
+/// enabling locale-aware dispatch without changing callers.
 pub mod en;
+
+/// Spanish-language templates for PR-narrative events.
+pub mod es;
 
 /// Register the full PR-narrative vocabulary into an engine.
 ///
@@ -34,6 +36,14 @@ pub mod en;
 /// callers can opt into a specific locale via `register_locale`.
 pub fn register(engine: &mut Engine) -> Result<(), ProsaicError> {
     en::register(engine)
+}
+
+/// Register Spanish PR-narrative vocabulary templates into an engine.
+///
+/// Provides the same template keys as [`register`] but with idiomatic
+/// Spanish surface text for use with a Spanish grammar layer.
+pub fn register_es(engine: &mut Engine) -> Result<(), ProsaicError> {
+    es::register(engine)
 }
 
 #[cfg(test)]
@@ -256,5 +266,127 @@ mod tests {
             .unwrap();
         // Must render without panic — conditional sections should suppress absent slots.
         assert!(out.contains("#200"), "got: {out}");
+    }
+}
+
+#[cfg(test)]
+mod tests_es {
+    use super::*;
+    use prosaic_core::{Context, Session, Strictness, Value, Variation};
+    use prosaic_grammar_es::Spanish;
+
+    fn engine() -> Engine {
+        let mut e = Engine::new(Spanish::new())
+            .strictness(Strictness::Strict)
+            .variation(Variation::Fixed);
+        register_es(&mut e).unwrap();
+        e
+    }
+
+    #[test]
+    fn summary_low_salience() {
+        let engine = engine();
+        let mut ctx = Context::new();
+        ctx.insert("number", Value::Number(42));
+        ctx.insert("title", Value::String("Agregar API de streaming".into()));
+        ctx.insert("author", Value::String("Alice".into()));
+        ctx.insert("commit_count", Value::Number(3));
+        ctx.insert("files_changed", Value::Number(5));
+        ctx.insert("salience", Value::String("low".into()));
+        let mut session = Session::new();
+        let out = engine.render(&mut session, "pr.summary", &ctx).unwrap();
+        assert!(out.contains("#42"), "got: {out}");
+        assert!(out.contains("streaming"), "got: {out}");
+    }
+
+    #[test]
+    fn summary_high_salience_includes_counts() {
+        let engine = engine();
+        let mut ctx = Context::new();
+        ctx.insert("number", Value::Number(7));
+        ctx.insert("title", Value::String("Refactorizar capa de autenticación".into()));
+        ctx.insert("author", Value::String("Bob".into()));
+        ctx.insert("commit_count", Value::Number(12));
+        ctx.insert("files_changed", Value::Number(20));
+        ctx.insert("salience", Value::String("high".into()));
+        let mut session = Session::new();
+        let out = engine.render(&mut session, "pr.summary", &ctx).unwrap();
+        assert!(out.contains("#7"), "got: {out}");
+        assert!(out.contains("12"), "got: {out}");
+        assert!(out.contains("20"), "got: {out}");
+        assert!(out.contains("archivo") || out.contains("commit"),
+            "Expected Spanish file/commit terms, got: {out}");
+    }
+
+    #[test]
+    fn review_state_with_approvals() {
+        let engine = engine();
+        let mut ctx = Context::new();
+        ctx.insert("number", Value::Number(99));
+        ctx.insert("approvals", Value::Number(2));
+        ctx.insert("requested_changes", Value::Number(1));
+        ctx.insert("pending", Value::Number(3));
+        let mut session = Session::new();
+        let out = engine.render(&mut session, "pr.review_state", &ctx).unwrap();
+        assert!(out.contains("#99"), "got: {out}");
+        assert!(out.contains("aprobación") || out.contains("aprobaciones"),
+            "Expected Spanish approval terms, got: {out}");
+    }
+
+    #[test]
+    fn merge_readiness_ready() {
+        let engine = engine();
+        let mut ctx = Context::new();
+        ctx.insert("number", Value::Number(55));
+        ctx.insert("ready", Value::Number(1));
+        let mut session = Session::new();
+        let out = engine.render(&mut session, "pr.merge_readiness", &ctx).unwrap();
+        assert!(out.contains("listo para fusionar"), "Expected Spanish merge phrase, got: {out}");
+    }
+
+    #[test]
+    fn merge_readiness_not_ready_with_blockers() {
+        let engine = engine();
+        let mut ctx = Context::new();
+        ctx.insert("number", Value::Number(56));
+        ctx.insert("ready", Value::Number(0));
+        ctx.insert(
+            "blockers",
+            Value::List(vec!["CI fallando".into(), "revisión pendiente".into()]),
+        );
+        let mut session = Session::new();
+        let out = engine.render(&mut session, "pr.merge_readiness", &ctx).unwrap();
+        assert!(out.contains("aún no está listo"), "Expected Spanish not-ready phrase, got: {out}");
+        assert!(out.contains("bloqueado") || out.contains("Bloqueadores"),
+            "Expected Spanish blocker term, got: {out}");
+    }
+
+    #[test]
+    fn ci_status_with_failing_checks() {
+        let engine = engine();
+        let mut ctx = Context::new();
+        ctx.insert("number", Value::Number(77));
+        ctx.insert("passing", Value::Number(8));
+        ctx.insert("failing", Value::Number(2));
+        let mut session = Session::new();
+        let out = engine.render(&mut session, "pr.ci_status", &ctx).unwrap();
+        assert!(out.contains("8"), "got: {out}");
+        assert!(out.contains("2"), "got: {out}");
+        assert!(out.contains("verificación") || out.contains("fallida"),
+            "Expected Spanish CI terms, got: {out}");
+    }
+
+    #[test]
+    fn age_stale_flag() {
+        let engine = engine();
+        let mut ctx = Context::new();
+        ctx.insert("number", Value::Number(8));
+        ctx.insert("days_open", Value::Number(30));
+        ctx.insert("stale", Value::Number(1));
+        let mut session = Session::new();
+        let out = engine.render(&mut session, "pr.age", &ctx).unwrap();
+        assert!(out.contains("30") && out.contains("día"),
+            "Expected '30 días', got: {out}");
+        assert!(out.contains("desactualizado"), "Expected 'desactualizado', got: {out}");
     }
 }

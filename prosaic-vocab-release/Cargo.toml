@@ -10,3 +10,4 @@ prosaic-core = { path = "../prosaic-core", default-features = false }
 
 [dev-dependencies]
 prosaic-grammar-en = { path = "../prosaic-grammar-en" }
+prosaic-grammar-es = { path = "../prosaic-grammar-es" }

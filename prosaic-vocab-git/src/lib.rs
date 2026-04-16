@@ -29,9 +29,11 @@ use prosaic_core::{Engine, ProsaicError};
 /// English-language templates for git-activity events.
 ///
 /// Each locale module exposes a `register` function with the same signature,
-/// enabling future locale-aware dispatch (e.g. `es::register`, `de::register`)
-/// without changing callers.
+/// enabling locale-aware dispatch without changing callers.
 pub mod en;
+
+/// Spanish-language templates for git-activity events.
+pub mod es;
 
 /// Register the full git-activity vocabulary into an engine.
 ///
@@ -39,6 +41,14 @@ pub mod en;
 /// callers can opt into a specific locale via `register_locale`.
 pub fn register(engine: &mut Engine) -> Result<(), ProsaicError> {
     en::register(engine)
+}
+
+/// Register Spanish git-activity vocabulary templates into an engine.
+///
+/// Provides the same template keys as [`register`] but with idiomatic
+/// Spanish surface text for use with a Spanish grammar layer.
+pub fn register_es(engine: &mut Engine) -> Result<(), ProsaicError> {
+    es::register(engine)
 }
 
 #[cfg(test)]
@@ -167,5 +177,109 @@ mod tests {
             result.contains("Alice"),
             "got: {result}"
         );
+    }
+}
+
+#[cfg(test)]
+mod tests_es {
+    use super::*;
+    use prosaic_core::{Context, Session, Strictness, Value, Variation};
+    use prosaic_grammar_es::Spanish;
+
+    fn engine() -> Engine {
+        let mut e = Engine::new(Spanish::new())
+            .strictness(Strictness::Strict)
+            .variation(Variation::Fixed);
+        register_es(&mut e).unwrap();
+        e
+    }
+
+    #[test]
+    fn commit_event_medium_salience() {
+        let engine = engine();
+        let mut ctx = Context::new();
+        ctx.insert("author", Value::String("Alice".into()));
+        ctx.insert("files_changed", Value::Number(5));
+        ctx.insert("message", Value::String("refactorizar el analizador".into()));
+        ctx.insert("additions", Value::Number(40));
+        ctx.insert("deletions", Value::Number(10));
+        let mut session = Session::new();
+
+        let result = engine.render(&mut session, "git.commit", &ctx).unwrap();
+        assert!(result.contains("Alice"), "got: {result}");
+        assert!(result.contains("5"), "got: {result}");
+        assert!(result.contains("archivo"), "Expected Spanish 'archivo', got: {result}");
+    }
+
+    #[test]
+    fn pr_opened_event() {
+        let engine = engine();
+        let mut ctx = Context::new();
+        ctx.insert("author", Value::String("Bob".into()));
+        ctx.insert("number", Value::Number(42));
+        ctx.insert("title", Value::String("Agregar lógica de reintentos".into()));
+        let mut session = Session::new();
+
+        let result = engine.render(&mut session, "git.pr_opened", &ctx).unwrap();
+        assert!(result.contains("#42"), "got: {result}");
+        assert!(result.contains("Agregar"), "got: {result}");
+    }
+
+    #[test]
+    fn pr_merged_without_author_still_renders() {
+        let engine = engine();
+        let mut ctx = Context::new();
+        ctx.insert("merger", Value::String("Charlie".into()));
+        ctx.insert("number", Value::Number(17));
+        ctx.insert("title", Value::String("Arreglar test inestable".into()));
+        let mut session = Session::new();
+
+        let result = engine.render(&mut session, "git.pr_merged", &ctx).unwrap();
+        assert!(result.contains("#17"), "got: {result}");
+        assert!(result.contains("Charlie"), "got: {result}");
+        assert!(result.contains("fusionado") || result.contains("fusionó"),
+            "Expected Spanish merge phrase, got: {result}");
+    }
+
+    #[test]
+    fn issue_opened_event() {
+        let engine = engine();
+        let mut ctx = Context::new();
+        ctx.insert("author", Value::String("Dave".into()));
+        ctx.insert("number", Value::Number(99));
+        ctx.insert("title", Value::String("El servidor devuelve 500 al cerrar sesión".into()));
+        let mut session = Session::new();
+
+        let result = engine.render(&mut session, "git.issue_opened", &ctx).unwrap();
+        assert!(result.contains("#99"), "got: {result}");
+        assert!(result.contains("incidencia"), "Expected Spanish 'incidencia', got: {result}");
+    }
+
+    #[test]
+    fn review_changes_requested_pluralizes_comments() {
+        let engine = engine();
+        let mut ctx = Context::new();
+        ctx.insert("reviewer", Value::String("Eve".into()));
+        ctx.insert("pr_number", Value::Number(7));
+        ctx.insert("comment_count", Value::Number(3));
+        let mut session = Session::new();
+
+        let result = engine.render(&mut session, "git.review_changes_requested", &ctx).unwrap();
+        assert!(result.contains("3 comentarios"), "Expected '3 comentarios', got: {result}");
+    }
+
+    #[test]
+    fn release_event_with_changes_count() {
+        let engine = engine();
+        let mut ctx = Context::new();
+        ctx.insert("version", Value::String("1.2.0".into()));
+        ctx.insert("tag", Value::String("v1.2.0".into()));
+        ctx.insert("changes_count", Value::Number(14));
+        let mut session = Session::new();
+
+        let result = engine.render(&mut session, "git.release", &ctx).unwrap();
+        assert!(result.contains("1.2.0"), "got: {result}");
+        assert!(result.contains("14") && result.contains("cambio"),
+            "Expected '14 cambios', got: {result}");
     }
 }
