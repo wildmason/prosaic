@@ -9,6 +9,7 @@ description = "General-purpose natural language generation from structured data"
 ahash = { version = "0.8", default-features = false, features = ["compile-time-rng"] }
 hashbrown = { version = "0.15", default-features = false, features = ["default-hasher", "inline-more"] }
 thiserror = { version = "2", default-features = false }
+itoa = { version = "1", default-features = false }
 serde = { version = "1", default-features = false, features = ["derive", "alloc"], optional = true }
 rayon = { version = "1", optional = true }
 

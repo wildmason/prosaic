@@ -39,7 +39,10 @@ impl Value {
     pub fn as_display(&self) -> String {
         match self {
             Value::String(s) => s.clone(),
-            Value::Number(n) => n.to_string(),
+            Value::Number(n) => {
+                let mut buf = itoa::Buffer::new();
+                buf.format(*n).to_string()
+            }
             Value::List(items) => items.join(", "),
             Value::Entity { name, .. } => name.clone(),
         }
