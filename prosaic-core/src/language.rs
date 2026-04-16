@@ -196,6 +196,38 @@ pub trait Language: Send + Sync {
     /// Spell out `n` as words (e.g., 42 → "forty-two").
     fn number_to_words(&self, n: usize) -> String;
 
+    /// Produce a plural description for a set of same-type entities.
+    ///
+    /// Called by the `|refer` pipe when the slot value is a `Value::List` of
+    /// 2+ items sharing an entity type. The default implementation is
+    /// English-shaped but generic enough to serve as a reasonable fallback for
+    /// languages that have not overridden it:
+    ///
+    /// - count = 0 → `""` (empty string)
+    /// - count = 1 → `"the {entity_type}"`
+    /// - count ≥ 2 → `"the {count} {entity_type_plural}"`
+    ///
+    /// Non-English grammars should override this to handle gender agreement
+    /// (Spanish/French), counter words (Japanese), dual/few/many categories
+    /// (Arabic), and so on. The `features` parameter carries agreement info
+    /// propagated from the first entity in the set; override implementations
+    /// may use it to select the correct article or adjective endings.
+    ///
+    /// English's `prosaic_grammar_en::English` uses the default; no override
+    /// is needed for v1.
+    fn plural_description(
+        &self,
+        entity_type: &str,
+        count: usize,
+        _features: &crate::agreement::AgreementFeatures,
+    ) -> String {
+        match count {
+            0 => String::new(),
+            1 => format!("the {entity_type}"),
+            _ => format!("the {count} {}", self.pluralize(entity_type, count)),
+        }
+    }
+
     /// Render a full verb phrase combining tense, aspect, voice, and mood.
     ///
     /// Default implementation composes from the primitive inflections
@@ -312,5 +344,106 @@ pub fn english_verb_phrase<L: Language + ?Sized>(
                 format!("will be being {past_participle}")
             }
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agreement::AgreementFeatures;
+
+    /// Minimal Language implementation used only in unit tests for this module.
+    struct MiniLang;
+
+    impl Language for MiniLang {
+        fn pluralize(&self, word: &str, count: usize) -> String {
+            if count == 1 {
+                return word.to_string();
+            }
+            // Basic English pluralisation rules for common test words.
+            if word.ends_with("ss") || word.ends_with("sh") || word.ends_with("ch") || word.ends_with('x') || word.ends_with('z') {
+                format!("{word}es")
+            } else if word.ends_with('s') {
+                // e.g. "class" → "classes"
+                format!("{word}es")
+            } else {
+                format!("{word}s")
+            }
+        }
+        fn singularize(&self, word: &str) -> String {
+            word.strip_suffix('s').unwrap_or(word).to_string()
+        }
+        fn article(&self, _word: &str) -> &str {
+            "a"
+        }
+        fn conjugate(&self, verb: &str, tense: Tense, _person: Person) -> String {
+            match tense {
+                Tense::Past => format!("{verb}ed"),
+                Tense::Present => verb.to_string(),
+                Tense::Future => format!("will {verb}"),
+            }
+        }
+        fn past_participle(&self, verb: &str) -> String {
+            format!("{verb}ed")
+        }
+        fn present_participle(&self, verb: &str) -> String {
+            format!("{verb}ing")
+        }
+        fn join_list(&self, items: &[&str], _conjunction: Conjunction) -> String {
+            items.join(", ")
+        }
+        fn ordinal(&self, n: usize) -> String {
+            format!("{n}th")
+        }
+        fn number_to_words(&self, n: usize) -> String {
+            format!("{n}")
+        }
+    }
+
+    #[test]
+    fn plural_description_default_zero_is_empty() {
+        let l = MiniLang;
+        assert_eq!(
+            l.plural_description("class", 0, &AgreementFeatures::default()),
+            ""
+        );
+    }
+
+    #[test]
+    fn plural_description_default_one_is_the_type() {
+        let l = MiniLang;
+        assert_eq!(
+            l.plural_description("class", 1, &AgreementFeatures::default()),
+            "the class"
+        );
+    }
+
+    #[test]
+    fn plural_description_default_many_uses_pluralize() {
+        let l = MiniLang;
+        assert_eq!(
+            l.plural_description("class", 3, &AgreementFeatures::default()),
+            "the 3 classes"
+        );
+    }
+
+    #[test]
+    fn plural_description_two_items() {
+        let l = MiniLang;
+        assert_eq!(
+            l.plural_description("service", 2, &AgreementFeatures::default()),
+            "the 2 services"
+        );
+    }
+
+    #[test]
+    fn plural_description_ignores_features_in_default_impl() {
+        // The default impl does not use features — result must be identical
+        // regardless of what features are passed. Languages that care will override.
+        let l = MiniLang;
+        let with_features = l.plural_description("class", 3, &AgreementFeatures::default());
+        let without = l.plural_description("class", 3, &AgreementFeatures::default());
+        assert_eq!(with_features, without);
+        assert_eq!(with_features, "the 3 classes");
     }
 }
