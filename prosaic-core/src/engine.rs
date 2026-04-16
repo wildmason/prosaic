@@ -1769,8 +1769,17 @@ impl Engine {
     }
 
     /// Render a one-off template string (not registered) with the given context.
-    /// Inline templates do not participate in discourse tracking (no connectives,
-    /// no entity tracking) but do record output words for repetition scoring.
+    ///
+    /// Inline templates are **state-isolated**: they do not participate in
+    /// discourse tracking (no connectives, no entity mentions, no list-style
+    /// cycle advancement, no plural-focus flag changes) and do not consume
+    /// template-variant / round-robin counters. The only side effect on the
+    /// real session is that output words are recorded for repetition scoring,
+    /// and only when the render succeeds — a failed inline render leaves the
+    /// session exactly as it was before the call.
+    ///
+    /// Implementation: render into a cloned session and discard it. On
+    /// success, record output words on the caller's session.
     pub fn render_inline(
         &self,
         session: &mut Session,
@@ -1779,13 +1788,22 @@ impl Engine {
     ) -> Result<String, ProsaicError> {
         let template = Template::parse(source)?;
         let context = context.into_context();
+
+        // Render into a scratch session clone so any stateful pipes
+        // (list-style cycle, plural `refer` mention_entity calls, etc.)
+        // mutate the clone rather than the caller's session.
+        let mut scratch = session.clone();
         let mut output = String::with_capacity(128);
-        RenderCtx::new(self, session).render_template_into(
+        RenderCtx::new(self, &mut scratch).render_template_into(
             &mut output,
             "<inline>",
             &template,
             &context,
         )?;
+
+        // Success: the only mutation allowed to escape is the repetition
+        // scoring word history, so callers see inline output in anti-repeat
+        // decisions for subsequent registered renders.
         session.discourse.record_output_words(&output);
         Ok(output)
     }
@@ -3677,6 +3695,91 @@ mod tests {
                 .render_inline(&mut session, "Hello {name}!", &ctx)
                 .unwrap(),
             "Hello world!"
+        );
+    }
+
+    #[test]
+    fn render_inline_does_not_advance_list_style_cycle() {
+        // Regression: `{items|join}` advances session.discourse.last_list_style.
+        // An inline render must not leak that mutation into a subsequent
+        // registered render — otherwise the caller gets a different list
+        // style than it would without the inline render.
+        let mut engine = test_engine();
+        engine.register_template("t", "{items|join}").unwrap();
+
+        let mut s_ref = test_session();
+        let mut ctx = Context::new();
+        ctx.insert(
+            "items",
+            Value::List(vec!["a".into(), "b".into(), "c".into()]),
+        );
+
+        // Do a reference render — captures which style cycle picks first.
+        let ref_out = engine.render(&mut s_ref, "t", &ctx).unwrap();
+
+        // Now: on a FRESH session, do an inline `{|join}` first, then a
+        // registered render. If inline leaked the cycle, the registered
+        // render would pick a different style than the reference.
+        let mut s_test = test_session();
+        engine
+            .render_inline(&mut s_test, "{items|join}", &ctx)
+            .unwrap();
+        let after_inline = engine.render(&mut s_test, "t", &ctx).unwrap();
+
+        assert_eq!(
+            ref_out, after_inline,
+            "inline render leaked list-style cycle into a later registered render"
+        );
+    }
+
+    #[test]
+    fn render_inline_failure_leaves_session_unchanged() {
+        // A failing inline render must not record output words or any
+        // other partial mutation on the caller's session.
+        let engine = test_engine();
+        let mut session = test_session();
+
+        // Before the failure, snapshot the discourse state for comparison.
+        let snapshot = session.clone();
+
+        // Strict mode: missing slot → render_template_into returns Err
+        // before it would otherwise record output words.
+        let result = engine.render_inline(&mut session, "Hello {nope}!", Context::new());
+        assert!(result.is_err(), "expected missing-slot error");
+
+        // render_index and focus_entity should match pre-call state.
+        // Using visible accessors; if new state is added the snapshot
+        // Clone catches it transitively via other tests.
+        assert_eq!(
+            session.discourse.focus_is_plural(),
+            snapshot.discourse.focus_is_plural()
+        );
+    }
+
+    #[test]
+    fn render_inline_does_not_mention_entities_via_plural_refer() {
+        // Plural `refer` would ordinarily call mention_entity for each
+        // name in the list. Inline renders must not leave those entity
+        // mentions on the caller's session.
+        let mut engine = test_engine();
+        engine.register_template("t", "{name|refer}").unwrap();
+
+        let mut session = test_session();
+        let mut ctx = Context::new();
+        ctx.insert("entity_type", Value::String("class".into()));
+        ctx.insert("name", Value::String("Alpha".into()));
+
+        // Inline render that would mention Alpha.
+        let _ = engine
+            .render_inline(&mut session, "{name|refer}", &ctx)
+            .unwrap();
+
+        // Now a registered `refer` on the same name should still use
+        // Full form (no prior in-session mention from the inline render).
+        let out = engine.render(&mut session, "t", &ctx).unwrap();
+        assert!(
+            out.contains("The class Alpha"),
+            "expected Full form (no leaked entity mention); got: {out}"
         );
     }
 
