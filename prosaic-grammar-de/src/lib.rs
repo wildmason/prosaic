@@ -1,0 +1,553 @@
+//! German grammar layer for the Prosaic NLG engine.
+//!
+//! Covers: gender-aware articles (all four cases × three genders × singular/plural),
+//! regular and common-irregular noun pluralization, regular weak verb conjugation
+//! (present/preterite/future) plus ~10 strong irregulars, past and present
+//! participles, German cardinal number spelling (0–999,999), and gendered
+//! nominative pronouns/demonstratives.
+//!
+//! Deliberately out of scope: attributive adjective declension, Konjunktiv,
+//! Perfekt compound tenses, full strong-verb tables. See the plan doc for rationale.
+
+pub mod gender;
+pub(crate) mod articles;
+pub(crate) mod conjugate;
+pub(crate) mod numbers;
+pub(crate) mod pluralize;
+
+use prosaic_core::{
+    AgreementFeatures, Conjunction, Gender, GrammaticalNumber, Language, Person,
+    PluralCategory, ReferenceForm, Tense,
+};
+
+use articles::{article_with_features, basic_article};
+pub use articles::indefinite_article;
+use conjugate::{conjugate_de, past_participle_de, present_participle_de};
+use numbers::number_to_words_de;
+use pluralize::{pluralize_de, singularize_de};
+
+/// German language grammar implementation.
+///
+/// Implements `Language` for German with case-aware article selection,
+/// pluralization, and conjugation. See the crate-level documentation for
+/// scope notes.
+#[derive(Debug, Clone, Default)]
+pub struct German;
+
+impl German {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Language for German {
+    fn pluralize(&self, word: &str, count: usize) -> String {
+        if count == 1 {
+            word.to_string()
+        } else {
+            pluralize_de(word)
+        }
+    }
+
+    fn singularize(&self, word: &str) -> String {
+        singularize_de(word)
+    }
+
+    /// Return the nominative definite article inferred from the noun's ending.
+    fn article(&self, word: &str) -> &str {
+        basic_article(word)
+    }
+
+    fn conjugate(&self, verb: &str, tense: Tense, person: Person) -> String {
+        conjugate_de(verb, tense, person)
+    }
+
+    fn past_participle(&self, verb: &str) -> String {
+        past_participle_de(verb)
+    }
+
+    fn present_participle(&self, verb: &str) -> String {
+        present_participle_de(verb)
+    }
+
+    fn join_list(&self, items: &[&str], conjunction: Conjunction) -> String {
+        let conj = match conjunction {
+            Conjunction::And => "und",
+            Conjunction::Or => "oder",
+        };
+        join_list_de(items, conj)
+    }
+
+    fn ordinal(&self, n: usize) -> String {
+        match n {
+            1 => "erste".into(),
+            2 => "zweite".into(),
+            3 => "dritte".into(),
+            4 => "vierte".into(),
+            5 => "fünfte".into(),
+            6 => "sechste".into(),
+            7 => "siebte".into(),
+            8 => "achte".into(),
+            9 => "neunte".into(),
+            10 => "zehnte".into(),
+            _ => format!("{n}."),
+        }
+    }
+
+    fn number_to_words(&self, n: usize) -> String {
+        number_to_words_de(n)
+    }
+
+    /// German plural: `n == 1` → One, else Other (CLDR `de`).
+    fn plural_category(&self, n: i64) -> PluralCategory {
+        match n {
+            1 => PluralCategory::One,
+            _ => PluralCategory::Other,
+        }
+    }
+
+    fn realize_reference(
+        &self,
+        form: ReferenceForm,
+        features: &AgreementFeatures,
+    ) -> Option<String> {
+        match form {
+            ReferenceForm::Pronoun => Some(german_pronoun(features)),
+            ReferenceForm::Demonstrative => Some(german_demonstrative(features)),
+            ReferenceForm::Zero => None,
+            ReferenceForm::Full | ReferenceForm::ShortName => None,
+        }
+    }
+
+    fn plural_description(
+        &self,
+        entity_type: &str,
+        count: usize,
+        features: &AgreementFeatures,
+    ) -> String {
+        match count {
+            0 => String::new(),
+            1 => format!("{} {}", article_with_features(features), entity_type),
+            _ => {
+                let plural_features = AgreementFeatures::default()
+                    .with_gender(features.gender)
+                    .with_case(features.case)
+                    .with_number(GrammaticalNumber::Plural);
+                format!(
+                    "{} {count} {}",
+                    article_with_features(&plural_features),
+                    self.pluralize(entity_type, count)
+                )
+            }
+        }
+    }
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+fn german_pronoun(features: &AgreementFeatures) -> String {
+    let plural = matches!(
+        features.number,
+        GrammaticalNumber::Plural | GrammaticalNumber::Dual
+    );
+    if plural {
+        return "sie".into();
+    }
+    match features.gender {
+        Gender::Fem => "sie".into(),
+        Gender::Neut => "es".into(),
+        _ => "er".into(),
+    }
+}
+
+fn german_demonstrative(features: &AgreementFeatures) -> String {
+    let plural = matches!(
+        features.number,
+        GrammaticalNumber::Plural | GrammaticalNumber::Dual
+    );
+    if plural {
+        return "diese".into();
+    }
+    match features.gender {
+        Gender::Fem => "diese".into(),
+        Gender::Neut => "dieses".into(),
+        _ => "dieser".into(),
+    }
+}
+
+fn join_list_de(items: &[&str], conj: &str) -> String {
+    match items.len() {
+        0 => String::new(),
+        1 => items[0].into(),
+        2 => format!("{} {} {}", items[0], conj, items[1]),
+        _ => {
+            let (last, rest) = items.split_last().unwrap();
+            // German: "X, Y und Z" — no Oxford comma before und/oder
+            format!("{} {} {}", rest.join(", "), conj, last)
+        }
+    }
+}
+
+// ── Unit tests ────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use prosaic_core::Case;
+
+    // ── pluralize ─────────────────────────────────────────────────────────────
+
+    #[test]
+    fn pluralize_count_one_returns_unchanged() {
+        let de = German::new();
+        assert_eq!(de.pluralize("Klasse", 1), "Klasse");
+    }
+
+    #[test]
+    fn pluralize_count_zero_pluralizes() {
+        let de = German::new();
+        assert_eq!(de.pluralize("Mann", 0), "Männer");
+    }
+
+    #[test]
+    fn pluralize_count_two_pluralizes() {
+        let de = German::new();
+        assert_eq!(de.pluralize("Kind", 2), "Kinder");
+    }
+
+    // ── singularize ───────────────────────────────────────────────────────────
+
+    #[test]
+    fn singularize_delegates() {
+        let de = German::new();
+        assert_eq!(de.singularize("Männer"), "Mann");
+        assert_eq!(de.singularize("Zeitungen"), "Zeitung");
+    }
+
+    // ── article ───────────────────────────────────────────────────────────────
+
+    #[test]
+    fn article_masc_inferred() {
+        let de = German::new();
+        assert_eq!(de.article("Tisch"), "der");
+    }
+
+    #[test]
+    fn article_fem_inferred() {
+        let de = German::new();
+        assert_eq!(de.article("Freiheit"), "die");
+    }
+
+    #[test]
+    fn article_neut_inferred() {
+        let de = German::new();
+        assert_eq!(de.article("Buch"), "das");
+    }
+
+    // ── conjugate ─────────────────────────────────────────────────────────────
+
+    #[test]
+    fn conjugate_present_first() {
+        let de = German::new();
+        assert_eq!(de.conjugate("machen", Tense::Present, Person::First), "mache");
+    }
+
+    #[test]
+    fn conjugate_present_third() {
+        let de = German::new();
+        assert_eq!(de.conjugate("machen", Tense::Present, Person::Third), "macht");
+    }
+
+    #[test]
+    fn conjugate_past_first() {
+        let de = German::new();
+        assert_eq!(de.conjugate("machen", Tense::Past, Person::First), "machte");
+    }
+
+    #[test]
+    fn conjugate_past_third() {
+        let de = German::new();
+        assert_eq!(de.conjugate("machen", Tense::Past, Person::Third), "machte");
+    }
+
+    // ── participles ───────────────────────────────────────────────────────────
+
+    #[test]
+    fn past_participle_machen() {
+        let de = German::new();
+        assert_eq!(de.past_participle("machen"), "gemacht");
+    }
+
+    #[test]
+    fn present_participle_machen() {
+        let de = German::new();
+        assert_eq!(de.present_participle("machen"), "machend");
+    }
+
+    // ── join_list ─────────────────────────────────────────────────────────────
+
+    #[test]
+    fn join_list_empty() {
+        let de = German::new();
+        assert_eq!(de.join_list(&[], Conjunction::And), "");
+    }
+
+    #[test]
+    fn join_list_single() {
+        let de = German::new();
+        assert_eq!(de.join_list(&["eins"], Conjunction::And), "eins");
+    }
+
+    #[test]
+    fn join_list_two_and() {
+        let de = German::new();
+        assert_eq!(
+            de.join_list(&["eins", "zwei"], Conjunction::And),
+            "eins und zwei"
+        );
+    }
+
+    #[test]
+    fn join_list_three_and_no_oxford_comma() {
+        let de = German::new();
+        assert_eq!(
+            de.join_list(&["eins", "zwei", "drei"], Conjunction::And),
+            "eins, zwei und drei"
+        );
+    }
+
+    #[test]
+    fn join_list_two_or() {
+        let de = German::new();
+        assert_eq!(de.join_list(&["ja", "nein"], Conjunction::Or), "ja oder nein");
+    }
+
+    // ── ordinal ───────────────────────────────────────────────────────────────
+
+    #[test]
+    fn ordinal_first_ten() {
+        let de = German::new();
+        assert_eq!(de.ordinal(1), "erste");
+        assert_eq!(de.ordinal(3), "dritte");
+        assert_eq!(de.ordinal(7), "siebte");
+        assert_eq!(de.ordinal(10), "zehnte");
+    }
+
+    #[test]
+    fn ordinal_beyond_ten_numeric() {
+        let de = German::new();
+        assert_eq!(de.ordinal(11), "11.");
+        assert_eq!(de.ordinal(100), "100.");
+    }
+
+    // ── number_to_words ───────────────────────────────────────────────────────
+
+    #[test]
+    fn number_to_words_spot_checks() {
+        let de = German::new();
+        assert_eq!(de.number_to_words(3), "drei");
+        assert_eq!(de.number_to_words(21), "einundzwanzig");
+    }
+
+    // ── plural_category ───────────────────────────────────────────────────────
+
+    #[test]
+    fn plural_category_one_is_one() {
+        let de = German::new();
+        assert_eq!(de.plural_category(1), PluralCategory::One);
+    }
+
+    #[test]
+    fn plural_category_zero_is_other() {
+        let de = German::new();
+        assert_eq!(de.plural_category(0), PluralCategory::Other);
+    }
+
+    #[test]
+    fn plural_category_many_is_other() {
+        let de = German::new();
+        assert_eq!(de.plural_category(5), PluralCategory::Other);
+    }
+
+    // ── realize_reference ─────────────────────────────────────────────────────
+
+    #[test]
+    fn pronoun_masc_singular() {
+        let de = German::new();
+        let f = AgreementFeatures::default().with_gender(Gender::Masc);
+        assert_eq!(
+            de.realize_reference(ReferenceForm::Pronoun, &f),
+            Some("er".to_string())
+        );
+    }
+
+    #[test]
+    fn pronoun_fem_singular() {
+        let de = German::new();
+        let f = AgreementFeatures::default().with_gender(Gender::Fem);
+        assert_eq!(
+            de.realize_reference(ReferenceForm::Pronoun, &f),
+            Some("sie".to_string())
+        );
+    }
+
+    #[test]
+    fn pronoun_neut_singular() {
+        let de = German::new();
+        let f = AgreementFeatures::default().with_gender(Gender::Neut);
+        assert_eq!(
+            de.realize_reference(ReferenceForm::Pronoun, &f),
+            Some("es".to_string())
+        );
+    }
+
+    #[test]
+    fn pronoun_plural() {
+        let de = German::new();
+        let f = AgreementFeatures::default().with_number(GrammaticalNumber::Plural);
+        assert_eq!(
+            de.realize_reference(ReferenceForm::Pronoun, &f),
+            Some("sie".to_string())
+        );
+    }
+
+    #[test]
+    fn demonstrative_masc_singular() {
+        let de = German::new();
+        let f = AgreementFeatures::default().with_gender(Gender::Masc);
+        assert_eq!(
+            de.realize_reference(ReferenceForm::Demonstrative, &f),
+            Some("dieser".to_string())
+        );
+    }
+
+    #[test]
+    fn demonstrative_fem_singular() {
+        let de = German::new();
+        let f = AgreementFeatures::default().with_gender(Gender::Fem);
+        assert_eq!(
+            de.realize_reference(ReferenceForm::Demonstrative, &f),
+            Some("diese".to_string())
+        );
+    }
+
+    #[test]
+    fn demonstrative_neut_singular() {
+        let de = German::new();
+        let f = AgreementFeatures::default().with_gender(Gender::Neut);
+        assert_eq!(
+            de.realize_reference(ReferenceForm::Demonstrative, &f),
+            Some("dieses".to_string())
+        );
+    }
+
+    #[test]
+    fn demonstrative_plural() {
+        let de = German::new();
+        let f = AgreementFeatures::default().with_number(GrammaticalNumber::Plural);
+        assert_eq!(
+            de.realize_reference(ReferenceForm::Demonstrative, &f),
+            Some("diese".to_string())
+        );
+    }
+
+    #[test]
+    fn realize_zero_is_none() {
+        let de = German::new();
+        assert_eq!(
+            de.realize_reference(ReferenceForm::Zero, &AgreementFeatures::default()),
+            None
+        );
+    }
+
+    #[test]
+    fn realize_full_is_none() {
+        let de = German::new();
+        assert_eq!(
+            de.realize_reference(ReferenceForm::Full, &AgreementFeatures::default()),
+            None
+        );
+    }
+
+    // ── plural_description ────────────────────────────────────────────────────
+
+    #[test]
+    fn plural_description_zero_is_empty() {
+        let de = German::new();
+        assert_eq!(
+            de.plural_description("Klasse", 0, &AgreementFeatures::default()),
+            ""
+        );
+    }
+
+    #[test]
+    fn plural_description_one_masc() {
+        let de = German::new();
+        let f = AgreementFeatures::default().with_gender(Gender::Masc);
+        assert_eq!(de.plural_description("Tisch", 1, &f), "der Tisch");
+    }
+
+    #[test]
+    fn plural_description_one_fem() {
+        let de = German::new();
+        let f = AgreementFeatures::default().with_gender(Gender::Fem);
+        assert_eq!(de.plural_description("Klasse", 1, &f), "die Klasse");
+    }
+
+    #[test]
+    fn plural_description_one_neut() {
+        let de = German::new();
+        let f = AgreementFeatures::default().with_gender(Gender::Neut);
+        assert_eq!(de.plural_description("Haus", 1, &f), "das Haus");
+    }
+
+    #[test]
+    fn plural_description_many_masc() {
+        let de = German::new();
+        let f = AgreementFeatures::default().with_gender(Gender::Masc);
+        assert_eq!(de.plural_description("Mann", 3, &f), "die 3 Männer");
+    }
+
+    #[test]
+    fn plural_description_many_fem() {
+        let de = German::new();
+        let f = AgreementFeatures::default().with_gender(Gender::Fem);
+        assert_eq!(de.plural_description("Klasse", 3, &f), "die 3 Klassen");
+    }
+
+    #[test]
+    fn plural_description_many_neut() {
+        let de = German::new();
+        let f = AgreementFeatures::default().with_gender(Gender::Neut);
+        assert_eq!(de.plural_description("Haus", 3, &f), "die 3 Häuser");
+    }
+
+    // ── Case-aware plural_description ─────────────────────────────────────────
+
+    #[test]
+    fn plural_description_dative_plural_uses_den() {
+        let de = German::new();
+        let f = AgreementFeatures::default()
+            .with_gender(Gender::Masc)
+            .with_case(Case::Dative);
+        // plural dative = "den"
+        assert_eq!(de.plural_description("Mann", 3, &f), "den 3 Männer");
+    }
+
+    #[test]
+    fn plural_description_dative_singular_masc_uses_dem() {
+        let de = German::new();
+        let f = AgreementFeatures::default()
+            .with_gender(Gender::Masc)
+            .with_case(Case::Dative);
+        assert_eq!(de.plural_description("Tisch", 1, &f), "dem Tisch");
+    }
+
+    // ── Send + Sync ───────────────────────────────────────────────────────────
+
+    #[test]
+    fn german_is_send_sync() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<German>();
+    }
+}

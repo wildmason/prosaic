@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "prosaic-core",
+    "prosaic-grammar-de",
     "prosaic-grammar-en",
     "prosaic-grammar-es",
     "prosaic-derive",
