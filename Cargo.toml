@@ -6,6 +6,7 @@ members = [
     "nlg-derive",
     "nlg-vocab-code",
     "nlg-vocab-git",
+    "nlg-vocab-pr",
     "nlg-vocab-release",
     "nlg-cli",
 ]

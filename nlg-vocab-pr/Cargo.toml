@@ -1,0 +1,12 @@
+[package]
+name = "nlg-vocab-pr"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Pull-request narrative vocabulary templates for the nlg engine"
+
+[dependencies]
+nlg-core = { path = "../nlg-core", default-features = false }
+
+[dev-dependencies]
+nlg-grammar-en = { path = "../nlg-grammar-en" }
