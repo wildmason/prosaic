@@ -33,6 +33,7 @@
 
 mod language;
 mod context;
+pub mod agreement;
 mod error;
 mod template;
 mod engine;
@@ -57,6 +58,9 @@ mod punctuation;
 
 pub use language::{
     english_verb_phrase, Aspect, Conjunction, Language, Mood, Person, Tense, VerbForm, Voice,
+};
+pub use agreement::{
+    AgreementFeatures, AgreementPerson, Animacy, Case, Definiteness, Gender, Number as GrammaticalNumber,
 };
 pub use context::{Context, IntoValue, Value};
 pub use faithfulness::{score_faithfulness, FaithfulnessScore, PolarityDrift};
