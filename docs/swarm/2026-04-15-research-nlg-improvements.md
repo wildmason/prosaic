@@ -39,15 +39,19 @@
 - [ ] Cookbook mdBook site + feature-deployment matrix (deferred — content work, pending user input on recipe priorities)
 - [ ] Vocab crate `templates::en::MODULE` namespace layout (convention documented but not yet enforced in code)
 
-### Tier 1.5 (v1.5) — NOT STARTED
+### Tier 1.5 (v1.5) — SHIPPED (2026-04-16)
 
-- [ ] `AgreementFeatures` struct + `Value::Entity` variant
-- [ ] Plural REG with `Language::plural_description` hook
-- [ ] `Language::plural_category` + `pluralize_with_category` behind `locale` feature flag (icu4x-backed)
-- [ ] Split `ReferenceForm` into policy + `Language::realize_reference`
-- [ ] `prosaic-grammar-es` (first non-English grammar crate)
-- [ ] `ctx!` macro `entity()` syntax (reserved in v1, activated in v1.5)
-- [ ] Phase-2 RosaeNLG migration recipe for Spanish
+- [x] `AgreementFeatures` struct + `Value::Entity` variant — 6 enums (Gender, GrammaticalNumber, Case, Definiteness, Animacy, AgreementPerson) + struct with builder methods
+- [x] Plural REG with `Language::plural_description` hook — extends `|refer` to handle `Value::List` with gender-aware plural descriptions
+- [x] `Language::plural_category` + `pluralize_with_category` with English default (icu4x deferred; Spanish uses pure-Rust rules)
+- [x] Split `ReferenceForm` into policy + `Language::realize_reference` — Zero and Demonstrative variants added, pronoun realization delegated to Language trait
+- [x] `prosaic-grammar-es` (first non-English grammar crate) — ~825 LOC, regular conjugation + 10 irregulars, gender-aware articles, pluralization, gendered pronouns
+- [x] `ctx!` macro `entity()` syntax — shipped as part of AgreementFeatures plan via `EntityValue: IntoValue`
+- [ ] Phase-2 RosaeNLG migration recipe for Spanish (cookbook content, deferred)
+
+Additional v1 completions beyond the original plan:
+- [x] Cookbook mdBook site — 9 recipe chapters
+- [x] Vocab crate `templates::en::MODULE` namespace enforcement — all 4 crates restructured
 
 ### Tier 2 (v2) — NOT STARTED
 
