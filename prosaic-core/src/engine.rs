@@ -369,8 +369,13 @@ impl<'e, 's> RenderCtx<'e, 's> {
             capitalize_first_in_place(&mut output);
         }
 
-        // Clean up whitespace and silent-mode gaps
-        cleanup_artifacts_in_place(&mut output, self.engine.strictness);
+        // Clean up whitespace and silent-mode gaps. Record whether the
+        // orphan-tail pass removed anything so RenderExplanation can
+        // surface it.
+        let cleanup_stripped = cleanup_artifacts_in_place(&mut output, self.engine.strictness);
+        self.session
+            .discourse
+            .set_cleanup_stripped_tail(cleanup_stripped);
 
         // Terminate the sentence
         terminate_sentence_in_place(&mut output);
@@ -916,7 +921,15 @@ impl<'e, 's> RenderCtx<'e, 's> {
             _ => Conjunction::And,
         };
 
-        let style = forced_style.unwrap_or_else(|| self.session.discourse.next_list_style());
+        let style = match forced_style {
+            Some(s) => {
+                // Still record the chosen style so render_explained can
+                // report it even when the template forced one.
+                self.session.discourse.record_list_style_used(s);
+                s
+            }
+            None => self.session.discourse.next_list_style(),
+        };
 
         let refs: Vec<&str> = items.iter().map(|s| s.as_str()).collect();
 
@@ -2116,6 +2129,9 @@ impl Engine {
 
         let connective = detect_leading_connective(&output);
 
+        let list_style = session.discourse.last_list_style_used();
+        let cleanup_stripped_tail = session.discourse.last_cleanup_stripped_tail();
+
         Ok(RenderExplanation {
             output,
             template_key: key.to_string(),
@@ -2125,10 +2141,10 @@ impl Engine {
             candidate_scores,
             reference_form,
             connective,
-            list_style: None,
+            list_style,
             focus_is_plural,
             length_split_applied,
-            cleanup_stripped_tail: false,
+            cleanup_stripped_tail,
             centering_transition,
         })
     }
@@ -3015,11 +3031,16 @@ fn strip_head_subject_prefix<'a>(body: &'a str, subject_aux: &str) -> Option<&'a
 ///    under `Strictness::Silent` because those gaps are the user's
 ///    explicit choice to swallow missing slots — the dangling fragments
 ///    are artifacts of that choice, not of the template's intent.
-fn cleanup_artifacts_in_place(output: &mut String, strictness: Strictness) {
+///
+/// Returns `true` when the orphan-tail pass removed any dangling tail
+/// words — surfaced via [`RenderExplanation::cleanup_stripped_tail`].
+fn cleanup_artifacts_in_place(output: &mut String, strictness: Strictness) -> bool {
     collapse_and_tidy_in_place(output);
 
     if strictness == Strictness::Silent {
-        strip_dangling_tail_words_in_place(output);
+        strip_dangling_tail_words_in_place(output)
+    } else {
+        false
     }
 }
 
@@ -3073,7 +3094,10 @@ const ORPHAN_TAIL_WORDS: &[&str] = &[
 /// Strip trailing words that were left orphaned by omitted slots. Repeats
 /// until no more matching tails remain — handles chained gaps like
 /// `"modified by in"`.
-fn strip_dangling_tail_words_in_place(output: &mut String) {
+///
+/// Returns `true` if any tail word was stripped.
+fn strip_dangling_tail_words_in_place(output: &mut String) -> bool {
+    let mut stripped_any = false;
     loop {
         // Consider any trailing punctuation separately — we'll preserve it.
         let (body, _) = split_trailing_punct(output);
@@ -3085,7 +3109,7 @@ fn strip_dangling_tail_words_in_place(output: &mut String) {
             Some(idx) => idx + 1,
             None => {
                 // Single word output — don't touch.
-                return;
+                return stripped_any;
             }
         };
         let last_word = &trimmed_body[last_word_start..];
@@ -3095,17 +3119,18 @@ fn strip_dangling_tail_words_in_place(output: &mut String) {
             let new_body_end = trimmed_body[..last_word_start].trim_end().len();
             if new_body_end == 0 {
                 // The whole output was orphans — bail out to avoid erasing content.
-                return;
+                return stripped_any;
             }
             // Build the new string: new_body + tail_punct
             // tail_punct starts at byte offset body_len in `output`
             let tail_punct_owned = output[body_len..].to_string();
             output.truncate(new_body_end);
             output.push_str(&tail_punct_owned);
+            stripped_any = true;
             continue;
         }
 
-        return;
+        return stripped_any;
     }
 }
 
@@ -4193,6 +4218,80 @@ mod tests {
         // Same entity, different action → "Additionally," prepended.
         let exp = engine.render_explained(&mut session, "u", &ctx).unwrap();
         assert_eq!(exp.connective, Some("Additionally,"));
+    }
+
+    #[test]
+    fn render_explained_reports_list_style_when_join_fires() {
+        let mut engine = test_engine();
+        engine
+            .register_template("list", "{items|join:bracketed}")
+            .unwrap();
+        let mut session = test_session();
+        let mut ctx = Context::new();
+        ctx.insert(
+            "items",
+            Value::List(vec!["a".into(), "b".into(), "c".into()]),
+        );
+        let exp = engine.render_explained(&mut session, "list", &ctx).unwrap();
+        assert_eq!(
+            exp.list_style,
+            Some(ListStyle::Bracketed),
+            "render_explained should report the forced list style; got: {:?}",
+            exp.list_style
+        );
+    }
+
+    #[test]
+    fn render_explained_list_style_none_when_no_join_fired() {
+        let mut engine = test_engine();
+        engine
+            .register_template("plain", "The {entity_type} {name} was renamed")
+            .unwrap();
+        let mut session = test_session();
+        let mut ctx = Context::new();
+        ctx.insert("entity_type", Value::String("class".into()));
+        ctx.insert("name", Value::String("Foo".into()));
+        let exp = engine
+            .render_explained(&mut session, "plain", &ctx)
+            .unwrap();
+        assert_eq!(exp.list_style, None);
+    }
+
+    #[test]
+    fn render_explained_reports_cleanup_stripped_tail_in_silent_mode() {
+        // Silent strictness: omitted `location` slot leaves a dangling " in "
+        // that the orphan-tail pass should strip, flipping
+        // cleanup_stripped_tail to true.
+        let mut engine = test_engine().strictness(Strictness::Silent);
+        engine
+            .register_template("add", "A new {entity_type} was added in {location}")
+            .unwrap();
+        let mut session = test_session();
+        let mut ctx = Context::new();
+        ctx.insert("entity_type", Value::String("class".into()));
+        // location intentionally omitted
+        let exp = engine.render_explained(&mut session, "add", &ctx).unwrap();
+        assert!(
+            exp.cleanup_stripped_tail,
+            "Silent-mode render with dangling tail should report cleanup_stripped_tail=true; got output: {:?}",
+            exp.output
+        );
+    }
+
+    #[test]
+    fn render_explained_cleanup_stripped_tail_false_for_clean_render() {
+        let mut engine = test_engine();
+        engine
+            .register_template("plain", "The {entity_type} {name} was renamed")
+            .unwrap();
+        let mut session = test_session();
+        let mut ctx = Context::new();
+        ctx.insert("entity_type", Value::String("class".into()));
+        ctx.insert("name", Value::String("Foo".into()));
+        let exp = engine
+            .render_explained(&mut session, "plain", &ctx)
+            .unwrap();
+        assert!(!exp.cleanup_stripped_tail);
     }
 
     // ── Streaming render iterator ────────────────────────────────────────

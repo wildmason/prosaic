@@ -143,6 +143,17 @@ pub struct DiscourseState {
     /// Transition classification computed by the most recent `advance_cb`
     /// call. `Transition::NoCb` before any render or after a reset.
     last_transition: Transition,
+
+    /// List style chosen by the most recent `|join` pipe during the
+    /// current render. `None` when no `|join` fired. Cleared at the
+    /// start of every render so [`RenderExplanation`] always reports
+    /// the value for *this* render.
+    last_list_style_used: Option<ListStyle>,
+
+    /// Whether the most recent render's Silent-mode cleanup stripped
+    /// any trailing orphan words. Cleared at the start of every render.
+    /// Exposed via [`RenderExplanation::cleanup_stripped_tail`].
+    last_cleanup_stripped_tail: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -246,6 +257,8 @@ impl DiscourseState {
             interner,
             stopword_ids,
             last_list_style: 0,
+            last_list_style_used: None,
+            last_cleanup_stripped_tail: false,
             focus_is_plural: false,
             cb: None,
             previous_focus: None,
@@ -275,6 +288,11 @@ impl DiscourseState {
     pub fn begin_render(&mut self) {
         self.render_index += 1;
         self.current_cf.clear();
+        // Reset per-render diagnostic signals so `RenderExplanation`
+        // always reports the value for THIS render rather than inheriting
+        // state from a previous one.
+        self.last_list_style_used = None;
+        self.last_cleanup_stripped_tail = false;
     }
 
     /// Record that an entity was mentioned in the current render at rank 0
@@ -567,11 +585,36 @@ impl DiscourseState {
         score
     }
 
-    /// Select the next list style, cycling to avoid repetition.
+    /// Select the next list style, cycling to avoid repetition. Also records
+    /// the chosen style for the current render so [`RenderExplanation`] can
+    /// report which list style was applied.
     pub fn next_list_style(&mut self) -> ListStyle {
         let style = LIST_STYLES[self.last_list_style % LIST_STYLES.len()];
         self.last_list_style += 1;
+        self.last_list_style_used = Some(style);
         style
+    }
+
+    /// Record an explicit list style (e.g. `{|join:bracketed}`) for diagnostics.
+    pub fn record_list_style_used(&mut self, style: ListStyle) {
+        self.last_list_style_used = Some(style);
+    }
+
+    /// List style applied by the most recent render's `|join` pipe (if any).
+    pub fn last_list_style_used(&self) -> Option<ListStyle> {
+        self.last_list_style_used
+    }
+
+    /// Record whether Silent-mode cleanup stripped any trailing orphan words
+    /// during the most recent render.
+    pub fn set_cleanup_stripped_tail(&mut self, stripped: bool) {
+        self.last_cleanup_stripped_tail = stripped;
+    }
+
+    /// Whether the most recent render's cleanup pass removed trailing
+    /// orphan words (Silent strictness only). `false` in other modes.
+    pub fn last_cleanup_stripped_tail(&self) -> bool {
+        self.last_cleanup_stripped_tail
     }
 
     /// Whether this is the first render (no prior discourse context).
