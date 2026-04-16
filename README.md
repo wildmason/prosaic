@@ -1,4 +1,4 @@
-# nlg
+# prosaic
 
 General-purpose natural language generation from structured data, in Rust.
 
@@ -21,8 +21,8 @@ Notice: **pronouns** on second and third mentions, a **discourse connective** ("
 ## Quick Start
 
 ```rust
-use nlg_core::{Engine, Context, Session, Value, Variation, Strictness};
-use nlg_grammar_en::English;
+use prosaic_core::{Engine, Context, Session, Value, Variation, Strictness};
+use prosaic_grammar_en::English;
 
 let mut engine = Engine::new(English::new())
     .strictness(Strictness::Strict)
@@ -57,12 +57,12 @@ let sentence = engine.render(&mut session, "entity.renamed", &ctx)?;
 
 | Crate | Purpose |
 |---|---|
-| `nlg-core` | Engine, templates, discourse, salience, document planning, builder API, referring expression generation, `Language` trait |
-| `nlg-grammar-en` | English grammar: pluralization, articles, conjugation, list formatting, ordinals, number-to-words, past participles |
-| `nlg-derive` | `#[derive(IntoContext)]` for automatic struct-to-context conversion |
-| `nlg-vocab-code` | Code-analysis vocabulary templates (renamed, deleted, added, modified, moved, signature changed) at all three salience levels |
-| `nlg-vocab-git` | Git/VCS activity templates (commits, PRs, issues, reviews, releases) |
-| `nlg-cli` | `nlg` binary: reads JSON-lines events on stdin, writes rendered prose on stdout |
+| `prosaic-core` | Engine, templates, discourse, salience, document planning, builder API, referring expression generation, `Language` trait |
+| `prosaic-grammar-en` | English grammar: pluralization, articles, conjugation, list formatting, ordinals, number-to-words, past participles |
+| `prosaic-derive` | `#[derive(IntoContext)]` for automatic struct-to-context conversion |
+| `prosaic-vocab-code` | Code-analysis vocabulary templates (renamed, deleted, added, modified, moved, signature changed) at all three salience levels |
+| `prosaic-vocab-git` | Git/VCS activity templates (commits, PRs, issues, reviews, releases) |
+| `prosaic-cli` | `prosaic` binary: reads JSON-lines events on stdin, writes rendered prose on stdout |
 
 ## Core Concepts
 
@@ -122,7 +122,7 @@ Capitalization is handled automatically based on sentence position.
 When multiple entities of the same type appear in a narrative, the bare form "the class UserService" and "the class AuthService" is grammatical but says nothing to distinguish them. Register entities with distinguishing **attributes** and the engine runs the Dale & Reiter Incremental Algorithm — the standard REG approach — to pick the shortest attribute set that uniquely identifies each:
 
 ```rust
-use nlg_core::EntityDescriptor;
+use prosaic_core::EntityDescriptor;
 
 let mut engine = Engine::new(English::new())
     .attribute_preference(vec!["layer".into()]);
@@ -360,7 +360,7 @@ English handles irregular verbs throughout the pipeline — `break` ↔ `broken`
 Register templates at specific salience levels, and the engine picks verbosity that matches event magnitude:
 
 ```rust
-use nlg_core::Salience;
+use prosaic_core::Salience;
 
 // Low: terse — used for 0-1 consumers
 engine.register_template_at(
@@ -394,7 +394,7 @@ The engine derives salience from:
 Customize thresholds:
 
 ```rust
-use nlg_core::SalienceThresholds;
+use prosaic_core::SalienceThresholds;
 
 let engine = Engine::new(English::new())
     .salience_thresholds(SalienceThresholds {
@@ -410,7 +410,7 @@ Fallback chain: if no template is registered at the target salience, the engine 
 For multi-paragraph narratives, `DocumentPlan` takes a flat event list and organizes it:
 
 ```rust
-use nlg_core::DocumentPlan;
+use prosaic_core::DocumentPlan;
 
 let events: Vec<(&str, Context)> = vec![
     ("code.added", minor_add_ctx),          // Low-impact trivia
@@ -434,7 +434,7 @@ Produces a multi-paragraph narrative where:
 For release-note-style summaries, switch to action-category grouping — removals, additions, and modifications become their own sections in that canonical order:
 
 ```rust
-use nlg_core::GroupingStrategy;
+use prosaic_core::GroupingStrategy;
 
 let plan = DocumentPlan::from_events_grouped(
     &events, &engine, GroupingStrategy::ByAction,
@@ -476,7 +476,7 @@ engine.render(&mut session, "code.added", &event3)?;
 For complex programmatic sentences where templates get unwieldy:
 
 ```rust
-use nlg_core::{Sentence, Clause, Voice, entity, Tense};
+use prosaic_core::{Sentence, Clause, Voice, entity, Tense};
 
 let sentence = Sentence::new()
     .subject(entity("class", "Foo"))
@@ -518,7 +518,7 @@ let replaced = Sentence::new()
 Convert structs to template contexts automatically:
 
 ```rust
-use nlg_derive::IntoContext;
+use prosaic_derive::IntoContext;
 
 #[derive(IntoContext)]
 struct RenameEvent {
@@ -541,10 +541,10 @@ Supported field types: `String`, `&str` (cloned into the context), integer types
 Pre-built domain vocabularies register a family of templates in one call:
 
 ```rust
-use nlg_vocab_code;
+use prosaic_vocab_code;
 
 let mut engine = Engine::new(English::new());
-nlg_vocab_code::register(&mut engine)?;
+prosaic_vocab_code::register(&mut engine)?;
 
 // Available keys:
 //   code.renamed        code.deleted          code.added
@@ -570,13 +570,13 @@ Cross-render naturalness (pronouns, connectives, list-style cycling, sentence te
 
 | Mode | Missing slot behavior |
 |---|---|
-| `Strictness::Strict` (default) | Returns `Err(NlgError::MissingSlot)` |
+| `Strictness::Strict` (default) | Returns `Err(ProsaicError::MissingSlot)` |
 | `Strictness::Lenient` | Renders as `[missing: slot_name]` |
 | `Strictness::Silent` | Renders as empty string, plus cleanup: dangling prepositions and conjunctions left by omitted slots (`"was modified by "`) get stripped so output reads naturally. |
 
 ## Adding a Language
 
-Implement the `Language` trait from `nlg-core`:
+Implement the `Language` trait from `prosaic-core`:
 
 ```rust
 pub trait Language: Send + Sync {
@@ -650,7 +650,7 @@ Does not mutate discourse state.
 
 ### Streaming Render
 
-`engine.render_iter(&mut session, events)` returns an iterator over `Result<String, NlgError>`, yielding one sentence per aggregated run. Each `.next()` produces output as soon as the next batch unit is ready — useful for long code-review narratives where time-to-first-sentence matters.
+`engine.render_iter(&mut session, events)` returns an iterator over `Result<String, ProsaicError>`, yielding one sentence per aggregated run. Each `.next()` produces output as soon as the next batch unit is ready — useful for long code-review narratives where time-to-first-sentence matters.
 
 ### Punctuation Polish
 
@@ -676,24 +676,24 @@ Build examples:
 
 ```bash
 # Minimal build (no optional pipes, no post-processing)
-cargo build --package nlg-core --no-default-features
+cargo build --package prosaic-core --no-default-features
 
 # WASM-safe build (time feature off so SystemTime::now is never referenced)
-cargo build --package nlg-core --target wasm32-unknown-unknown --no-default-features --features "reg,polish"
+cargo build --package prosaic-core --target wasm32-unknown-unknown --no-default-features --features "reg,polish"
 
 # With serde for JSON payloads
-cargo build --package nlg-core --features serde
+cargo build --package prosaic-core --features serde
 ```
 
 Even with the `time` feature enabled, the crate compiles for `wasm32-unknown-unknown`. The runtime fallback to `SystemTime::now()` is guarded with `cfg(target_arch)` — on wasm32 the engine returns a clear error if you use the `relative` pipe without calling `engine.reference_time()` first.
 
 ## Command-Line Usage
 
-The `nlg` binary turns the engine into a pipe-friendly tool:
+The `prosaic` binary turns the engine into a pipe-friendly tool:
 
 ```bash
 echo '{"key":"code.renamed","entity_type":"class","old_name":"Foo","new_name":"Bar","consumer_count":3}' \
-  | nlg --strategy sequential
+  | prosaic --strategy sequential
 ```
 
 produces

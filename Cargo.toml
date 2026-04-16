@@ -1,19 +1,19 @@
 [workspace]
 resolver = "2"
 members = [
-    "nlg-core",
-    "nlg-grammar-en",
-    "nlg-derive",
-    "nlg-vocab-code",
-    "nlg-vocab-git",
-    "nlg-vocab-pr",
-    "nlg-vocab-release",
-    "nlg-cli",
-    "nlg-tracing",
+    "prosaic-core",
+    "prosaic-grammar-en",
+    "prosaic-derive",
+    "prosaic-vocab-code",
+    "prosaic-vocab-git",
+    "prosaic-vocab-pr",
+    "prosaic-vocab-release",
+    "prosaic-cli",
+    "prosaic-tracing",
 ]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/wildmason/nlg"
+repository = "https://github.com/wildmason/prosaic"

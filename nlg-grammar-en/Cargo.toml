@@ -1,9 +1,0 @@
-[package]
-name = "nlg-grammar-en"
-version.workspace = true
-edition.workspace = true
-license.workspace = true
-description = "English grammar implementation for the nlg crate"
-
-[dependencies]
-nlg-core = { path = "../nlg-core" }

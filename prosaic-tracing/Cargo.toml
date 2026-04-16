@@ -1,0 +1,15 @@
+[package]
+name = "prosaic-tracing"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Bridge tracing events to natural language prose via the prosaic engine"
+
+[dependencies]
+prosaic-core = { path = "../prosaic-core" }
+prosaic-grammar-en = { path = "../prosaic-grammar-en" }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", default-features = false, features = ["registry"] }
+
+[dev-dependencies]
+tracing-subscriber = { version = "0.3", features = ["fmt", "registry"] }

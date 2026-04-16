@@ -1,0 +1,12 @@
+[package]
+name = "prosaic-vocab-code"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Code-analysis vocabulary module for the prosaic crate"
+
+[dependencies]
+prosaic-core = { path = "../prosaic-core" }
+
+[dev-dependencies]
+prosaic-grammar-en = { path = "../prosaic-grammar-en" }
