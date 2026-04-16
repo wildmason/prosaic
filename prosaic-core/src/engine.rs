@@ -676,17 +676,22 @@ impl<'e, 's> RenderCtx<'e, 's> {
         let rendered = match form {
             ReferenceForm::Full => self.engine.render_full_reference(&name, &entity_type),
             ReferenceForm::ShortName => name,
-            ReferenceForm::Pronoun => {
-                if self.session.discourse.focus_is_plural() {
-                    "they".to_string()
-                } else {
-                    "it".to_string()
-                }
+            ReferenceForm::Pronoun | ReferenceForm::Demonstrative | ReferenceForm::Zero => {
+                // Synthesize features from discourse state. Today this is just
+                // the plural flag; v1.5+ multilingual grammars can thread richer
+                // features through via Value::Entity at the call site.
+                let features = crate::agreement::AgreementFeatures {
+                    number: if self.session.discourse.focus_is_plural() {
+                        crate::agreement::Number::Plural
+                    } else {
+                        crate::agreement::Number::Singular
+                    },
+                    ..crate::agreement::AgreementFeatures::default()
+                };
+                self.engine.language
+                    .realize_reference(form, &features)
+                    .unwrap_or_default()
             }
-            // Reserved variants — not yet emitted by DiscourseState::reference_form.
-            // Phase 3 will delegate all three to Language::realize_reference.
-            ReferenceForm::Demonstrative => "this".to_string(),
-            ReferenceForm::Zero => String::new(),
         };
 
         Ok(Value::String(rendered))
@@ -4978,6 +4983,30 @@ mod tests {
             .render_inline(&mut session, "{word|plural:service}", &ctx)
             .unwrap_err();
         assert!(matches!(err, ProsaicError::InvalidPipe { .. }));
+    }
+
+    #[test]
+    fn pronoun_realization_routes_through_language_trait() {
+        // This test exists to assert that the refactor preserved the English
+        // pronoun output. If it fails, the trait default impl doesn't match
+        // the old inline logic.
+        let mut engine = test_engine();
+        engine.register_template("t", "{name|refer} was modified").unwrap();
+        let mut session = test_session();
+        let mut ctx = Context::new();
+        ctx.insert("entity_type", Value::String("class".into()));
+        ctx.insert("name", Value::String("Foo".into()));
+
+        // First render: Full form — "The class Foo was modified."
+        let r1 = engine.render(&mut session, "t", &ctx).unwrap();
+        assert!(r1.contains("The class Foo"), "got: {r1}");
+
+        // Second render: Pronoun — should contain "it" (English default).
+        let r2 = engine.render(&mut session, "t", &ctx).unwrap();
+        assert!(
+            r2.to_lowercase().contains("it was") || r2.to_lowercase().contains("it "),
+            "got: {r2}"
+        );
     }
 
     #[test]
