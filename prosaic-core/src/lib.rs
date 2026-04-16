@@ -43,6 +43,7 @@ mod discourse;
 mod session;
 mod salience;
 mod document;
+pub mod rst;
 #[cfg(feature = "reg")]
 mod reg;
 mod synonyms;
@@ -79,6 +80,7 @@ pub use salience::{Salience, SalienceThresholds};
 pub use document::{
     default_classifier, DocumentPlan, GroupingStrategy, Paragraph, RhetoricalCategory,
 };
+pub use rst::RstRelation;
 #[cfg(feature = "reg")]
 pub use reg::{
     distinguishing_attributes, distinguishing_subgraph,

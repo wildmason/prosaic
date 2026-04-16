@@ -17,7 +17,7 @@ pub(crate) mod pluralize;
 
 use prosaic_core::{
     AgreementFeatures, Conjunction, Gender, GrammaticalNumber, Language, Person,
-    PluralCategory, ReferenceForm, Tense,
+    PluralCategory, ReferenceForm, RstRelation, Tense,
 };
 
 use articles::{article_with_features, basic_article};
@@ -140,6 +140,21 @@ impl Language for German {
                 )
             }
         }
+    }
+
+    fn discourse_marker(&self, relation: RstRelation) -> Option<&'static str> {
+        use RstRelation::*;
+        Some(match relation {
+            Elaboration => "Außerdem ",
+            Contrast    => "Allerdings ",
+            Cause       => "Deshalb ",
+            Result      => "Folglich ",
+            Concession  => "Dennoch ",
+            Sequence    => "Dann ",
+            Condition   => "Wenn dies geschieht, ",
+            Background  => "Inzwischen ",
+            Summary     => "Zusammenfassend ",
+        })
     }
 }
 
@@ -541,6 +556,16 @@ mod tests {
             .with_gender(Gender::Masc)
             .with_case(Case::Dative);
         assert_eq!(de.plural_description("Tisch", 1, &f), "dem Tisch");
+    }
+
+    // ── discourse_marker ──────────────────────────────────────────────────────
+
+    #[test]
+    fn discourse_marker_german() {
+        let de = German::new();
+        assert_eq!(de.discourse_marker(RstRelation::Elaboration), Some("Außerdem "));
+        assert_eq!(de.discourse_marker(RstRelation::Contrast),    Some("Allerdings "));
+        assert_eq!(de.discourse_marker(RstRelation::Result),      Some("Folglich "));
     }
 
     // ── Send + Sync ───────────────────────────────────────────────────────────

@@ -16,7 +16,7 @@ pub(crate) mod numbers;
 
 use prosaic_core::{
     AgreementFeatures, Conjunction, Gender, GrammaticalNumber, Language, Person,
-    PluralCategory, ReferenceForm, Tense,
+    PluralCategory, ReferenceForm, RstRelation, Tense,
 };
 
 use articles::{article_with_features, basic_article};
@@ -149,6 +149,21 @@ impl Language for Spanish {
                 self.pluralize(entity_type, count)
             ),
         }
+    }
+
+    fn discourse_marker(&self, relation: RstRelation) -> Option<&'static str> {
+        use RstRelation::*;
+        Some(match relation {
+            Elaboration => "Además, ",
+            Contrast    => "Sin embargo, ",
+            Cause       => "Debido a esto, ",
+            Result      => "Como resultado, ",
+            Concession  => "No obstante, ",
+            Sequence    => "Luego, ",
+            Condition   => "Si esto ocurre, ",
+            Background  => "Mientras tanto, ",
+            Summary     => "En resumen, ",
+        })
     }
 }
 
@@ -470,6 +485,16 @@ mod tests {
     fn plural_category_many_is_other() {
         let es = Spanish::new();
         assert_eq!(es.plural_category(5), PluralCategory::Other);
+    }
+
+    // ── discourse_marker ──────────────────────────────────────────────────────
+
+    #[test]
+    fn discourse_marker_spanish() {
+        let es = Spanish::new();
+        assert_eq!(es.discourse_marker(RstRelation::Elaboration), Some("Además, "));
+        assert_eq!(es.discourse_marker(RstRelation::Contrast),    Some("Sin embargo, "));
+        assert_eq!(es.discourse_marker(RstRelation::Result),      Some("Como resultado, "));
     }
 
     // ── Send + Sync assertion ─────────────────────────────────────────────────

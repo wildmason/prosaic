@@ -1,6 +1,7 @@
 use crate::context::Context;
 use crate::engine::Engine;
 use crate::error::ProsaicError;
+use crate::rst::RstRelation;
 use crate::salience::Salience;
 use crate::session::Session;
 
@@ -81,6 +82,11 @@ fn category_order() -> [RhetoricalCategory; 4] {
 pub struct Paragraph {
     /// The events in this paragraph, in render order.
     pub events: Vec<(String, Context)>,
+    /// Optional rhetorical relation for each event. `relations[i]` describes
+    /// the relation between `events[i]` and `events[i-1]`. `relations[0]`
+    /// is conventionally `None` (no predecessor within the paragraph).
+    /// Same length as `events`.
+    pub relations: Vec<Option<RstRelation>>,
     /// The highest salience in this paragraph, used for ordering.
     pub salience: Salience,
     /// Rhetorical category, when the plan was built with
@@ -92,13 +98,31 @@ impl Paragraph {
     pub fn new() -> Self {
         Self {
             events: Vec::new(),
+            relations: Vec::new(),
             salience: Salience::Low,
             category: None,
         }
     }
 
+    /// Push an event with no rhetorical relation (`None`).
     pub fn push(&mut self, key: String, ctx: Context, salience: Salience) {
+        self.push_with_relation(key, ctx, salience, None);
+    }
+
+    /// Push an event with an optional RST relation to its predecessor.
+    ///
+    /// The relation describes how this event relates to the immediately
+    /// preceding event in the same paragraph. Pass `None` when there is
+    /// no predecessor or when the rhetorical link is unknown.
+    pub fn push_with_relation(
+        &mut self,
+        key: String,
+        ctx: Context,
+        salience: Salience,
+        relation: Option<RstRelation>,
+    ) {
         self.events.push((key, ctx));
+        self.relations.push(relation);
         if salience > self.salience {
             self.salience = salience;
         }
@@ -255,6 +279,55 @@ impl DocumentPlan {
         plan
     }
 
+    /// Build a [`GroupingStrategy::ByEntity`] plan where each event carries
+    /// an optional RST relation describing its rhetorical link to the
+    /// preceding event *within the same paragraph*.
+    ///
+    /// Events that start a new paragraph (different entity) have their
+    /// relation silently dropped — relations are meaningful only within
+    /// a paragraph, not across paragraph boundaries.
+    pub fn from_events_with_relations(
+        events: &[(&str, Context, Option<RstRelation>)],
+        engine: &Engine,
+    ) -> Self {
+        let mut plan = Self::new();
+        if events.is_empty() {
+            return plan;
+        }
+
+        let mut current = Paragraph::new();
+        let mut current_entity: Option<String> = None;
+
+        for (key, ctx, relation) in events {
+            let ctx = ctx.clone();
+            let salience = engine.context_salience(&ctx);
+            let entity_name = entity_key(&ctx);
+
+            let same_entity = match (&current_entity, &entity_name) {
+                (Some(a), Some(b)) => a == b,
+                _ => false,
+            };
+
+            if !same_entity && !current.is_empty() {
+                plan.paragraphs.push(std::mem::take(&mut current));
+            }
+
+            // When starting a new paragraph (current is empty) the relation
+            // doesn't apply — cross-paragraph relations aren't supported.
+            let effective_relation = if current.is_empty() { None } else { *relation };
+
+            current.push_with_relation(key.to_string(), ctx, salience, effective_relation);
+            current_entity = entity_name;
+        }
+
+        if !current.is_empty() {
+            plan.paragraphs.push(current);
+        }
+
+        plan.paragraphs.sort_by(|a, b| b.salience.cmp(&a.salience));
+        plan
+    }
+
     fn build_by_entity(events: &[(&str, Context)], engine: &Engine) -> Self {
         let mut plan = Self::new();
         if events.is_empty() {
@@ -297,6 +370,12 @@ impl DocumentPlan {
     /// Paragraphs are separated by a double newline. Between paragraphs the
     /// discourse state is reset so pronouns don't span paragraph boundaries —
     /// each paragraph reintroduces its entity with the full form.
+    ///
+    /// When any event in a paragraph carries an RST relation, the paragraph
+    /// is rendered via [`Engine::render_batch_with_relations`] which inserts
+    /// discourse markers ("Furthermore, ", "However, ", etc.) between events.
+    /// Paragraphs whose relations are all `None` fall back to the standard
+    /// [`Engine::render_batch`] path so aggregation still applies.
     pub fn render(&self, engine: &Engine, session: &mut Session) -> Result<String, ProsaicError> {
         let mut paragraphs = Vec::new();
 
@@ -305,13 +384,23 @@ impl DocumentPlan {
                 session.reset();
             }
 
-            let events: Vec<(&str, Context)> = p
-                .events
-                .iter()
-                .map(|(k, c)| (k.as_str(), c.clone()))
-                .collect();
+            let rendered = if p.relations.iter().any(|r| r.is_some()) {
+                let triples: Vec<(&str, Context, Option<RstRelation>)> = p
+                    .events
+                    .iter()
+                    .zip(p.relations.iter())
+                    .map(|((k, c), r)| (k.as_str(), c.clone(), *r))
+                    .collect();
+                engine.render_batch_with_relations(session, &triples)?
+            } else {
+                let events: Vec<(&str, Context)> = p
+                    .events
+                    .iter()
+                    .map(|(k, c)| (k.as_str(), c.clone()))
+                    .collect();
+                engine.render_batch(session, &events)?
+            };
 
-            let rendered = engine.render_batch(session, &events)?;
             if !rendered.is_empty() {
                 paragraphs.push(rendered);
             }
@@ -340,6 +429,7 @@ mod tests {
     use crate::context::Value;
     use crate::engine::{Engine, Strictness, Variation};
     use crate::language::{Conjunction, Language, Person, Tense};
+    use crate::rst::RstRelation;
     use crate::session::Session;
 
     struct TestLang;
@@ -604,5 +694,86 @@ mod tests {
         // events end up in one paragraph.
         assert_eq!(plan.paragraphs.len(), 1);
         assert!(plan.paragraphs[0].category.is_none());
+    }
+
+    // ── Phase 3: Paragraph relations ────────────────────────────────────────
+
+    #[test]
+    fn paragraph_push_adds_none_relation() {
+        let mut p = Paragraph::new();
+        p.push("t".into(), Context::new(), Salience::Low);
+        assert_eq!(p.relations.len(), 1);
+        assert_eq!(p.relations[0], None);
+    }
+
+    #[test]
+    fn paragraph_push_with_relation_records_it() {
+        let mut p = Paragraph::new();
+        p.push_with_relation(
+            "t".into(),
+            Context::new(),
+            Salience::Low,
+            Some(RstRelation::Contrast),
+        );
+        assert_eq!(p.relations, vec![Some(RstRelation::Contrast)]);
+    }
+
+    #[test]
+    fn paragraph_relations_len_matches_events_len() {
+        let mut p = Paragraph::new();
+        p.push("t".into(), Context::new(), Salience::Low);
+        p.push_with_relation("t".into(), Context::new(), Salience::Low, Some(RstRelation::Elaboration));
+        p.push("t".into(), Context::new(), Salience::Medium);
+        assert_eq!(p.events.len(), p.relations.len());
+        assert_eq!(p.relations.len(), 3);
+    }
+
+    // ── Phase 4: from_events_with_relations ─────────────────────────────────
+
+    #[test]
+    fn from_events_with_relations_threads_rel() {
+        let engine = test_engine();
+        let events = vec![
+            ("t", ctx_with_entity("Foo", 1), None),
+            ("t", ctx_with_entity("Foo", 1), Some(RstRelation::Elaboration)),
+        ];
+        let plan = DocumentPlan::from_events_with_relations(&events, &engine);
+        assert_eq!(plan.paragraphs.len(), 1);
+        assert_eq!(plan.paragraphs[0].relations[0], None);
+        assert_eq!(plan.paragraphs[0].relations[1], Some(RstRelation::Elaboration));
+    }
+
+    #[test]
+    fn relations_are_dropped_at_paragraph_boundary() {
+        let engine = test_engine();
+        // Different entities → two paragraphs; the relation on e2 is dropped
+        // because e2 starts a new paragraph.
+        let events = vec![
+            ("t", ctx_with_entity("Foo", 1), None),
+            ("t", ctx_with_entity("Bar", 1), Some(RstRelation::Contrast)),
+        ];
+        let plan = DocumentPlan::from_events_with_relations(&events, &engine);
+        assert_eq!(plan.paragraphs.len(), 2);
+        // Both paragraphs have a single event with None relation.
+        for p in &plan.paragraphs {
+            assert_eq!(p.relations, vec![None]);
+        }
+    }
+
+    // ── Phase 6: DocumentPlan::render with relations ─────────────────────────
+
+    #[test]
+    fn document_render_uses_marker_when_paragraph_has_relation() {
+        let mut engine = test_engine();
+        engine.register_template("t", "The class {name} was modified").unwrap();
+
+        let events = vec![
+            ("t", ctx_with_entity("Foo", 1), None),
+            ("t", ctx_with_entity("Foo", 1), Some(RstRelation::Contrast)),
+        ];
+        let plan = DocumentPlan::from_events_with_relations(&events, &engine);
+        let mut s = Session::new();
+        let rendered = plan.render(&engine, &mut s).unwrap();
+        assert!(rendered.contains("However, "), "got: {rendered}");
     }
 }

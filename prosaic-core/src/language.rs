@@ -303,6 +303,29 @@ pub trait Language: Send + Sync {
         }
     }
 
+    /// Return a discourse marker for the given RST relation.
+    ///
+    /// Emitted at the START of a sentence (with trailing space), e.g.
+    /// `"Furthermore, "`. Return `None` to suppress the marker (the renderer
+    /// will fall back to a plain inter-sentence space).
+    ///
+    /// The default implementation encodes English markers. Non-English grammars
+    /// override with locale-appropriate markers.
+    fn discourse_marker(&self, relation: crate::rst::RstRelation) -> Option<&'static str> {
+        use crate::rst::RstRelation::*;
+        Some(match relation {
+            Elaboration => "Furthermore, ",
+            Contrast    => "However, ",
+            Cause       => "Because of this, ",
+            Result      => "As a result, ",
+            Concession  => "Nevertheless, ",
+            Sequence    => "Then, ",
+            Condition   => "If this happens, ",
+            Background  => "Meanwhile, ",
+            Summary     => "In summary, ",
+        })
+    }
+
     /// Realize a reference form as surface text for this language.
     ///
     /// The discourse policy layer chooses the [`crate::discourse::ReferenceForm`]
@@ -707,5 +730,14 @@ mod tests {
             lang.realize_reference(crate::discourse::ReferenceForm::ShortName, &f),
             None
         );
+    }
+
+    #[test]
+    fn discourse_marker_english_defaults() {
+        let lang = MiniLang;
+        use crate::rst::RstRelation::*;
+        assert_eq!(lang.discourse_marker(Elaboration), Some("Furthermore, "));
+        assert_eq!(lang.discourse_marker(Contrast),    Some("However, "));
+        assert_eq!(lang.discourse_marker(Result),      Some("As a result, "));
     }
 }

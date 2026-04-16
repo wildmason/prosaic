@@ -1763,6 +1763,63 @@ impl Engine {
         Ok(sentences.join(" "))
     }
 
+    /// Render a batch of events where each event carries an optional RST
+    /// relation describing its rhetorical link to the preceding event.
+    ///
+    /// When a relation is present on `events[i]` (i ≥ 1), the corresponding
+    /// discourse marker is prepended to that sentence instead of a plain
+    /// space — e.g. "However, the class Foo was modified." — and the leading
+    /// determiner of the rendered sentence is lowercased so the marker's
+    /// capitalisation leads naturally.
+    ///
+    /// When **all** relations are `None`, this method delegates to
+    /// [`Engine::render_batch`] so aggregation (clause-reduction,
+    /// subject-aggregation) still applies.
+    pub fn render_batch_with_relations(
+        &self,
+        session: &mut Session,
+        events: &[(&str, Context, Option<crate::rst::RstRelation>)],
+    ) -> Result<String, ProsaicError> {
+        if events.is_empty() {
+            return Ok(String::new());
+        }
+
+        // If every relation is None, delegate to render_batch to preserve
+        // aggregation benefits.
+        if events.iter().all(|(_, _, r)| r.is_none()) {
+            let pairs: Vec<(&str, Context)> =
+                events.iter().map(|(k, c, _)| (*k, c.clone())).collect();
+            return self.render_batch(session, &pairs);
+        }
+
+        let mut output = String::new();
+        for (i, (key, ctx, relation)) in events.iter().enumerate() {
+            if i > 0 {
+                if let Some(rel) = relation {
+                    if let Some(marker) = self.language.discourse_marker(*rel) {
+                        output.push(' ');
+                        output.push_str(marker);
+                    } else {
+                        output.push(' ');
+                    }
+                } else {
+                    output.push(' ');
+                }
+            }
+            let sentence = self.render(session, key, ctx)?;
+            // If a marker was prepended AND the sentence starts with a
+            // capitalised determiner, lowercase the first letter so the
+            // marker's capitalisation leads.
+            if i > 0 && relation.is_some() {
+                output.push_str(&lowercase_first_if_determiner(&sentence));
+            } else {
+                output.push_str(&sentence);
+            }
+        }
+
+        Ok(output)
+    }
+
     /// Find the end index (exclusive) of a run of consecutive events that
     /// share the same entity (name + entity_type) but potentially differ in
     /// template key. Used by clause-reduction aggregation to turn a series
@@ -2668,6 +2725,34 @@ fn lowercase_first_in_place(output: &mut String) {
     let first_len = first.len_utf8();
     let lower: String = first.to_lowercase().collect();
     output.replace_range(0..first_len, &lower);
+}
+
+/// If `s` starts with a common determiner or article (e.g. "The ", "A ", "El "),
+/// lowercase the first character and return the result. Otherwise return `s`
+/// unchanged. Used by [`Engine::render_batch_with_relations`] so that a
+/// discourse marker ("Furthermore, ") naturally leads a sentence that would
+/// otherwise start with a capital article ("The class Foo …" →
+/// "Furthermore, the class Foo …").
+fn lowercase_first_if_determiner(s: &str) -> String {
+    let first_word_end = s.find(char::is_whitespace).unwrap_or(s.len());
+    let first = &s[..first_word_end];
+    const DETERMINERS: &[&str] = &[
+        "The", "A", "An",                   // English
+        "El", "La", "Los", "Las", "Un", "Una", // Spanish
+        "Der", "Die", "Das",                // German
+    ];
+    if DETERMINERS.contains(&first) {
+        let mut result = String::with_capacity(s.len());
+        let mut chars = first.chars();
+        if let Some(c) = chars.next() {
+            result.extend(c.to_lowercase());
+        }
+        result.push_str(chars.as_str());
+        result.push_str(&s[first_word_end..]);
+        result
+    } else {
+        s.to_string()
+    }
 }
 
 /// Try to replace "The {type} {name} was ..." with a connective like "It also was ..."
@@ -5025,6 +5110,99 @@ mod tests {
             .unwrap();
         // Under English (TestLang) both pipes should produce "items" for count=2.
         assert_eq!(plural_out, pluralize_out);
+    }
+}
+
+#[cfg(test)]
+mod render_batch_with_relations_tests {
+    use super::*;
+    use crate::language::{Conjunction, Language, Person, Tense};
+    use crate::rst::RstRelation;
+
+    struct SimpleLang;
+
+    impl Language for SimpleLang {
+        fn pluralize(&self, word: &str, count: usize) -> String {
+            if count == 1 { word.to_string() } else { format!("{word}s") }
+        }
+        fn singularize(&self, word: &str) -> String {
+            word.strip_suffix('s').unwrap_or(word).to_string()
+        }
+        fn article(&self, _word: &str) -> &str { "the" }
+        fn conjugate(&self, verb: &str, _t: Tense, _p: Person) -> String { verb.to_string() }
+        fn past_participle(&self, verb: &str) -> String { format!("{verb}ed") }
+        fn present_participle(&self, verb: &str) -> String { format!("{verb}ing") }
+        fn join_list(&self, items: &[&str], _c: Conjunction) -> String { items.join(", ") }
+        fn ordinal(&self, n: usize) -> String { format!("{n}th") }
+        fn number_to_words(&self, n: usize) -> String { n.to_string() }
+    }
+
+    fn make_engine() -> Engine {
+        Engine::new(SimpleLang)
+            .strictness(Strictness::Strict)
+            .variation(Variation::Fixed)
+    }
+
+    fn ctx_with_name(name: &str) -> Context {
+        let mut c = Context::new();
+        c.insert("name", Value::String(name.into()));
+        c
+    }
+
+    #[test]
+    fn render_batch_with_relations_inserts_marker() {
+        let mut engine = make_engine();
+        engine
+            .register_template("t", "The class {name} was modified")
+            .unwrap();
+        let mut s = Session::new();
+        let ctx = ctx_with_name("Foo");
+        let events = vec![
+            ("t", ctx.clone(), None),
+            ("t", ctx, Some(RstRelation::Elaboration)),
+        ];
+        let out = engine.render_batch_with_relations(&mut s, &events).unwrap();
+        assert!(out.contains("Furthermore, "), "got: {out}");
+    }
+
+    #[test]
+    fn render_batch_with_relations_lowercases_determiner_after_marker() {
+        let mut engine = make_engine();
+        engine
+            .register_template("t", "The class {name} was modified")
+            .unwrap();
+        let mut s = Session::new();
+        let ctx = ctx_with_name("Foo");
+        let events = vec![
+            ("t", ctx.clone(), None),
+            ("t", ctx, Some(RstRelation::Contrast)),
+        ];
+        let out = engine.render_batch_with_relations(&mut s, &events).unwrap();
+        // "However, the class Foo..." — note lowercase "the"
+        assert!(out.contains("However, the class"), "got: {out}");
+    }
+
+    #[test]
+    fn render_batch_with_all_none_delegates_to_render_batch() {
+        let mut engine = make_engine();
+        engine.register_template("t", "{name} was modified").unwrap();
+        let mut s = Session::new();
+        let ctx = ctx_with_name("Foo");
+        let triples = vec![("t", ctx.clone(), None), ("t", ctx.clone(), None)];
+        let pairs: Vec<_> = triples.iter().map(|(k, c, _)| (*k, c.clone())).collect();
+        let mut s2 = Session::new();
+        let from_triples = engine.render_batch_with_relations(&mut s, &triples).unwrap();
+        let from_pairs = engine.render_batch(&mut s2, &pairs).unwrap();
+        assert_eq!(from_triples, from_pairs);
+    }
+
+    #[test]
+    fn render_batch_with_relations_empty_is_empty_string() {
+        let engine = make_engine();
+        let mut s = Session::new();
+        let events: Vec<(&str, Context, Option<RstRelation>)> = vec![];
+        let out = engine.render_batch_with_relations(&mut s, &events).unwrap();
+        assert_eq!(out, "");
     }
 }
 
