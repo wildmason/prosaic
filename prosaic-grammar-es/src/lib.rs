@@ -165,6 +165,66 @@ impl Language for Spanish {
             Summary     => "En resumen, ",
         })
     }
+
+    #[cfg(feature = "time")]
+    fn since_last_marker(&self, diff_secs: i64) -> String {
+        const MINUTE: i64 = 60;
+        const HOUR: i64 = 60 * MINUTE;
+        const DAY: i64 = 24 * HOUR;
+        const WEEK: i64 = 7 * DAY;
+        const MONTH: i64 = 30 * DAY;
+        const YEAR: i64 = 365 * DAY;
+
+        if diff_secs <= 0 {
+            return "al mismo tiempo".to_string();
+        }
+        if diff_secs < 60 {
+            return "momentos después".to_string();
+        }
+        if diff_secs < HOUR {
+            let n = ((diff_secs + MINUTE / 2) / MINUTE).max(1);
+            return match n {
+                1 => "un minuto después".to_string(),
+                _ => format!("{n} minutos después"),
+            };
+        }
+        if diff_secs < DAY {
+            let n = ((diff_secs + HOUR / 2) / HOUR).max(1);
+            if n < 6 {
+                return match n {
+                    1 => "una hora después".to_string(),
+                    _ => format!("{n} horas después"),
+                };
+            }
+            return "más tarde ese día".to_string();
+        }
+        if diff_secs < 2 * DAY {
+            return "al día siguiente".to_string();
+        }
+        if diff_secs < WEEK {
+            let n = diff_secs / DAY;
+            return format!("{n} días después");
+        }
+        if diff_secs < 2 * WEEK {
+            return "la semana siguiente".to_string();
+        }
+        if diff_secs < MONTH {
+            let n = diff_secs / WEEK;
+            return format!("{n} semanas después");
+        }
+        if diff_secs < 2 * MONTH {
+            return "el mes siguiente".to_string();
+        }
+        if diff_secs < YEAR {
+            let n = diff_secs / MONTH;
+            return format!("{n} meses después");
+        }
+        if diff_secs < 2 * YEAR {
+            return "el año siguiente".to_string();
+        }
+        let n = diff_secs / YEAR;
+        format!("{n} años después")
+    }
 }
 
 // ── Helper functions ──────────────────────────────────────────────────────────
@@ -503,5 +563,43 @@ mod tests {
     fn spanish_is_send_sync() {
         fn assert_send_sync<T: Send + Sync>() {}
         assert_send_sync::<Spanish>();
+    }
+
+    // ── since_last_marker ─────────────────────────────────────────────────────
+
+    #[cfg(feature = "time")]
+    #[test]
+    fn since_last_marker_at_same_time() {
+        let es = Spanish::new();
+        assert_eq!(es.since_last_marker(0), "al mismo tiempo");
+        assert_eq!(es.since_last_marker(-10), "al mismo tiempo");
+    }
+
+    #[cfg(feature = "time")]
+    #[test]
+    fn since_last_marker_moments_later() {
+        let es = Spanish::new();
+        assert_eq!(es.since_last_marker(30), "momentos después");
+    }
+
+    #[cfg(feature = "time")]
+    #[test]
+    fn since_last_marker_the_next_day() {
+        let es = Spanish::new();
+        assert_eq!(es.since_last_marker(86_400 + 1), "al día siguiente");
+    }
+
+    #[cfg(feature = "time")]
+    #[test]
+    fn since_last_marker_following_week() {
+        let es = Spanish::new();
+        assert_eq!(es.since_last_marker(7 * 86_400 + 1), "la semana siguiente");
+    }
+
+    #[cfg(feature = "time")]
+    #[test]
+    fn since_last_marker_months_later() {
+        let es = Spanish::new();
+        assert_eq!(es.since_last_marker(3 * 30 * 86_400), "3 meses después");
     }
 }

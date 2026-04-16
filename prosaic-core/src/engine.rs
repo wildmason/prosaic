@@ -575,6 +575,8 @@ impl<'e, 's> RenderCtx<'e, 's> {
             "syn" => self.pipe_syn(value),
             #[cfg(feature = "time")]
             "relative" => self.pipe_relative(value),
+            #[cfg(feature = "time")]
+            "since_last" => self.pipe_since_last(value),
             "quantify" => self.pipe_quantify(pipe, value),
             "demonstrative" => self.pipe_demonstrative(value),
             "hedge" => self.pipe_hedge(pipe, value),
@@ -1114,6 +1116,51 @@ impl<'e, 's> RenderCtx<'e, 's> {
         Ok(Value::String(format_relative(diff)))
     }
 
+    #[cfg(feature = "time")]
+    fn pipe_since_last(&mut self, value: &Value) -> Result<Value, ProsaicError> {
+        let Some(ts) = value.as_number() else {
+            return Err(ProsaicError::InvalidPipe {
+                pipe: "since_last".to_string(),
+                reason: "expected numeric Unix-seconds timestamp".to_string(),
+            });
+        };
+
+        let marker = match self.session.last_temporal_anchor {
+            Some(anchor) => self.engine.language.since_last_marker(ts - anchor),
+            None => {
+                // Fall back to absolute-relative behavior anchored at now/reference_time.
+                // This makes the first event in a narrative read like "3 days ago",
+                // and subsequent events read like anchored deltas ("the next day").
+                let now = match self.engine.reference_time {
+                    Some(n) => n,
+                    None => {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        {
+                            std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .map(|d| d.as_secs() as i64)
+                                .unwrap_or(0)
+                        }
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            return Err(ProsaicError::InvalidPipe {
+                                pipe: "since_last".to_string(),
+                                reason: "on wasm32 targets the engine needs an \
+                                         explicit reference time — call \
+                                         `engine.reference_time(unix_secs)` before \
+                                         rendering"
+                                    .to_string(),
+                            });
+                        }
+                    }
+                };
+                format_relative(now - ts)
+            }
+        };
+
+        Ok(Value::String(marker))
+    }
+
     /// Score every variant for a key using this session state (for diagnostics).
     fn score_all_variants(
         &mut self,
@@ -1616,7 +1663,16 @@ impl Engine {
 
         let snapshot = session.clone();
         match RenderCtx::new(self, session).render_tx(key, all_alternatives, &context) {
-            Ok(output) => Ok(output),
+            Ok(output) => {
+                // Update temporal anchor after a successful render so that
+                // render errors don't corrupt state. The anchor is set whenever
+                // the event context carries a `timestamp` slot.
+                #[cfg(feature = "time")]
+                if let Some(Value::Number(ts)) = context.get("timestamp") {
+                    session.last_temporal_anchor = Some(*ts);
+                }
+                Ok(output)
+            }
             Err(e) => {
                 *session = snapshot;
                 Err(e)
@@ -4054,6 +4110,124 @@ mod tests {
         let mut ctx = Context::new();
         ctx.insert("x", Value::String("not a number".into()));
         let result = engine.render(&mut session, "t", &ctx);
+        assert!(matches!(result, Err(ProsaicError::InvalidPipe { .. })));
+    }
+
+    // ── since_last pipe ──────────────────────────────────────────────────
+
+    #[cfg(feature = "time")]
+    #[test]
+    fn since_last_first_event_falls_back_to_relative() {
+        let now = 1_700_000_000;
+        let mut engine = test_engine().reference_time(now);
+        engine.register_template("t", "{ts|since_last}").unwrap();
+        let mut s = Session::new();
+        let mut ctx = Context::new();
+        ctx.insert("ts", Value::Number(now - 3 * 86400)); // 3 days ago
+        ctx.insert("timestamp", Value::Number(now - 3 * 86400));
+        let out = engine.render(&mut s, "t", &ctx).unwrap();
+        assert!(out.contains("3 days ago"), "got: {out}");
+    }
+
+    #[cfg(feature = "time")]
+    #[test]
+    fn since_last_subsequent_event_uses_anchor() {
+        let now = 1_700_000_000;
+        let mut engine = test_engine().reference_time(now);
+        engine.register_template("t", "{ts|since_last}").unwrap();
+        let mut s = Session::new();
+
+        // First event sets the anchor.
+        let mut c1 = Context::new();
+        let t1 = now - 3 * 86400;
+        c1.insert("ts", Value::Number(t1));
+        c1.insert("timestamp", Value::Number(t1));
+        engine.render(&mut s, "t", &c1).unwrap();
+
+        // Second event, one day later.
+        let mut c2 = Context::new();
+        let t2 = t1 + 86400;
+        c2.insert("ts", Value::Number(t2));
+        c2.insert("timestamp", Value::Number(t2));
+        let out = engine.render(&mut s, "t", &c2).unwrap();
+        assert!(out.contains("the next day"), "got: {out}");
+    }
+
+    #[cfg(feature = "time")]
+    #[test]
+    fn since_last_survives_session_reset() {
+        let now = 1_700_000_000;
+        let mut engine = test_engine().reference_time(now);
+        engine.register_template("t", "{ts|since_last}").unwrap();
+        let mut s = Session::new();
+
+        let mut c1 = Context::new();
+        let t1 = now - 3 * 86400;
+        c1.insert("ts", Value::Number(t1));
+        c1.insert("timestamp", Value::Number(t1));
+        engine.render(&mut s, "t", &c1).unwrap();
+
+        s.reset(); // Reset discourse, but NOT temporal anchor.
+        assert_eq!(s.last_temporal_anchor, Some(t1));
+
+        let mut c2 = Context::new();
+        let t2 = t1 + 86400;
+        c2.insert("ts", Value::Number(t2));
+        c2.insert("timestamp", Value::Number(t2));
+        let out = engine.render(&mut s, "t", &c2).unwrap();
+        assert!(out.contains("the next day"), "got: {out}");
+    }
+
+    #[cfg(feature = "time")]
+    #[test]
+    fn since_last_reset_temporal_restarts_narrative() {
+        let now = 1_700_000_000;
+        let mut engine = test_engine().reference_time(now);
+        engine.register_template("t", "{ts|since_last}").unwrap();
+        let mut s = Session::new();
+
+        let mut c1 = Context::new();
+        let t1 = now - 3 * 86400;
+        c1.insert("ts", Value::Number(t1));
+        c1.insert("timestamp", Value::Number(t1));
+        engine.render(&mut s, "t", &c1).unwrap();
+        s.reset_temporal();
+
+        let mut c2 = Context::new();
+        let t2 = t1 + 86400;
+        c2.insert("ts", Value::Number(t2));
+        c2.insert("timestamp", Value::Number(t2));
+        let out = engine.render(&mut s, "t", &c2).unwrap();
+        // now - t2 = 2 days ago (absolute fallback)
+        assert!(out.contains("2 days ago"), "got: {out}");
+    }
+
+    #[cfg(feature = "time")]
+    #[test]
+    fn since_last_anchor_set_after_successful_render() {
+        let now = 1_700_000_000;
+        let mut engine = test_engine().reference_time(now);
+        engine.register_template("t", "{ts|since_last}").unwrap();
+        let mut s = Session::new();
+        assert_eq!(s.last_temporal_anchor, None);
+
+        let mut ctx = Context::new();
+        let ts = now - 86400;
+        ctx.insert("ts", Value::Number(ts));
+        ctx.insert("timestamp", Value::Number(ts));
+        engine.render(&mut s, "t", &ctx).unwrap();
+        assert_eq!(s.last_temporal_anchor, Some(ts));
+    }
+
+    #[cfg(feature = "time")]
+    #[test]
+    fn since_last_rejects_non_numeric() {
+        let mut engine = test_engine().reference_time(1_700_000_000);
+        engine.register_template("t", "{x|since_last}").unwrap();
+        let mut s = Session::new();
+        let mut ctx = Context::new();
+        ctx.insert("x", Value::String("not a number".into()));
+        let result = engine.render(&mut s, "t", &ctx);
         assert!(matches!(result, Err(ProsaicError::InvalidPipe { .. })));
     }
 

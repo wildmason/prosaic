@@ -326,6 +326,21 @@ pub trait Language: Send + Sync {
         })
     }
 
+    /// Format an inter-event temporal delta as a narrative phrase.
+    ///
+    /// Called by the `{…|since_last}` pipe when the session has a
+    /// `last_temporal_anchor`. `diff_secs` is `current_ts - anchor_ts`
+    /// (positive = later event). Zero or negative returns "at the same
+    /// time" (English default); override for other languages.
+    ///
+    /// The default implementation produces English phrases like
+    /// "the next day", "moments later", "3 weeks later". Non-English
+    /// grammars should override to produce locale-appropriate phrases.
+    #[cfg(feature = "time")]
+    fn since_last_marker(&self, diff_secs: i64) -> String {
+        crate::time::format_since_last(diff_secs)
+    }
+
     /// Realize a reference form as surface text for this language.
     ///
     /// The discourse policy layer chooses the [`crate::discourse::ReferenceForm`]
@@ -739,5 +754,35 @@ mod tests {
         assert_eq!(lang.discourse_marker(Elaboration), Some("Furthermore, "));
         assert_eq!(lang.discourse_marker(Contrast),    Some("However, "));
         assert_eq!(lang.discourse_marker(Result),      Some("As a result, "));
+    }
+
+    // ── since_last_marker default (English) ──────────────────────────────────
+
+    #[cfg(feature = "time")]
+    #[test]
+    fn since_last_marker_default_the_next_day() {
+        let lang = MiniLang;
+        assert_eq!(lang.since_last_marker(86_400 + 1), "the next day");
+    }
+
+    #[cfg(feature = "time")]
+    #[test]
+    fn since_last_marker_default_moments_later() {
+        let lang = MiniLang;
+        assert_eq!(lang.since_last_marker(30), "moments later");
+    }
+
+    #[cfg(feature = "time")]
+    #[test]
+    fn since_last_marker_default_zero_is_at_the_same_time() {
+        let lang = MiniLang;
+        assert_eq!(lang.since_last_marker(0), "at the same time");
+    }
+
+    #[cfg(feature = "time")]
+    #[test]
+    fn since_last_marker_default_years() {
+        let lang = MiniLang;
+        assert_eq!(lang.since_last_marker(3 * 365 * 86_400), "3 years later");
     }
 }

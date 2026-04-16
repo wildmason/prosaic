@@ -205,6 +205,7 @@ const VALID_PIPES: &[&str] = &[
     "verb",
     "syn",
     "relative",
+    "since_last",
     "quantify",
     "hedge",
     "negated",

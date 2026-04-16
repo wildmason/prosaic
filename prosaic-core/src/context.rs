@@ -459,7 +459,7 @@ mod into_value_tests {
 
 #[cfg(test)]
 mod ctx_macro_tests {
-    use crate::{ctx, Context, Value};
+    use crate::{Context, Value};
 
     #[test]
     fn empty_ctx_is_empty() {
@@ -581,7 +581,6 @@ mod entity_value_tests {
 mod entity_builder_tests {
     use super::*;
     use crate::agreement::{AgreementFeatures, Animacy, Case, Definiteness, Gender, Number};
-    use crate::ctx;
 
     #[test]
     fn entity_helper_default_features() {

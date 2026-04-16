@@ -9,4 +9,9 @@ description = "Spanish grammar layer for the Prosaic NLG engine"
 prosaic-core = { path = "../prosaic-core", default-features = false }
 
 [dev-dependencies]
-prosaic-grammar-es = { path = "." }
+prosaic-grammar-es = { path = ".", features = ["time"] }
+
+[features]
+# Enable the `since_last_marker` Language override and the time-related
+# test helpers. Requires prosaic-core's `time` feature to be active.
+time = ["prosaic-core/time"]

@@ -22,6 +22,13 @@ pub struct Session {
     /// so a future `&Session`-only code path (e.g. read-only scoring)
     /// can still advance counters atomically without an outer borrow.
     pub(crate) round_robin_counters: HashMap<String, AtomicUsize>,
+    /// Unix-seconds timestamp of the most recently-rendered event. Used by
+    /// the `{timestamp|since_last}` pipe to compute inter-event deltas
+    /// ("the next day", "moments later"). Persists across
+    /// [`Session::reset`] so narratives can span paragraphs. Starts as
+    /// `None`; set automatically whenever an event's context contains a
+    /// `timestamp` slot. Call [`Session::reset_temporal`] to clear it.
+    pub(crate) last_temporal_anchor: Option<i64>,
 }
 
 impl Session {
@@ -29,14 +36,28 @@ impl Session {
         Self {
             discourse: DiscourseState::new(),
             round_robin_counters: HashMap::new(),
+            last_temporal_anchor: None,
         }
     }
 
     /// Clear all session state. Equivalent to replacing with `Session::new()`
     /// but preserves allocations.
+    ///
+    /// NOTE: `last_temporal_anchor` survives so narratives can span paragraphs.
+    /// Call [`Session::reset_temporal`] to clear the anchor explicitly when
+    /// starting a temporally-disjoint narrative in the same session.
     pub fn reset(&mut self) {
         self.discourse.reset();
         self.round_robin_counters.clear();
+        // Intentionally NOT clearing last_temporal_anchor — it must survive
+        // paragraph breaks so inter-paragraph temporal phrases ("two weeks later")
+        // work correctly.
+    }
+
+    /// Clear the temporal anchor. Use when starting a temporally-disjoint
+    /// narrative in the same session.
+    pub fn reset_temporal(&mut self) {
+        self.last_temporal_anchor = None;
     }
 }
 
@@ -51,6 +72,9 @@ impl Clone for Session {
     /// atomic with `Ordering::Relaxed` — fine because clones are used
     /// as snapshot/restore checkpoints around fallible renders and there
     /// is no concurrent writer during a clone.
+    ///
+    /// `last_temporal_anchor` is copied so snapshot/restore checkpoints
+    /// preserve the temporal state correctly.
     fn clone(&self) -> Self {
         let mut counters = HashMap::with_capacity(self.round_robin_counters.len());
         for (k, v) in &self.round_robin_counters {
@@ -59,6 +83,52 @@ impl Clone for Session {
         Self {
             discourse: self.discourse.clone(),
             round_robin_counters: counters,
+            last_temporal_anchor: self.last_temporal_anchor,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn session_new_has_no_temporal_anchor() {
+        let s = Session::new();
+        assert_eq!(s.last_temporal_anchor, None);
+    }
+
+    #[test]
+    fn session_reset_preserves_temporal_anchor() {
+        let mut s = Session::new();
+        s.last_temporal_anchor = Some(1_700_000_000);
+        s.reset();
+        assert_eq!(s.last_temporal_anchor, Some(1_700_000_000));
+    }
+
+    #[test]
+    fn session_reset_temporal_clears_anchor() {
+        let mut s = Session::new();
+        s.last_temporal_anchor = Some(1_700_000_000);
+        s.reset_temporal();
+        assert_eq!(s.last_temporal_anchor, None);
+    }
+
+    #[test]
+    fn session_clone_copies_temporal_anchor() {
+        let mut s = Session::new();
+        s.last_temporal_anchor = Some(1_700_000_000);
+        let cloned = s.clone();
+        assert_eq!(cloned.last_temporal_anchor, Some(1_700_000_000));
+    }
+
+    #[test]
+    fn session_clone_is_independent() {
+        // Mutating the clone must not affect the original.
+        let mut s = Session::new();
+        s.last_temporal_anchor = Some(1_700_000_000);
+        let mut cloned = s.clone();
+        cloned.last_temporal_anchor = Some(9_999_999_999);
+        assert_eq!(s.last_temporal_anchor, Some(1_700_000_000));
     }
 }

@@ -762,6 +762,43 @@ mod tests {
 
     // ── Phase 6: DocumentPlan::render with relations ─────────────────────────
 
+    // ── Temporal anchor spans paragraphs ────────────────────────────────────
+
+    #[cfg(feature = "time")]
+    #[test]
+    fn document_plan_temporal_anchor_spans_paragraphs() {
+        let mut engine = Engine::new(TestLang)
+            .strictness(Strictness::Strict)
+            .variation(Variation::Fixed)
+            .reference_time(1_700_000_000);
+        engine
+            .register_template("t", "{name} changed {ts|since_last}")
+            .unwrap();
+
+        let t1: i64 = 1_700_000_000;
+        let t2: i64 = t1 + 86400;
+
+        let mut c1 = ctx_with_entity("Foo", 1);
+        c1.insert("ts", Value::Number(t1));
+        c1.insert("timestamp", Value::Number(t1));
+
+        let mut c2 = ctx_with_entity("Bar", 1);
+        c2.insert("ts", Value::Number(t2));
+        c2.insert("timestamp", Value::Number(t2));
+
+        let events: Vec<(&str, Context)> = vec![("t", c1), ("t", c2)];
+        let plan = DocumentPlan::from_events(&events, &engine);
+        // Two different entities → two paragraphs.
+        assert_eq!(plan.paragraphs.len(), 2);
+
+        let mut s = Session::new();
+        let out = plan.render(&engine, &mut s).unwrap();
+
+        // The temporal anchor threads through session.reset() between paragraphs —
+        // Bar's paragraph reads "the next day", not an absolute-now-based phrase.
+        assert!(out.contains("the next day"), "got: {out}");
+    }
+
     #[test]
     fn document_render_uses_marker_when_paragraph_has_relation() {
         let mut engine = test_engine();
