@@ -160,6 +160,16 @@ impl<'a> Iterator for RenderIter<'a> {
             return None;
         }
 
+        // Terminal-error helper: any render failure forces the iterator
+        // to report `None` on subsequent calls. Continuing past an error
+        // would replay the same failing run and — inside aggregated or
+        // gapping runs — compound session state from earlier successful
+        // renders. See `render_iter`'s doc comment.
+        let fail = |this: &mut RenderIter<'_>, e: ProsaicError| -> Option<Self::Item> {
+            this.i = this.events.len();
+            Some(Err(e))
+        };
+
         // Mirror the logic in `render_batch` but emit one sentence per
         // `.next()` call.
         let action_end = self.engine.find_same_action_run(self.events, self.i);
@@ -171,7 +181,7 @@ impl<'a> Iterator for RenderIter<'a> {
                 .render_aggregated_subjects(self.session, key, run)
             {
                 Ok(s) => s,
-                Err(e) => return Some(Err(e)),
+                Err(e) => return fail(self, e),
             };
             self.i = action_end;
             return Some(Ok(sentence));
@@ -185,7 +195,7 @@ impl<'a> Iterator for RenderIter<'a> {
             for (key, ctx) in &self.events[self.i..gap_end] {
                 match self.engine.render(self.session, key, ctx) {
                     Ok(s) => rendered.push(s),
-                    Err(e) => return Some(Err(e)),
+                    Err(e) => return fail(self, e),
                 }
             }
             self.i = gap_end;
@@ -201,7 +211,7 @@ impl<'a> Iterator for RenderIter<'a> {
             for (key, ctx) in &self.events[self.i..entity_end] {
                 match self.engine.render(self.session, key, ctx) {
                     Ok(s) => run_rendered.push(s),
-                    Err(e) => return Some(Err(e)),
+                    Err(e) => return fail(self, e),
                 }
             }
             self.i = entity_end;
@@ -216,7 +226,13 @@ impl<'a> Iterator for RenderIter<'a> {
 
         let (key, ctx) = &self.events[self.i];
         self.i += 1;
-        Some(self.engine.render(self.session, key, ctx))
+        match self.engine.render(self.session, key, ctx) {
+            Ok(s) => Some(Ok(s)),
+            Err(e) => {
+                self.i = self.events.len();
+                Some(Err(e))
+            }
+        }
     }
 }
 
@@ -2088,10 +2104,16 @@ impl Engine {
     /// clause reduction fires) — and returns `None` once the events
     /// are exhausted.
     ///
-    /// Errors propagate through the iterator: a failing render yields
-    /// `Some(Err(_))` and the iterator remains usable for subsequent
-    /// events (though callers should almost always abort on the first
-    /// error).
+    /// **Errors are terminal.** If any render inside the run fails, the
+    /// iterator yields `Some(Err(_))` exactly once and then returns `None`
+    /// on every subsequent call. This keeps semantics predictable even
+    /// when the failing event sits inside an aggregated, gapped, or
+    /// same-entity run whose earlier sentences already mutated session
+    /// state — replaying the run after partial success would compound
+    /// pronoun / anti-repetition state in unsafe ways. If you need
+    /// error-skipping behaviour, validate templates and contexts up
+    /// front (e.g. with [`Engine::score_variants`]) rather than relying
+    /// on the iterator to recover.
     pub fn render_iter<'a>(
         &'a self,
         session: &'a mut Session,
@@ -3993,6 +4015,64 @@ mod tests {
         assert_eq!(results.len(), 2);
         assert!(results[0].contains("Alpha"));
         assert!(results[1].contains("Beta"));
+    }
+
+    #[test]
+    fn render_iter_error_is_terminal_for_single_events() {
+        // Strict mode with a missing slot errors. After the error, the
+        // iterator must report None, not replay the failing event.
+        let mut engine = test_engine();
+        engine
+            .register_template("bad", "{missing_slot} was lost")
+            .unwrap();
+
+        let mut session = test_session();
+        let events: Vec<(&str, Context)> = vec![("bad", Context::new())];
+        let mut iter = engine.render_iter(&mut session, &events);
+        let first = iter.next();
+        assert!(matches!(first, Some(Err(_))));
+        let second = iter.next();
+        assert!(
+            second.is_none(),
+            "iterator must return None after a terminal error"
+        );
+    }
+
+    #[test]
+    fn render_iter_error_is_terminal_inside_aggregated_run() {
+        // Two events with the same template key but the second one's
+        // context is missing a slot the template references. The first
+        // aggregated render call will fail — the iterator must end, not
+        // replay the run.
+        let mut engine = test_engine();
+        engine
+            .register_template("saw", "{name} saw {target}")
+            .unwrap();
+
+        let mut good = Context::new();
+        good.insert("entity_type", Value::String("class".into()));
+        good.insert("name", Value::String("Alpha".into()));
+        good.insert("target", Value::String("X".into()));
+
+        let mut bad = Context::new();
+        bad.insert("entity_type", Value::String("class".into()));
+        bad.insert("name", Value::String("Beta".into()));
+        // target slot omitted → missing-slot error under Strict.
+
+        let mut session = test_session();
+        let events: Vec<(&str, Context)> = vec![("saw", good), ("saw", bad)];
+        let mut iter = engine.render_iter(&mut session, &events);
+        // The aggregation path renders both subjects at once; the missing
+        // slot on the second context surfaces as an error.
+        let first = iter.next();
+        assert!(
+            matches!(first, Some(Err(_))),
+            "expected the aggregated render to fail; got: {first:?}"
+        );
+        assert!(
+            iter.next().is_none(),
+            "iterator must be terminal after an aggregated-run error"
+        );
     }
 
     #[test]
