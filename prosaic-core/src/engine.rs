@@ -639,6 +639,22 @@ impl<'e, 's> RenderCtx<'e, 's> {
     }
 
     fn pipe_refer(
+        &mut self,
+        pipe: &Pipe,
+        value: &Value,
+        context: &Context,
+    ) -> Result<Value, ProsaicError> {
+        // Plural REG: list of same-type entities — dispatch before the
+        // single-entity path so Value::List never falls through to as_display().
+        if let Value::List(names) = value {
+            return self.pipe_refer_plural(pipe, names, context);
+        }
+        self.pipe_refer_single(pipe, value, context)
+    }
+
+    /// Single-entity refer path (existing logic, extracted for reuse by the
+    /// plural dispatch).
+    fn pipe_refer_single(
         &self,
         pipe: &Pipe,
         value: &Value,
@@ -669,6 +685,61 @@ impl<'e, 's> RenderCtx<'e, 's> {
         };
 
         Ok(Value::String(rendered))
+    }
+
+    /// Plural REG path: collapses a list of same-type entities to a plural
+    /// description using [`crate::language::Language::plural_description`].
+    ///
+    /// - Empty list  → empty string (silent-mode convention).
+    /// - Single item → delegates to single-entity path (`pipe_refer_single`).
+    /// - Multi-item  → calls `plural_description` and updates discourse state.
+    fn pipe_refer_plural(
+        &mut self,
+        pipe: &Pipe,
+        names: &[String],
+        context: &Context,
+    ) -> Result<Value, ProsaicError> {
+        match names.len() {
+            0 => Ok(Value::String(String::new())),
+            1 => {
+                let v = Value::String(names[0].clone());
+                self.pipe_refer_single(pipe, &v, context)
+            }
+            n => {
+                let entity_type = match &pipe.arg {
+                    Some(PipeArg::String(t)) => t.clone(),
+                    _ => context
+                        .get("entity_type")
+                        .map(|v| v.as_display())
+                        .unwrap_or_default(),
+                };
+
+                // Register each entity in discourse for future singular tracking.
+                // mention_entity also resets focus_is_plural to false for each
+                // individual mention, so we call set_focus_plural after the loop.
+                if !entity_type.is_empty() {
+                    for name in names {
+                        self.session.discourse.mention_entity(name, &entity_type);
+                    }
+                }
+
+                // Mark the discourse focus as plural so subsequent pronoun
+                // references emit "they" rather than "it".
+                // Note: this sets focus on the set as a whole; future work can
+                // distinguish subject-vs-object position if needed.
+                self.session.discourse.set_focus_plural(true);
+
+                // Use default AgreementFeatures for v1; a future Value::EntityList
+                // variant can carry per-entity features for richer agreement.
+                let features = crate::agreement::AgreementFeatures::default();
+
+                let output =
+                    self.engine
+                        .language
+                        .plural_description(&entity_type, n, &features);
+                Ok(Value::String(output))
+            }
+        }
     }
 
     fn pipe_demonstrative(&self, value: &Value) -> Result<Value, ProsaicError> {
