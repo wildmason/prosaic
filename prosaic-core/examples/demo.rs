@@ -1,5 +1,5 @@
 use prosaic_core::{
-    entity, named, Clause, Context, DocumentPlan, Engine, EntityDescriptor, Sentence, Session,
+    subject, named, Clause, Context, DocumentPlan, Engine, EntityDescriptor, Sentence, Session,
     Strictness, Tense, Value, Variation, VerbForm, Voice,
 };
 use prosaic_derive::IntoContext;
@@ -621,7 +621,7 @@ fn builder_api_demos() {
 
     // Full sentence with clause (passive voice — default)
     let result = Sentence::new()
-        .subject(entity("class", "Foo"))
+        .subject(subject("class", "Foo"))
         .verb("rename", Tense::Past)
         .object("Foobar")
         .clause(
@@ -637,7 +637,7 @@ fn builder_api_demos() {
 
     // Same sentence in active voice
     let result = Sentence::new()
-        .subject(entity("class", "Foo"))
+        .subject(subject("class", "Foo"))
         .verb("rename", Tense::Past)
         .object("Foobar")
         .voice(Voice::Active)
@@ -654,7 +654,7 @@ fn builder_api_demos() {
 
     // Simple deletion
     let result = Sentence::new()
-        .subject(entity("method", "processPayment"))
+        .subject(subject("method", "processPayment"))
         .verb("remove", Tense::Past)
         .clause(
             Clause::with_intro("from")
@@ -666,7 +666,7 @@ fn builder_api_demos() {
 
     // Future tense (passive)
     let result = Sentence::new()
-        .subject(entity("interface", "UserProfile"))
+        .subject(subject("interface", "UserProfile"))
         .verb("deprecate", Tense::Future)
         .render(&engine)
         .unwrap();
@@ -674,7 +674,7 @@ fn builder_api_demos() {
 
     // Future tense (active)
     let result = Sentence::new()
-        .subject(entity("interface", "UserProfile"))
+        .subject(subject("interface", "UserProfile"))
         .verb("break", Tense::Future)
         .voice(Voice::Active)
         .clause(
@@ -702,7 +702,7 @@ fn builder_api_demos() {
 
     // Custom preposition
     let result = Sentence::new()
-        .subject(entity("class", "OldParser"))
+        .subject(subject("class", "OldParser"))
         .verb("replace", Tense::Past)
         .preposition("with")
         .object("NewParser")
@@ -712,7 +712,7 @@ fn builder_api_demos() {
 
     // Active present tense
     let result = Sentence::new()
-        .subject(entity("module", "SharedModule"))
+        .subject(subject("module", "SharedModule"))
         .verb("export", Tense::Present)
         .voice(Voice::Active)
         .clause(
@@ -772,7 +772,7 @@ fn tense_and_aspect_demo() {
 
     for (form, voice, verb) in sentences {
         let rendered = Sentence::new()
-            .subject(entity("module", "Core"))
+            .subject(subject("module", "Core"))
             .verb_word(verb)
             .form(form)
             .voice(voice)

@@ -171,6 +171,173 @@ impl<const N: usize> IntoValue for [String; N] {
     }
 }
 
+/// Fluent builder for entity-typed context values with agreement features.
+///
+/// Produced by [`entity()`]; consumed into a [`Value::Entity`] via
+/// [`IntoValue::into_value`] or [`EntityValue::build`].
+///
+/// # Example
+///
+/// ```
+/// use prosaic_core::{ctx, entity, Value};
+/// use prosaic_core::agreement::{Gender, Number, Definiteness};
+///
+/// let c = ctx! {
+///     user: entity("Alice").fem().sing().defined(),
+///     service: entity("UserService"),
+/// };
+///
+/// match c.get("user").unwrap() {
+///     Value::Entity { name, features } => {
+///         assert_eq!(name, "Alice");
+///         assert_eq!(features.gender, Gender::Fem);
+///     }
+///     _ => panic!("expected Entity"),
+/// }
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EntityValue {
+    name: String,
+    features: crate::agreement::AgreementFeatures,
+}
+
+impl EntityValue {
+    // ── Gender shortcuts ──────────────────────────────────────────────────
+
+    /// Set gender to masculine.
+    pub fn masc(mut self) -> Self {
+        self.features.gender = crate::agreement::Gender::Masc;
+        self
+    }
+
+    /// Set gender to feminine.
+    pub fn fem(mut self) -> Self {
+        self.features.gender = crate::agreement::Gender::Fem;
+        self
+    }
+
+    /// Set gender to neuter.
+    pub fn neut(mut self) -> Self {
+        self.features.gender = crate::agreement::Gender::Neut;
+        self
+    }
+
+    /// Set gender to common (Dutch / Scandinavian 2-gender systems).
+    pub fn common(mut self) -> Self {
+        self.features.gender = crate::agreement::Gender::Common;
+        self
+    }
+
+    // ── Number shortcuts ──────────────────────────────────────────────────
+
+    /// Set number to singular.
+    pub fn sing(mut self) -> Self {
+        self.features.number = crate::agreement::Number::Singular;
+        self
+    }
+
+    /// Set number to plural.
+    pub fn plur(mut self) -> Self {
+        self.features.number = crate::agreement::Number::Plural;
+        self
+    }
+
+    /// Set number to dual (Arabic, Slovenian, Biblical Hebrew).
+    pub fn dual(mut self) -> Self {
+        self.features.number = crate::agreement::Number::Dual;
+        self
+    }
+
+    // ── Definiteness shortcuts ────────────────────────────────────────────
+
+    /// Set definiteness to definite.
+    pub fn defined(mut self) -> Self {
+        self.features.definiteness = crate::agreement::Definiteness::Definite;
+        self
+    }
+
+    /// Set definiteness to indefinite.
+    pub fn indef(mut self) -> Self {
+        self.features.definiteness = crate::agreement::Definiteness::Indefinite;
+        self
+    }
+
+    // ── Animacy shortcuts ─────────────────────────────────────────────────
+
+    /// Set animacy to animate.
+    pub fn animate(mut self) -> Self {
+        self.features.animacy = crate::agreement::Animacy::Animate;
+        self
+    }
+
+    /// Set animacy to inanimate.
+    pub fn inanimate(mut self) -> Self {
+        self.features.animacy = crate::agreement::Animacy::Inanimate;
+        self
+    }
+
+    // ── Case and person ───────────────────────────────────────────────────
+
+    /// Set the grammatical case.
+    pub fn case(mut self, c: crate::agreement::Case) -> Self {
+        self.features.case = c;
+        self
+    }
+
+    /// Set the grammatical person.
+    pub fn person(mut self, p: crate::agreement::AgreementPerson) -> Self {
+        self.features.person = p;
+        self
+    }
+
+    // ── Full-feature override ─────────────────────────────────────────────
+
+    /// Replace all features at once with a pre-built [`AgreementFeatures`].
+    pub fn with_features(mut self, f: crate::agreement::AgreementFeatures) -> Self {
+        self.features = f;
+        self
+    }
+
+    // ── Consume ───────────────────────────────────────────────────────────
+
+    /// Consume this builder into a [`Value::Entity`].
+    pub fn build(self) -> Value {
+        Value::Entity {
+            name: self.name,
+            features: self.features,
+        }
+    }
+}
+
+impl IntoValue for EntityValue {
+    fn into_value(self) -> Value {
+        self.build()
+    }
+}
+
+/// Create an [`EntityValue`] for a named entity with default (unknown)
+/// agreement features. Chain builder methods to set gender, number, etc.
+///
+/// ```
+/// use prosaic_core::{ctx, entity, Value};
+/// use prosaic_core::agreement::Gender;
+///
+/// let c = ctx! {
+///     user: entity("Alice").fem().sing().defined(),
+///     service: entity("UserService"),  // features stay Unknown — English default
+/// };
+/// match c.get("user").unwrap() {
+///     Value::Entity { name, .. } => assert_eq!(name, "Alice"),
+///     _ => panic!(),
+/// }
+/// ```
+pub fn entity(name: impl Into<String>) -> EntityValue {
+    EntityValue {
+        name: name.into(),
+        features: crate::agreement::AgreementFeatures::default(),
+    }
+}
+
 /// Build a [`Context`] from key/value pairs. Values may be any type that
 /// implements [`IntoValue`] — `&str`, `String`, integer types, `bool`,
 /// `Vec<&str>`, `[&str; N]`, or an explicit `Value::*`.
@@ -409,3 +576,150 @@ mod entity_value_tests {
         assert_eq!(v_plain.as_display(), v_with_features.as_display());
     }
 }
+
+#[cfg(test)]
+mod entity_builder_tests {
+    use super::*;
+    use crate::agreement::{AgreementFeatures, Animacy, Case, Definiteness, Gender, Number};
+    use crate::ctx;
+
+    #[test]
+    fn entity_helper_default_features() {
+        let ev = entity("UserService");
+        let v = ev.into_value();
+        match v {
+            Value::Entity { name, features } => {
+                assert_eq!(name, "UserService");
+                assert_eq!(features, AgreementFeatures::default());
+            }
+            _ => panic!("expected Value::Entity"),
+        }
+    }
+
+    #[test]
+    fn entity_builder_chain_sets_features() {
+        let v = entity("Alice")
+            .fem()
+            .sing()
+            .defined()
+            .animate()
+            .into_value();
+        match v {
+            Value::Entity { name, features } => {
+                assert_eq!(name, "Alice");
+                assert_eq!(features.gender, Gender::Fem);
+                assert_eq!(features.number, Number::Singular);
+                assert_eq!(features.definiteness, Definiteness::Definite);
+                assert_eq!(features.animacy, Animacy::Animate);
+            }
+            _ => panic!("expected Value::Entity"),
+        }
+    }
+
+    #[test]
+    fn entity_builder_all_gender_shortcuts() {
+        assert_eq!(entity("x").masc().into_value(), Value::Entity {
+            name: "x".into(),
+            features: AgreementFeatures::new().with_gender(Gender::Masc),
+        });
+        assert_eq!(entity("x").fem().into_value(), Value::Entity {
+            name: "x".into(),
+            features: AgreementFeatures::new().with_gender(Gender::Fem),
+        });
+        assert_eq!(entity("x").neut().into_value(), Value::Entity {
+            name: "x".into(),
+            features: AgreementFeatures::new().with_gender(Gender::Neut),
+        });
+        assert_eq!(entity("x").common().into_value(), Value::Entity {
+            name: "x".into(),
+            features: AgreementFeatures::new().with_gender(Gender::Common),
+        });
+    }
+
+    #[test]
+    fn entity_builder_all_number_shortcuts() {
+        assert_eq!(
+            entity("x").plur().features.number,
+            Number::Plural
+        );
+        assert_eq!(
+            entity("x").dual().features.number,
+            Number::Dual
+        );
+        assert_eq!(
+            entity("x").sing().features.number,
+            Number::Singular
+        );
+    }
+
+    #[test]
+    fn entity_builder_definiteness_shortcuts() {
+        assert_eq!(
+            entity("x").defined().features.definiteness,
+            Definiteness::Definite
+        );
+        assert_eq!(
+            entity("x").indef().features.definiteness,
+            Definiteness::Indefinite
+        );
+    }
+
+    #[test]
+    fn entity_builder_animacy_shortcuts() {
+        assert_eq!(
+            entity("x").animate().features.animacy,
+            Animacy::Animate
+        );
+        assert_eq!(
+            entity("x").inanimate().features.animacy,
+            Animacy::Inanimate
+        );
+    }
+
+    #[test]
+    fn entity_builder_case_method() {
+        assert_eq!(
+            entity("x").case(Case::Genitive).features.case,
+            Case::Genitive
+        );
+    }
+
+    #[test]
+    fn entity_builder_with_features_override() {
+        let full = AgreementFeatures::new()
+            .with_gender(Gender::Fem)
+            .with_number(Number::Plural);
+        let v = entity("items").with_features(full).into_value();
+        match v {
+            Value::Entity { features, .. } => {
+                assert_eq!(features.gender, Gender::Fem);
+                assert_eq!(features.number, Number::Plural);
+            }
+            _ => panic!("expected Value::Entity"),
+        }
+    }
+
+    #[test]
+    fn ctx_macro_accepts_entity_value() {
+        let c = ctx! {
+            user: entity("Alice").fem().sing(),
+            count: 3,
+        };
+        match c.get("user").unwrap() {
+            Value::Entity { name, features } => {
+                assert_eq!(name, "Alice");
+                assert_eq!(features.gender, Gender::Fem);
+            }
+            _ => panic!("expected Value::Entity"),
+        }
+        assert_eq!(c.get("count"), Some(&Value::Number(3)));
+    }
+
+    #[test]
+    fn entity_build_and_into_value_are_equivalent() {
+        let ev1 = entity("TestService").fem();
+        let ev2 = ev1.clone();
+        assert_eq!(ev1.build(), ev2.into_value());
+    }
+}
+

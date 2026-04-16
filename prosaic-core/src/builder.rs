@@ -10,8 +10,8 @@ pub struct Subject {
 }
 
 /// Create a subject with an entity type prefix.
-/// e.g., `entity("class", "Foo")` renders as "the class Foo".
-pub fn entity(entity_type: &str, name: &str) -> Subject {
+/// e.g., `subject("class", "Foo")` renders as "the class Foo".
+pub fn subject(entity_type: &str, name: &str) -> Subject {
     Subject {
         entity_type: Some(entity_type.to_string()),
         name: name.to_string(),
@@ -357,7 +357,7 @@ mod tests {
     fn passive_voice_past_tense() {
         let engine = test_engine();
         let s = Sentence::new()
-            .subject(entity("class", "Foo"))
+            .subject(subject("class", "Foo"))
             .verb("rename", Tense::Past)
             .object("Foobar")
             .render(&engine)
@@ -370,7 +370,7 @@ mod tests {
     fn active_voice_past_tense() {
         let engine = test_engine();
         let s = Sentence::new()
-            .subject(entity("class", "Foo"))
+            .subject(subject("class", "Foo"))
             .verb("rename", Tense::Past)
             .object("Foobar")
             .voice(Voice::Active)
@@ -384,7 +384,7 @@ mod tests {
     fn passive_voice_with_clause() {
         let engine = test_engine();
         let s = Sentence::new()
-            .subject(entity("class", "Foo"))
+            .subject(subject("class", "Foo"))
             .verb("rename", Tense::Past)
             .object("Foobar")
             .clause(
@@ -405,7 +405,7 @@ mod tests {
     fn passive_voice_with_clause_and_list() {
         let engine = test_engine();
         let s = Sentence::new()
-            .subject(entity("class", "Foo"))
+            .subject(subject("class", "Foo"))
             .verb("rename", Tense::Past)
             .object("Foobar")
             .clause(
@@ -454,7 +454,7 @@ mod tests {
     fn custom_preposition() {
         let engine = test_engine();
         let s = Sentence::new()
-            .subject(entity("class", "Foo"))
+            .subject(subject("class", "Foo"))
             .verb("convert", Tense::Past)
             .preposition("into")
             .object("Bar")
@@ -468,7 +468,7 @@ mod tests {
     fn passive_present_tense() {
         let engine = test_engine();
         let s = Sentence::new()
-            .subject(entity("module", "Core"))
+            .subject(subject("module", "Core"))
             .verb("export", Tense::Present)
             .clause(
                 Clause::with_intro("")
@@ -485,7 +485,7 @@ mod tests {
     fn passive_future_tense() {
         let engine = test_engine();
         let s = Sentence::new()
-            .subject(entity("interface", "Foo"))
+            .subject(subject("interface", "Foo"))
             .verb("deprecate", Tense::Future)
             .render(&engine)
             .unwrap();
@@ -497,7 +497,7 @@ mod tests {
     fn clause_no_truncation_needed() {
         let engine = test_engine();
         let s = Sentence::new()
-            .subject(entity("method", "getData"))
+            .subject(subject("method", "getData"))
             .verb("delete", Tense::Past)
             .clause(
                 Clause::which("impacts")

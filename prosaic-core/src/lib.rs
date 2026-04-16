@@ -62,7 +62,7 @@ pub use language::{
 pub use agreement::{
     AgreementFeatures, AgreementPerson, Animacy, Case, Definiteness, Gender, Number as GrammaticalNumber,
 };
-pub use context::{Context, IntoValue, Value};
+pub use context::{Context, EntityValue, IntoValue, Value, entity};
 pub use faithfulness::{score_faithfulness, FaithfulnessScore, PolarityDrift};
 // assert_faithful! is exported via #[macro_export] in faithfulness.rs
 pub use error::ProsaicError;
@@ -71,7 +71,7 @@ pub use engine::{Engine, RenderExplanation, RenderIter, Strictness, VariantScore
 #[cfg(feature = "reg")]
 pub use engine::RegAlgorithm;
 pub use session::Session;
-pub use builder::{Sentence, Clause, Subject, entity, named};
+pub use builder::{Sentence, Clause, Subject, subject, named};
 pub use context::IntoContext;
 pub use discourse::{ListStyle, ReferenceForm};
 pub use salience::{Salience, SalienceThresholds};

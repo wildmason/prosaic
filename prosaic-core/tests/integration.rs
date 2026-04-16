@@ -1,5 +1,5 @@
 use prosaic_core::{
-    entity, named, Clause, Context, DocumentPlan, Engine, EntityDescriptor, GroupingStrategy,
+    subject, named, entity, Clause, Context, DocumentPlan, Engine, EntityDescriptor, GroupingStrategy,
     RhetoricalCategory, Salience, Sentence, Session, Strictness, Tense, Value, Variation, VerbForm, Voice,
 };
 use prosaic_derive::IntoContext;
@@ -88,7 +88,7 @@ fn builder_full_sentence_passive() {
     let engine = engine();
 
     let result = Sentence::new()
-        .subject(entity("class", "Foo"))
+        .subject(subject("class", "Foo"))
         .verb("rename", Tense::Past)
         .object("Foobar")
         .clause(
@@ -113,7 +113,7 @@ fn builder_full_sentence_active() {
     let engine = engine();
 
     let result = Sentence::new()
-        .subject(entity("class", "Foo"))
+        .subject(subject("class", "Foo"))
         .verb("rename", Tense::Past)
         .object("Foobar")
         .voice(Voice::Active)
@@ -152,7 +152,7 @@ fn builder_future_tense_passive() {
     let engine = engine();
 
     let result = Sentence::new()
-        .subject(entity("method", "fetchData"))
+        .subject(subject("method", "fetchData"))
         .verb("break", Tense::Future)
         .clause(
             Clause::with_intro("in")
@@ -170,7 +170,7 @@ fn builder_future_tense_active() {
     let engine = engine();
 
     let result = Sentence::new()
-        .subject(entity("method", "fetchData"))
+        .subject(subject("method", "fetchData"))
         .verb("break", Tense::Future)
         .voice(Voice::Active)
         .clause(
@@ -191,7 +191,7 @@ fn builder_present_perfect_passive() {
     let engine = engine();
 
     let result = Sentence::new()
-        .subject(entity("class", "UserService"))
+        .subject(subject("class", "UserService"))
         .verb_word("rename")
         .form(VerbForm::PresentPerfect)
         .object("AccountService")
@@ -209,7 +209,7 @@ fn builder_present_progressive_passive() {
     let engine = engine();
 
     let result = Sentence::new()
-        .subject(entity("module", "Legacy"))
+        .subject(subject("module", "Legacy"))
         .verb_word("deprecate")
         .form(VerbForm::PresentProgressive)
         .render(&engine)
@@ -223,7 +223,7 @@ fn builder_past_perfect_active() {
     let engine = engine();
 
     let result = Sentence::new()
-        .subject(entity("team", "Backend"))
+        .subject(subject("team", "Backend"))
         .verb_word("ship")
         .form(VerbForm::PastPerfect)
         .voice(Voice::Active)
@@ -239,7 +239,7 @@ fn builder_conditional_passive() {
     let engine = engine();
 
     let result = Sentence::new()
-        .subject(entity("test", "E2E"))
+        .subject(subject("test", "E2E"))
         .verb_word("break")
         .form(VerbForm::Conditional)
         .render(&engine)
@@ -1232,4 +1232,39 @@ fn explicit_salience_key_overrides_count() {
 
     let result = engine.render(&mut session, "event", &ctx).unwrap();
     assert!(result.contains("low"), "Expected Low from explicit override, got: {result}");
+}
+
+// ── Value::Entity rendering integration ──────────────────────────────────────
+
+#[test]
+fn entity_in_template_renders_as_name() {
+    let mut eng = Engine::new(English::new()).strictness(Strictness::Silent);
+    eng.register_template("t", "Welcome, {user}!").unwrap();
+    let mut session = Session::new();
+    let c = prosaic_core::ctx! { user: entity("Alice").fem().sing() };
+    let out = eng.render(&mut session, "t", &c).unwrap();
+    assert!(out.contains("Welcome, Alice"), "got: {out}");
+}
+
+#[test]
+fn entity_with_refer_pipe_uses_name_for_lookup() {
+    let mut eng = Engine::new(English::new()).strictness(Strictness::Silent);
+    eng.register_template("t", "{user|refer} logged in.").unwrap();
+    let mut session = Session::new();
+    let c = prosaic_core::ctx! {
+        user: entity("Alice").fem().sing(),
+        entity_type: "user",
+    };
+    let out = eng.render(&mut session, "t", &c).unwrap();
+    assert!(out.contains("Alice"), "entity name should appear: got {out}");
+}
+
+#[test]
+fn entity_truthy_in_conditional_template() {
+    let mut eng = Engine::new(English::new()).strictness(Strictness::Silent);
+    eng.register_template("t", "Hello{?name}, {name}{/?}!").unwrap();
+    let mut session = Session::new();
+    let c = prosaic_core::ctx! { name: entity("Bob").masc() };
+    let out = eng.render(&mut session, "t", &c).unwrap();
+    assert!(out.contains("Hello, Bob"), "got: {out}");
 }
