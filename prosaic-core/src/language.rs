@@ -302,6 +302,47 @@ pub trait Language: Send + Sync {
             _ => self.pluralize(word, 2),
         }
     }
+
+    /// Realize a reference form as surface text for this language.
+    ///
+    /// The discourse policy layer chooses the [`crate::discourse::ReferenceForm`]
+    /// (Full, ShortName, Pronoun, Demonstrative, or Zero) based on
+    /// language-agnostic rules. This method converts that choice into the
+    /// language-specific surface string.
+    ///
+    /// Only `Pronoun`, `Demonstrative`, and `Zero` are meaningfully handled
+    /// here. `Full` and `ShortName` route through the engine's REG layer
+    /// (Dale & Reiter, graph-based) because they involve entity-attribute
+    /// logic that's not the language's concern.
+    ///
+    /// Returns:
+    /// - `Some(text)` for a realized form (e.g., `"it"`, `"they"`, `"this"`).
+    /// - `None` for `Zero` (pro-drop) or for `Full`/`ShortName` — the caller
+    ///   handles those via REG.
+    ///
+    /// The default implementation encodes English:
+    /// - `Pronoun`: `"they"` when `features.number` is `Plural` or `Dual`,
+    ///   `"it"` otherwise.
+    /// - `Demonstrative`: `"this"`.
+    /// - `Zero`: `None` (English doesn't drop pronouns).
+    /// - `Full` / `ShortName`: `None` (engine handles via REG).
+    fn realize_reference(
+        &self,
+        form: crate::discourse::ReferenceForm,
+        features: &crate::agreement::AgreementFeatures,
+    ) -> Option<String> {
+        use crate::agreement::Number;
+        use crate::discourse::ReferenceForm;
+        match form {
+            ReferenceForm::Pronoun => Some(match features.number {
+                Number::Plural | Number::Dual => "they".to_string(),
+                _ => "it".to_string(),
+            }),
+            ReferenceForm::Demonstrative => Some("this".to_string()),
+            ReferenceForm::Zero => None,
+            ReferenceForm::Full | ReferenceForm::ShortName => None,
+        }
+    }
 }
 
 /// Default English-style verb phrase composition. Provided as a free
@@ -592,5 +633,79 @@ mod tests {
     #[test]
     fn plural_category_default_variant_is_other() {
         assert_eq!(PluralCategory::default(), PluralCategory::Other);
+    }
+
+    // ── realize_reference default implementation ─────────────────────────────
+
+    #[test]
+    fn realize_reference_pronoun_singular() {
+        let lang = MiniLang;
+        let f = AgreementFeatures::default(); // number=Unknown → falls through to "it"
+        assert_eq!(
+            lang.realize_reference(crate::discourse::ReferenceForm::Pronoun, &f),
+            Some("it".to_string())
+        );
+    }
+
+    #[test]
+    fn realize_reference_pronoun_plural() {
+        let lang = MiniLang;
+        let f = AgreementFeatures::default().with_number(crate::agreement::Number::Plural);
+        assert_eq!(
+            lang.realize_reference(crate::discourse::ReferenceForm::Pronoun, &f),
+            Some("they".to_string())
+        );
+    }
+
+    #[test]
+    fn realize_reference_pronoun_dual() {
+        let lang = MiniLang;
+        let f = AgreementFeatures::default().with_number(crate::agreement::Number::Dual);
+        assert_eq!(
+            lang.realize_reference(crate::discourse::ReferenceForm::Pronoun, &f),
+            Some("they".to_string())
+        );
+    }
+
+    #[test]
+    fn realize_reference_demonstrative() {
+        let lang = MiniLang;
+        let f = AgreementFeatures::default();
+        assert_eq!(
+            lang.realize_reference(crate::discourse::ReferenceForm::Demonstrative, &f),
+            Some("this".to_string())
+        );
+    }
+
+    #[test]
+    fn realize_reference_zero_is_none() {
+        let lang = MiniLang;
+        let f = AgreementFeatures::default();
+        assert_eq!(
+            lang.realize_reference(crate::discourse::ReferenceForm::Zero, &f),
+            None
+        );
+    }
+
+    #[test]
+    fn realize_reference_full_is_none() {
+        // Full form is handled by engine REG, not the language layer.
+        let lang = MiniLang;
+        let f = AgreementFeatures::default();
+        assert_eq!(
+            lang.realize_reference(crate::discourse::ReferenceForm::Full, &f),
+            None
+        );
+    }
+
+    #[test]
+    fn realize_reference_short_name_is_none() {
+        // ShortName is handled by engine REG, not the language layer.
+        let lang = MiniLang;
+        let f = AgreementFeatures::default();
+        assert_eq!(
+            lang.realize_reference(crate::discourse::ReferenceForm::ShortName, &f),
+            None
+        );
     }
 }
