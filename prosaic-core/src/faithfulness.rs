@@ -37,9 +37,14 @@
 //!
 //! See `docs/plans/parent-faithfulness.md` for design rationale.
 
+#[cfg(not(feature = "std"))]
+use alloc::string::{String, ToString};
+#[cfg(not(feature = "std"))]
+use alloc::vec::Vec;
+
 use crate::context::{Context, Value};
 use crate::language::Language;
-use std::collections::HashSet;
+use crate::collections::{HashSet, new_set};
 
 /// Polarity (negation) tokens treated separately from content tokens.
 /// These are NOT in STOPWORDS — they are scored as a distinct multiset gate.
@@ -141,8 +146,8 @@ pub fn score_faithfulness(
     let mut polarity_drift = Vec::new();
     let mut polarity_match = true;
     for &tok in POLARITY_TOKENS {
-        let s = src_tokens.iter().filter(|t| t.as_str() == tok).count();
-        let h = hyp_tokens.iter().filter(|t| t.as_str() == tok).count();
+        let s = src_tokens.iter().filter(|t| t.as_ref() as &str == tok).count();
+        let h = hyp_tokens.iter().filter(|t| t.as_ref() as &str == tok).count();
         if s != h {
             polarity_match = false;
             polarity_drift.push(PolarityDrift {
@@ -168,7 +173,7 @@ pub fn score_faithfulness(
 
     // Build a normalised source set: each source token contributes its
     // own form AND its singularized form for bidirectional tolerance.
-    let mut src_set: HashSet<String> = HashSet::new();
+    let mut src_set: HashSet<String> = new_set();
     for t in &src_tokens {
         src_set.insert(t.clone());
         src_set.insert(language.singularize(t));
@@ -179,7 +184,7 @@ pub fn score_faithfulness(
 
     for t in &hyp_content {
         let t_sing = language.singularize(t);
-        if src_set.contains(t.as_str()) || src_set.contains(&t_sing) {
+        if src_set.contains(t.as_ref() as &str) || src_set.contains(&t_sing) {
             entailed += 1;
         } else {
             unentailed.push((*t).clone());

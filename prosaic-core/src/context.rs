@@ -1,4 +1,9 @@
-use ahash::AHashMap;
+#[cfg(not(feature = "std"))]
+use alloc::string::{String, ToString};
+#[cfg(not(feature = "std"))]
+use alloc::vec::Vec;
+
+use crate::collections::HashMap;
 
 use crate::agreement::AgreementFeatures;
 
@@ -64,7 +69,7 @@ impl Value {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(transparent))]
 pub struct Context {
-    values: AHashMap<String, Value>,
+    values: HashMap<String, Value>,
 }
 
 impl Context {

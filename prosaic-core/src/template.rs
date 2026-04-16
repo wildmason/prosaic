@@ -1,3 +1,10 @@
+#[cfg(not(feature = "std"))]
+use alloc::string::{String, ToString};
+#[cfg(not(feature = "std"))]
+use alloc::vec::Vec;
+#[cfg(not(feature = "std"))]
+use alloc::format;
+
 use crate::error::ProsaicError;
 
 /// An argument passed to a pipe transform.

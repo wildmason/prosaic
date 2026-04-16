@@ -1,6 +1,9 @@
-use std::collections::{HashMap, HashSet, VecDeque};
+#[cfg(not(feature = "std"))]
+use alloc::string::{String, ToString};
+#[cfg(not(feature = "std"))]
+use alloc::vec::Vec;
 
-use ahash::AHashMap;
+use crate::collections::{HashMap, HashSet, VecDeque, new_map, new_set};
 
 /// A forward-looking center: an entity realized in an utterance with its
 /// grammatical-role-based salience rank (lower = more prominent).
@@ -44,7 +47,7 @@ pub enum Transition {
 #[derive(Debug, Clone, Default)]
 struct WordInterner {
     /// Lowercased word → u32 id.
-    by_word: AHashMap<String, u32>,
+    by_word: HashMap<String, u32>,
     /// Reverse map for debugging. Indexed by id.
     by_id: Vec<String>,
 }
@@ -248,10 +251,10 @@ impl DiscourseState {
             .collect();
 
         Self {
-            entities: HashMap::new(),
+            entities: new_map(),
             render_index: 0,
             focus_entity: None,
-            template_history: HashMap::new(),
+            template_history: new_map(),
             connective_history: VecDeque::new(),
             last_template_key: None,
             last_entity_name: None,
@@ -487,7 +490,7 @@ impl DiscourseState {
 
     /// Record the words from a rendered output for repetition scoring.
     pub fn record_output_words(&mut self, output: &str) {
-        let mut ids: HashSet<u32> = HashSet::new();
+        let mut ids: HashSet<u32> = new_set();
         for raw in output.split_whitespace() {
             let w = raw.trim_matches(|c: char| !c.is_alphanumeric()).to_lowercase();
             if w.len() <= 2 {
@@ -688,7 +691,7 @@ impl DiscourseState {
 
         // Shift state forward for the next call.
         self.previous_focus = current_cp;
-        self.previous_cf = std::mem::take(&mut self.current_cf);
+        self.previous_cf = core::mem::take(&mut self.current_cf);
     }
 }
 

@@ -1,3 +1,10 @@
+#[cfg(not(feature = "std"))]
+use alloc::string::{String, ToString};
+#[cfg(not(feature = "std"))]
+use alloc::vec::Vec;
+#[cfg(not(feature = "std"))]
+use alloc::format;
+
 use crate::engine::Engine;
 use crate::error::ProsaicError;
 use crate::language::{Conjunction, Person, Tense, VerbForm, Voice};

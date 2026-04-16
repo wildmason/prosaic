@@ -1,5 +1,17 @@
-use std::collections::HashMap;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicUsize, Ordering};
+
+#[cfg(not(feature = "std"))]
+use alloc::string::{String, ToString};
+#[cfg(not(feature = "std"))]
+use alloc::vec::Vec;
+#[cfg(not(feature = "std"))]
+use alloc::vec;
+#[cfg(not(feature = "std"))]
+use alloc::boxed::Box;
+#[cfg(not(feature = "std"))]
+use alloc::format;
+
+use crate::collections::{HashMap, new_map};
 
 use crate::faithfulness::score_faithfulness;
 use crate::session::Session;
@@ -324,7 +336,7 @@ impl<'e, 's> RenderCtx<'e, 's> {
                 buf.push_str(conn);
                 buf.push(' ');
                 buf.push_str(&output);
-                std::mem::swap(&mut output, &mut buf);
+                core::mem::swap(&mut output, &mut buf);
             }
         }
 
@@ -469,11 +481,20 @@ impl<'e, 's> RenderCtx<'e, 's> {
                 counter % count
             }
             Variation::Random => {
-                let nanos = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .subsec_nanos() as usize;
-                nanos % count
+                #[cfg(feature = "std")]
+                {
+                    let nanos = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .subsec_nanos() as usize;
+                    nanos % count
+                }
+                #[cfg(not(feature = "std"))]
+                {
+                    // Without std, fall back to variant 0 (deterministic).
+                    let _ = count;
+                    0
+                }
             }
         }
     }
@@ -1113,24 +1134,12 @@ impl<'e, 's> RenderCtx<'e, 's> {
         let now = match self.engine.reference_time {
             Some(n) => n,
             None => {
-                #[cfg(not(target_arch = "wasm32"))]
-                {
-                    std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .map(|d| d.as_secs() as i64)
-                        .unwrap_or(0)
-                }
-                #[cfg(target_arch = "wasm32")]
-                {
-                    return Err(ProsaicError::InvalidPipe {
-                        pipe: "relative".to_string(),
-                        reason: "on wasm32 targets the engine needs an \
-                                 explicit reference time — call \
-                                 `engine.reference_time(unix_secs)` before \
-                                 rendering"
-                            .to_string(),
-                    });
-                }
+                // `time` feature implies `std` (see Cargo.toml), so
+                // `SystemTime::now()` is always available here.
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs() as i64)
+                    .unwrap_or(0)
             }
         };
 
@@ -1156,24 +1165,12 @@ impl<'e, 's> RenderCtx<'e, 's> {
                 let now = match self.engine.reference_time {
                     Some(n) => n,
                     None => {
-                        #[cfg(not(target_arch = "wasm32"))]
-                        {
-                            std::time::SystemTime::now()
-                                .duration_since(std::time::UNIX_EPOCH)
-                                .map(|d| d.as_secs() as i64)
-                                .unwrap_or(0)
-                        }
-                        #[cfg(target_arch = "wasm32")]
-                        {
-                            return Err(ProsaicError::InvalidPipe {
-                                pipe: "since_last".to_string(),
-                                reason: "on wasm32 targets the engine needs an \
-                                         explicit reference time — call \
-                                         `engine.reference_time(unix_secs)` before \
-                                         rendering"
-                                    .to_string(),
-                            });
-                        }
+                        // `time` feature implies `std` (see Cargo.toml), so
+                        // `SystemTime::now()` is always available here.
+                        std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|d| d.as_secs() as i64)
+                            .unwrap_or(0)
                     }
                 };
                 format_relative(now - ts)
@@ -1285,11 +1282,11 @@ impl Engine {
     pub fn new(language: impl Language + 'static) -> Self {
         Self {
             language: Box::new(language),
-            templates: HashMap::new(),
+            templates: new_map(),
             strictness: Strictness::default(),
             variation: Variation::default(),
             salience_thresholds: SalienceThresholds::default(),
-            rr_initial: HashMap::new(),
+            rr_initial: new_map(),
             #[cfg(feature = "reg")]
             entity_registry: EntityRegistry::new(),
             #[cfg(feature = "reg")]
@@ -1304,7 +1301,7 @@ impl Engine {
             max_sentence_length: None,
             #[cfg(feature = "polish")]
             smart_quotes: false,
-            partials: HashMap::new(),
+            partials: new_map(),
             faithfulness_threshold: None,
         }
     }
@@ -2121,7 +2118,7 @@ impl Engine {
         }
 
         let mut end = start + 1;
-        let mut seen_names: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut seen_names: crate::collections::HashSet<String> = crate::collections::new_set();
         seen_names.insert(first_name.unwrap());
 
         while end < events.len() {
@@ -2173,8 +2170,8 @@ impl Engine {
         };
 
         let mut end = start + 1;
-        let mut seen: std::collections::HashSet<String> =
-            std::iter::once(first_name).collect();
+        let mut seen: crate::collections::HashSet<String> =
+            core::iter::once(first_name).collect();
 
         while end < events.len() {
             let (k, ctx) = (events[end].0, &events[end].1);
@@ -2260,11 +2257,19 @@ impl Engine {
                 hash as usize % count
             }
             Variation::Random => {
-                let nanos = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .subsec_nanos() as usize;
-                nanos % count
+                #[cfg(feature = "std")]
+                {
+                    let nanos = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .subsec_nanos() as usize;
+                    nanos % count
+                }
+                #[cfg(not(feature = "std"))]
+                {
+                    let _ = count;
+                    0
+                }
             }
             // RoundRobin requires mutable state — callers that need RoundRobin
             // must go through RenderCtx::select_variant_index instead.
@@ -2418,7 +2423,7 @@ fn format_truncated_list(
             let refs: Vec<&str> = shown
                 .iter()
                 .copied()
-                .chain(std::iter::once(remainder.trim()))
+                .chain(core::iter::once(remainder.trim()))
                 .collect();
             let all_joined = language.join_list(&refs, conjunction);
             format!("[{all_joined}]")
@@ -2653,7 +2658,7 @@ fn reduce_gapping(sentences: &[String]) -> Option<String> {
 
     // Subjects must all be distinct.
     {
-        let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        let mut seen: crate::collections::HashSet<&str> = crate::collections::new_set();
         for (subj, _) in &parsed {
             if !seen.insert(*subj) {
                 return None;
@@ -2774,7 +2779,7 @@ fn detect_leading_connective(s: &str) -> Option<&'static str> {
 /// original string as `Borrowed` when none of the known connectives
 /// match, or an `Owned` rewrite for connectives that require synthesis
 /// (currently only `"It also"`, which becomes `"It …"`).
-fn strip_leading_connective(s: &str) -> std::borrow::Cow<'_, str> {
+fn strip_leading_connective(s: &str) -> alloc::borrow::Cow<'_, str> {
     const CONNECTIVES: &[&str] = &[
         "Additionally,",
         "Furthermore,",
@@ -2787,7 +2792,7 @@ fn strip_leading_connective(s: &str) -> std::borrow::Cow<'_, str> {
 
     for conn in CONNECTIVES {
         if let Some(rest) = s.strip_prefix(conn) {
-            return std::borrow::Cow::Borrowed(rest.trim_start());
+            return alloc::borrow::Cow::Borrowed(rest.trim_start());
         }
     }
 
@@ -2795,10 +2800,10 @@ fn strip_leading_connective(s: &str) -> std::borrow::Cow<'_, str> {
     // pronoun+aux matcher can find its prefix. This requires an
     // allocation because we are synthesising a new prefix.
     if let Some(rest) = s.strip_prefix("It also ") {
-        return std::borrow::Cow::Owned(format!("It {}", rest.trim_start()));
+        return alloc::borrow::Cow::Owned(format!("It {}", rest.trim_start()));
     }
 
-    std::borrow::Cow::Borrowed(s)
+    alloc::borrow::Cow::Borrowed(s)
 }
 
 
@@ -2927,7 +2932,7 @@ fn collapse_and_tidy_in_place(output: &mut String) {
         i += 1;
     }
 
-    std::mem::swap(output, &mut scratch);
+    core::mem::swap(output, &mut scratch);
 }
 
 /// Words that are almost always followed by an argument — if they're
@@ -3102,7 +3107,7 @@ fn prepend_replacing_subject_in_place(output: &mut String, connective: &str) {
             buf.push_str(connective);
             buf.push(' ');
             buf.push_str(&tail);
-            std::mem::swap(output, &mut buf);
+            core::mem::swap(output, &mut buf);
             return;
         }
     }
@@ -3115,7 +3120,7 @@ fn prepend_replacing_subject_in_place(output: &mut String, connective: &str) {
         buf.push_str(connective);
         buf.push(' ');
         buf.push_str(rest);
-        std::mem::swap(output, &mut buf);
+        core::mem::swap(output, &mut buf);
         return;
     }
 
@@ -3125,7 +3130,7 @@ fn prepend_replacing_subject_in_place(output: &mut String, connective: &str) {
     buf.push_str(connective);
     buf.push(' ');
     buf.push_str(output);
-    std::mem::swap(output, &mut buf);
+    core::mem::swap(output, &mut buf);
 }
 
 /// Filter templates to those matching the target salience level.

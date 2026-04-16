@@ -1,3 +1,8 @@
+#[cfg(not(feature = "std"))]
+use alloc::string::{String, ToString};
+#[cfg(not(feature = "std"))]
+use alloc::format;
+
 /// Verb tense for conjugation.
 ///
 /// Simple tense axis — combine with [`Aspect`] and [`Voice`] to get richer

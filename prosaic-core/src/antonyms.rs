@@ -7,7 +7,12 @@
 //! ("was modified" → "was not modified") so the output stays grammatical
 //! regardless of whether the caller thought to register an antonym.
 
-use std::collections::HashMap;
+#[cfg(not(feature = "std"))]
+use alloc::string::{String, ToString};
+#[cfg(not(feature = "std"))]
+use alloc::format;
+
+use crate::collections::HashMap;
 
 /// Registry of phrase-level antonym substitutions used for positive
 /// framings of negative statements.

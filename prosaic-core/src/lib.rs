@@ -1,5 +1,20 @@
 //! General-purpose natural language generation from structured data.
 //!
+//! # `no_std` support
+//!
+//! Disable the `std` feature to compile under `no_std + alloc`:
+//!
+//! ```toml
+//! prosaic-core = { version = "0.1", default-features = false }
+//! ```
+//!
+//! Without the `std` feature:
+//! - `Variation::Random` falls back to `Variation::Fixed` (variant 0).
+//! - `{timestamp|relative}` and `{timestamp|since_last}` require
+//!   `engine.reference_time()` to be set.
+//! - `ProsaicError` does not implement `std::error::Error` (only `Debug + Display`).
+//!
+//!
 //! Takes structured events and produces **natural-sounding** English
 //! text, not just grammatically correct output. The engine tracks
 //! discourse state across calls, so multiple renders flow together like
@@ -31,6 +46,11 @@
 //! assert_eq!(sentence, "The class Foo was renamed to Foobar.");
 //! ```
 
+#![cfg_attr(not(feature = "std"), no_std)]
+
+extern crate alloc;
+
+mod collections;
 mod language;
 mod context;
 pub mod agreement;

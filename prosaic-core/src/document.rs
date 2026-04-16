@@ -1,3 +1,8 @@
+#[cfg(not(feature = "std"))]
+use alloc::string::{String, ToString};
+#[cfg(not(feature = "std"))]
+use alloc::vec::Vec;
+
 use crate::context::Context;
 use crate::engine::Engine;
 use crate::error::ProsaicError;
@@ -204,7 +209,7 @@ impl DocumentPlan {
         }
 
         // Bucket events by category, preserving input order within each.
-        use std::collections::BTreeMap;
+        use crate::collections::BTreeMap;
         let mut buckets: BTreeMap<RhetoricalCategory, Vec<(String, Context)>> =
             BTreeMap::new();
 
@@ -251,7 +256,7 @@ impl DocumentPlan {
                 };
 
                 if !same_entity && !para.is_empty() {
-                    plan.paragraphs.push(std::mem::take(&mut para));
+                    plan.paragraphs.push(core::mem::take(&mut para));
                     para.category = Some(category);
                 }
 
@@ -309,7 +314,7 @@ impl DocumentPlan {
             };
 
             if !same_entity && !current.is_empty() {
-                plan.paragraphs.push(std::mem::take(&mut current));
+                plan.paragraphs.push(core::mem::take(&mut current));
             }
 
             // When starting a new paragraph (current is empty) the relation
@@ -348,7 +353,7 @@ impl DocumentPlan {
             };
 
             if !same_entity && !current.is_empty() {
-                plan.paragraphs.push(std::mem::take(&mut current));
+                plan.paragraphs.push(core::mem::take(&mut current));
             }
 
             current.push(key.to_string(), ctx, salience);

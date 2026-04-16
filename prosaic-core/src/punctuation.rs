@@ -62,7 +62,7 @@ pub(crate) fn smart_quotes_in_place(output: &mut String) {
         }
     }
 
-    std::mem::swap(output, &mut scratch);
+    core::mem::swap(output, &mut scratch);
 }
 
 /// Promote comma-bounded parentheticals whose inner clause itself contains

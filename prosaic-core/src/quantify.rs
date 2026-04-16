@@ -7,6 +7,11 @@
 //! natural bucket"). The pipe form is `{count|quantify}` with
 //! optional `:exact` and `:hedged` flavours.
 
+#[cfg(not(feature = "std"))]
+use alloc::string::{String, ToString};
+#[cfg(not(feature = "std"))]
+use alloc::format;
+
 use crate::language::Language;
 
 /// How the quantifier should be framed.

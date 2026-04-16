@@ -19,7 +19,7 @@
 //! bare "the class UserService" when an ambiguity-causing "the infra class
 //! AuthService" has also been registered.
 
-use std::collections::HashMap;
+use crate::collections::HashMap;
 
 /// A described entity. Attributes are intentionally ordered so the default
 /// preference ordering respects registration order.

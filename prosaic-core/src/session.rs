@@ -9,8 +9,12 @@
 //! A fresh session = a fresh narrative. Calling `reset()` on an existing
 //! session clears state without deallocating.
 
-use std::collections::HashMap;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicUsize, Ordering};
+
+#[cfg(not(feature = "std"))]
+use alloc::string::String;
+
+use crate::collections::{HashMap, map_with_capacity, new_map};
 
 use crate::discourse::DiscourseState;
 
@@ -35,7 +39,7 @@ impl Session {
     pub fn new() -> Self {
         Self {
             discourse: DiscourseState::new(),
-            round_robin_counters: HashMap::new(),
+            round_robin_counters: new_map(),
             last_temporal_anchor: None,
         }
     }
@@ -90,7 +94,7 @@ impl Clone for Session {
     /// `last_temporal_anchor` is copied so snapshot/restore checkpoints
     /// preserve the temporal state correctly.
     fn clone(&self) -> Self {
-        let mut counters = HashMap::with_capacity(self.round_robin_counters.len());
+        let mut counters = map_with_capacity(self.round_robin_counters.len());
         for (k, v) in &self.round_robin_counters {
             counters.insert(k.clone(), AtomicUsize::new(v.load(Ordering::Relaxed)));
         }

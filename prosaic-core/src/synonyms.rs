@@ -7,7 +7,12 @@
 //! because it keeps saying the same word" effect that lingers even when
 //! templates themselves already vary.
 
-use ahash::AHashMap;
+#[cfg(not(feature = "std"))]
+use alloc::string::{String, ToString};
+#[cfg(not(feature = "std"))]
+use alloc::vec::Vec;
+
+use crate::collections::HashMap;
 
 /// Registry of synonym groups. Each group is an ordered list; ties in
 /// recency are broken by registration order (first-registered wins).
@@ -20,7 +25,7 @@ pub struct SynonymRegistry {
     groups: Vec<Vec<String>>,
     /// Lowercased word → index into `groups`. Populated on every
     /// `register_group` call so lookups never scan linearly.
-    index: AHashMap<String, usize>,
+    index: HashMap<String, usize>,
 }
 
 impl SynonymRegistry {

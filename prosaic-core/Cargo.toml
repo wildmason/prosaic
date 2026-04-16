@@ -6,24 +6,31 @@ license.workspace = true
 description = "General-purpose natural language generation from structured data"
 
 [dependencies]
-ahash = { version = "0.8", default-features = false, features = ["std", "compile-time-rng"] }
-thiserror = "2"
-serde = { version = "1", features = ["derive"], optional = true }
+ahash = { version = "0.8", default-features = false, features = ["compile-time-rng"] }
+hashbrown = { version = "0.15", default-features = false, features = ["default-hasher", "inline-more"] }
+thiserror = { version = "2", default-features = false }
+serde = { version = "1", default-features = false, features = ["derive", "alloc"], optional = true }
 
 [features]
-default = ["time", "polish", "reg"]
+default = ["std", "time", "polish", "reg"]
+
+# Enables `SystemTime::now()` fallbacks, `impl std::error::Error for ProsaicError`,
+# and `serde/std`. Without this feature the library is `no_std + alloc`-compatible:
+# `Variation::Random` degrades to variant 0, and temporal pipes require an explicit
+# `engine.reference_time()`.
+std = ["ahash/std", "thiserror/std", "serde?/std"]
 
 # Optional serde Serialize/Deserialize on Context, Value, EntityDescriptor,
 # RenderExplanation, VariantScore, and all configuration enums — enables
 # sending engine artefacts across JSON/MessagePack/etc. boundaries.
-serde = ["dep:serde", "ahash/serde"]
+serde = ["dep:serde", "ahash/serde", "hashbrown/serde"]
 
 # Relative-time pipe (`{ts|relative}`) and `engine.reference_time()`.
 # When disabled, the `relative` pipe is not registered and attempting
 # to use it in a template returns an `InvalidPipe` error at render
 # time. `SystemTime::now()` is also not referenced, so this feature
 # must be disabled for WASM targets that lack system time.
-time = []
+time = ["std"]
 
 # Post-processing polish passes: smart quotes (`engine.smart_quotes`)
 # and sentence-length budgeting (`engine.max_sentence_length`). When
