@@ -7,6 +7,8 @@ use nlg_core::{
     Context, EntityDescriptor, GroupingStrategy, HedgeMode, ListStyle, QuantifyMode,
     ReferenceForm, RhetoricalCategory, Salience, Tense, Value, VerbForm, Voice,
 };
+#[cfg(feature = "reg")]
+use nlg_core::RegAlgorithm;
 
 #[test]
 fn value_roundtrips_through_json() {
@@ -42,6 +44,32 @@ fn entity_descriptor_roundtrips() {
     let json = serde_json::to_string(&desc).unwrap();
     let back: EntityDescriptor = serde_json::from_str(&json).unwrap();
     assert_eq!(desc, back);
+}
+
+#[test]
+#[cfg(feature = "reg")]
+fn entity_descriptor_without_relations_field_deserializes() {
+    // Simulate a serialized EntityDescriptor from before the relations field
+    // was added. The serde(default) annotation must handle missing-field
+    // deserialization cleanly.
+    let legacy_json = r#"{"name":"UserService","entity_type":"class","attributes":[["layer","domain"]]}"#;
+    let back: EntityDescriptor = serde_json::from_str(legacy_json).unwrap();
+    assert_eq!(back.name, "UserService");
+    assert_eq!(back.entity_type, "class");
+    assert_eq!(back.attribute("layer"), Some("domain"));
+    assert!(back.relations.is_empty(), "relations should default to empty");
+}
+
+#[test]
+#[cfg(feature = "reg")]
+fn entity_descriptor_with_relations_roundtrips() {
+    let desc = EntityDescriptor::new("LoginHandler", "function")
+        .with_attribute("layer", "api")
+        .with_relation("that calls", "AuthService");
+    let json = serde_json::to_string(&desc).unwrap();
+    let back: EntityDescriptor = serde_json::from_str(&json).unwrap();
+    assert_eq!(desc, back);
+    assert_eq!(back.relation("that calls"), Some("AuthService"));
 }
 
 #[test]
@@ -85,4 +113,15 @@ fn enums_serialize_to_names() {
         serde_json::to_string(&ListStyle::Bracketed).unwrap(),
         "\"Bracketed\""
     );
+    #[cfg(feature = "reg")]
+    {
+        assert_eq!(
+            serde_json::to_string(&RegAlgorithm::DaleReiter).unwrap(),
+            "\"DaleReiter\""
+        );
+        assert_eq!(
+            serde_json::to_string(&RegAlgorithm::GraphBased).unwrap(),
+            "\"GraphBased\""
+        );
+    }
 }

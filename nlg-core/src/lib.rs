@@ -64,6 +64,8 @@ pub use faithfulness::{score_faithfulness, FaithfulnessScore, PolarityDrift};
 pub use error::NlgError;
 pub use template::{Template, Pipe, PipeArg};
 pub use engine::{Engine, RenderExplanation, RenderIter, Strictness, VariantScore, Variation};
+#[cfg(feature = "reg")]
+pub use engine::RegAlgorithm;
 pub use session::Session;
 pub use builder::{Sentence, Clause, Subject, entity, named};
 pub use context::IntoContext;

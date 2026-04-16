@@ -56,6 +56,32 @@ pub enum Variation {
     Random,
 }
 
+/// Selects the REG (Referring Expression Generation) algorithm used by
+/// [`Engine::pipe_refer`] when rendering the Full form of a reference.
+///
+/// The default is [`DaleReiter`][RegAlgorithm::DaleReiter], which matches
+/// the historical behaviour of the engine.
+#[cfg(feature = "reg")]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum RegAlgorithm {
+    /// Dale & Reiter 1995 Incremental Algorithm.
+    ///
+    /// Disambiguates same-type entities using unary attributes only —
+    /// e.g. "the domain class UserService" vs "the infra class AuthService".
+    /// Fast, well-understood, and the default.
+    #[default]
+    DaleReiter,
+    /// Krahmer et al. 2003 graph-based greedy algorithm.
+    ///
+    /// Handles both unary attributes AND binary relations between entities.
+    /// When attributes alone do not disambiguate, the algorithm appends one
+    /// relation clause — e.g. "the api function LoginHandler that calls
+    /// AuthService". Falls back silently to D&R behaviour when no relations
+    /// are registered.
+    GraphBased,
+}
+
 /// A template registered under a key, with its salience level.
 type SalientTemplate = (Salience, Template);
 
@@ -196,6 +222,8 @@ pub struct Engine {
     entity_registry: EntityRegistry,
     #[cfg(feature = "reg")]
     reg_preference: Vec<String>,
+    #[cfg(feature = "reg")]
+    reg_algorithm: RegAlgorithm,
     synonyms: SynonymRegistry,
     #[cfg(feature = "time")]
     reference_time: Option<i64>,
@@ -1057,6 +1085,8 @@ impl Engine {
             entity_registry: EntityRegistry::new(),
             #[cfg(feature = "reg")]
             reg_preference: Vec::new(),
+            #[cfg(feature = "reg")]
+            reg_algorithm: RegAlgorithm::default(),
             synonyms: SynonymRegistry::new(),
             #[cfg(feature = "time")]
             reference_time: None,
@@ -1139,6 +1169,20 @@ impl Engine {
     #[cfg(feature = "reg")]
     pub fn attribute_preference(mut self, order: Vec<String>) -> Self {
         self.reg_preference = order;
+        self
+    }
+
+    /// Select the REG algorithm used when rendering Full-form references via
+    /// `{name|refer}`.
+    ///
+    /// The default is [`RegAlgorithm::DaleReiter`], which selects
+    /// distinguishing unary attributes only. Use [`RegAlgorithm::GraphBased`]
+    /// to enable the Krahmer 2003 greedy algorithm, which also considers
+    /// labeled relations registered via
+    /// [`EntityDescriptor::with_relation`](crate::EntityDescriptor::with_relation).
+    #[cfg(feature = "reg")]
+    pub fn reg_algorithm(mut self, algo: RegAlgorithm) -> Self {
+        self.reg_algorithm = algo;
         self
     }
 
