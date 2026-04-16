@@ -353,7 +353,7 @@ impl<'e, 's> RenderCtx<'e, 's> {
         // Prepend discourse connective if applicable
         if let Some(conn) = connective {
             if conn.starts_with("It ") {
-                prepend_replacing_subject_in_place(&mut output, conn);
+                prepend_replacing_subject_in_place(&mut output, conn, entity_name.as_deref());
             } else {
                 lowercase_first_in_place(&mut output);
                 let mut buf = String::with_capacity(conn.len() + 1 + output.len());
@@ -3213,10 +3213,22 @@ fn lowercase_first_if_determiner(s: &str) -> String {
 }
 
 /// Try to replace "The {type} {name} was ..." with a connective like "It also was ..."
-fn prepend_replacing_subject_in_place(output: &mut String, connective: &str) {
-    // Case 1: full NP subject "The <type> <name> …" — strip the two-word NP
-    // and replace with the connective.
-    if let Some(rest) = output.strip_prefix("The ") {
+fn prepend_replacing_subject_in_place(
+    output: &mut String,
+    connective: &str,
+    entity_name: Option<&str>,
+) {
+    // Case 1: full NP subject "The <type> <name> …" — strip the NP and
+    // replace with the connective. Only safe when the entity name is a
+    // single token: the NP boundary is "The " + one type word + one name
+    // word. Multi-word names (e.g. "Login flow") make the boundary
+    // ambiguous from the rendered string alone, so we fall through to the
+    // comma-style prepending instead of chopping mid-name.
+    let name_is_single_token = entity_name
+        .map(|n| !n.trim().is_empty() && !n.contains(char::is_whitespace))
+        .unwrap_or(false);
+
+    if name_is_single_token && let Some(rest) = output.strip_prefix("The ") {
         // Skip entity_type and name (two words)
         let words: Vec<&str> = rest.splitn(3, ' ').collect();
         if words.len() >= 3 {
@@ -5130,6 +5142,65 @@ mod tests {
         assert_eq!(
             reduced.as_deref(),
             Some("The class UserService was renamed and modified.")
+        );
+    }
+
+    #[test]
+    fn prepend_replacing_subject_single_word_name_strips_np() {
+        // With a single-token name the "The <type> <name> " prefix is
+        // unambiguous and the connective replaces it.
+        let mut out = String::from("The class Foo was modified");
+        prepend_replacing_subject_in_place(&mut out, "It also", Some("Foo"));
+        assert_eq!(out, "It also was modified");
+    }
+
+    #[test]
+    fn prepend_replacing_subject_multiword_name_falls_back() {
+        // With a multi-word name the NP boundary is ambiguous from the
+        // rendered string alone; we must NOT chop mid-name. Fall back to
+        // the lowercased-first-char + comma-style prepending path.
+        let mut out = String::from("The feature Login flow was modified");
+        prepend_replacing_subject_in_place(&mut out, "It also", Some("Login flow"));
+        // Fallback lowercases leading letter then prepends connective + space.
+        assert_eq!(out, "It also the feature Login flow was modified");
+        assert!(
+            !out.contains("flow was modified") || out.starts_with("It also the feature"),
+            "must not chop 'Login' off the subject; got: {out}"
+        );
+    }
+
+    #[test]
+    fn prepend_replacing_subject_unknown_name_falls_back() {
+        // No entity name supplied → conservative fallback, not an NP strip.
+        let mut out = String::from("The class Foo was modified");
+        prepend_replacing_subject_in_place(&mut out, "It also", None);
+        assert_eq!(out, "It also the class Foo was modified");
+    }
+
+    #[test]
+    fn render_sequence_with_multiword_name_produces_valid_prose() {
+        // End-to-end: two renders on a multi-word-named entity must not
+        // produce a corrupted follower sentence via the "It also" path.
+        let mut engine = test_engine();
+        engine
+            .register_template("renamed", "{name|refer} was renamed")
+            .unwrap();
+        engine
+            .register_template("modified", "{name|refer} was modified")
+            .unwrap();
+
+        let mut session = test_session();
+        let mut ctx = Context::new();
+        ctx.insert("entity_type", Value::String("feature".into()));
+        ctx.insert("name", Value::String("Login flow".into()));
+
+        let r1 = engine.render(&mut session, "renamed", &ctx).unwrap();
+        assert!(r1.contains("Login flow"), "got: {r1}");
+        let r2 = engine.render(&mut session, "modified", &ctx).unwrap();
+        // Must not produce "flow was modified" (mid-name chop).
+        assert!(
+            !r2.starts_with("flow ") && !r2.contains("also flow "),
+            "follow-up render corrupted multi-word name; got: {r2}"
         );
     }
 
