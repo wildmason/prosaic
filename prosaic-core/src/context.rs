@@ -625,38 +625,41 @@ mod entity_builder_tests {
 
     #[test]
     fn entity_builder_all_gender_shortcuts() {
-        assert_eq!(entity("x").masc().into_value(), Value::Entity {
-            name: "x".into(),
-            features: AgreementFeatures::new().with_gender(Gender::Masc),
-        });
-        assert_eq!(entity("x").fem().into_value(), Value::Entity {
-            name: "x".into(),
-            features: AgreementFeatures::new().with_gender(Gender::Fem),
-        });
-        assert_eq!(entity("x").neut().into_value(), Value::Entity {
-            name: "x".into(),
-            features: AgreementFeatures::new().with_gender(Gender::Neut),
-        });
-        assert_eq!(entity("x").common().into_value(), Value::Entity {
-            name: "x".into(),
-            features: AgreementFeatures::new().with_gender(Gender::Common),
-        });
+        assert_eq!(
+            entity("x").masc().into_value(),
+            Value::Entity {
+                name: "x".into(),
+                features: AgreementFeatures::new().with_gender(Gender::Masc),
+            }
+        );
+        assert_eq!(
+            entity("x").fem().into_value(),
+            Value::Entity {
+                name: "x".into(),
+                features: AgreementFeatures::new().with_gender(Gender::Fem),
+            }
+        );
+        assert_eq!(
+            entity("x").neut().into_value(),
+            Value::Entity {
+                name: "x".into(),
+                features: AgreementFeatures::new().with_gender(Gender::Neut),
+            }
+        );
+        assert_eq!(
+            entity("x").common().into_value(),
+            Value::Entity {
+                name: "x".into(),
+                features: AgreementFeatures::new().with_gender(Gender::Common),
+            }
+        );
     }
 
     #[test]
     fn entity_builder_all_number_shortcuts() {
-        assert_eq!(
-            entity("x").plur().features.number,
-            Number::Plural
-        );
-        assert_eq!(
-            entity("x").dual().features.number,
-            Number::Dual
-        );
-        assert_eq!(
-            entity("x").sing().features.number,
-            Number::Singular
-        );
+        assert_eq!(entity("x").plur().features.number, Number::Plural);
+        assert_eq!(entity("x").dual().features.number, Number::Dual);
+        assert_eq!(entity("x").sing().features.number, Number::Singular);
     }
 
     #[test]
@@ -673,14 +676,8 @@ mod entity_builder_tests {
 
     #[test]
     fn entity_builder_animacy_shortcuts() {
-        assert_eq!(
-            entity("x").animate().features.animacy,
-            Animacy::Animate
-        );
-        assert_eq!(
-            entity("x").inanimate().features.animacy,
-            Animacy::Inanimate
-        );
+        assert_eq!(entity("x").animate().features.animacy, Animacy::Animate);
+        assert_eq!(entity("x").inanimate().features.animacy, Animacy::Inanimate);
     }
 
     #[test]
@@ -729,4 +726,3 @@ mod entity_builder_tests {
         assert_eq!(ev1.build(), ev2.into_value());
     }
 }
-

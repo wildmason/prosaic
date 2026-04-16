@@ -1,7 +1,7 @@
 #[cfg(not(feature = "std"))]
-use alloc::string::{String, ToString};
-#[cfg(not(feature = "std"))]
 use alloc::format;
+#[cfg(not(feature = "std"))]
+use alloc::string::{String, ToString};
 
 /// Verb tense for conjugation.
 ///
@@ -266,13 +266,7 @@ pub trait Language: Send + Sync {
     /// English auxiliary-verb rules. Override for languages whose verb
     /// phrase structure differs from English's `aux + aux + participle`
     /// layout.
-    fn verb_phrase(
-        &self,
-        verb: &str,
-        form: VerbForm,
-        voice: Voice,
-        person: Person,
-    ) -> String {
+    fn verb_phrase(&self, verb: &str, form: VerbForm, voice: Voice, person: Person) -> String {
         english_verb_phrase(self, verb, form, voice, person)
     }
 
@@ -320,14 +314,14 @@ pub trait Language: Send + Sync {
         use crate::rst::RstRelation::*;
         Some(match relation {
             Elaboration => "Furthermore, ",
-            Contrast    => "However, ",
-            Cause       => "Because of this, ",
-            Result      => "As a result, ",
-            Concession  => "Nevertheless, ",
-            Sequence    => "Then, ",
-            Condition   => "If this happens, ",
-            Background  => "Meanwhile, ",
-            Summary     => "In summary, ",
+            Contrast => "However, ",
+            Cause => "Because of this, ",
+            Result => "As a result, ",
+            Concession => "Nevertheless, ",
+            Sequence => "Then, ",
+            Condition => "If this happens, ",
+            Background => "Meanwhile, ",
+            Summary => "In summary, ",
         })
     }
 
@@ -491,9 +485,9 @@ pub fn english_verb_phrase<L: Language + ?Sized>(
 
 #[cfg(test)]
 mod tests {
+    use super::PluralCategory;
     use super::*;
     use crate::agreement::AgreementFeatures;
-    use super::PluralCategory;
 
     /// Minimal Language implementation used only in unit tests for this module.
     struct MiniLang;
@@ -504,7 +498,12 @@ mod tests {
                 return word.to_string();
             }
             // Basic English pluralisation rules for common test words.
-            if word.ends_with("ss") || word.ends_with("sh") || word.ends_with("ch") || word.ends_with('x') || word.ends_with('z') {
+            if word.ends_with("ss")
+                || word.ends_with("sh")
+                || word.ends_with("ch")
+                || word.ends_with('x')
+                || word.ends_with('z')
+            {
                 format!("{word}es")
             } else if word.ends_with('s') {
                 // e.g. "class" → "classes"
@@ -757,8 +756,8 @@ mod tests {
         let lang = MiniLang;
         use crate::rst::RstRelation::*;
         assert_eq!(lang.discourse_marker(Elaboration), Some("Furthermore, "));
-        assert_eq!(lang.discourse_marker(Contrast),    Some("However, "));
-        assert_eq!(lang.discourse_marker(Result),      Some("As a result, "));
+        assert_eq!(lang.discourse_marker(Contrast), Some("However, "));
+        assert_eq!(lang.discourse_marker(Result), Some("As a result, "));
     }
 
     // ── since_last_marker default (English) ──────────────────────────────────

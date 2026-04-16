@@ -40,12 +40,18 @@ mod tests {
 
     #[test]
     fn two_items_and() {
-        assert_eq!(join_list(&["alpha", "beta"], Conjunction::And), "alpha and beta");
+        assert_eq!(
+            join_list(&["alpha", "beta"], Conjunction::And),
+            "alpha and beta"
+        );
     }
 
     #[test]
     fn two_items_or() {
-        assert_eq!(join_list(&["alpha", "beta"], Conjunction::Or), "alpha or beta");
+        assert_eq!(
+            join_list(&["alpha", "beta"], Conjunction::Or),
+            "alpha or beta"
+        );
     }
 
     #[test]

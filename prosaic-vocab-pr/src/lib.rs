@@ -102,7 +102,9 @@ mod tests {
         ctx.insert("requested_changes", Value::Number(1));
         ctx.insert("pending", Value::Number(3));
         let mut session = Session::new();
-        let out = engine.render(&mut session, "pr.review_state", &ctx).unwrap();
+        let out = engine
+            .render(&mut session, "pr.review_state", &ctx)
+            .unwrap();
         assert!(out.contains("#99"), "got: {out}");
         assert!(out.contains("2 approvals"), "got: {out}");
         assert!(out.contains("1 request"), "got: {out}");
@@ -116,7 +118,9 @@ mod tests {
         ctx.insert("number", Value::Number(5));
         ctx.insert("approvals", Value::Number(1));
         let mut session = Session::new();
-        let out = engine.render(&mut session, "pr.review_state", &ctx).unwrap();
+        let out = engine
+            .render(&mut session, "pr.review_state", &ctx)
+            .unwrap();
         assert!(out.contains("1 approval"), "got: {out}");
         // No "None" or phantom text for absent optional slots.
         assert!(!out.contains("None"), "got: {out}");
@@ -241,15 +245,10 @@ mod tests {
         let engine = engine();
         let mut ctx = Context::new();
         ctx.insert("number", Value::Number(100));
-        ctx.insert(
-            "depends_on",
-            Value::List(vec!["#98".into(), "#97".into()]),
-        );
+        ctx.insert("depends_on", Value::List(vec!["#98".into(), "#97".into()]));
         ctx.insert("blocks", Value::List(vec!["#101".into()]));
         let mut session = Session::new();
-        let out = engine
-            .render(&mut session, "pr.related_prs", &ctx)
-            .unwrap();
+        let out = engine.render(&mut session, "pr.related_prs", &ctx).unwrap();
         assert!(out.contains("#100"), "got: {out}");
         assert!(out.contains("#98"), "got: {out}");
         assert!(out.contains("#101"), "got: {out}");
@@ -261,9 +260,7 @@ mod tests {
         let mut ctx = Context::new();
         ctx.insert("number", Value::Number(200));
         let mut session = Session::new();
-        let out = engine
-            .render(&mut session, "pr.related_prs", &ctx)
-            .unwrap();
+        let out = engine.render(&mut session, "pr.related_prs", &ctx).unwrap();
         // Must render without panic — conditional sections should suppress absent slots.
         assert!(out.contains("#200"), "got: {out}");
     }
@@ -304,7 +301,10 @@ mod tests_es {
         let engine = engine();
         let mut ctx = Context::new();
         ctx.insert("number", Value::Number(7));
-        ctx.insert("title", Value::String("Refactorizar capa de autenticación".into()));
+        ctx.insert(
+            "title",
+            Value::String("Refactorizar capa de autenticación".into()),
+        );
         ctx.insert("author", Value::String("Bob".into()));
         ctx.insert("commit_count", Value::Number(12));
         ctx.insert("files_changed", Value::Number(20));
@@ -314,8 +314,10 @@ mod tests_es {
         assert!(out.contains("#7"), "got: {out}");
         assert!(out.contains("12"), "got: {out}");
         assert!(out.contains("20"), "got: {out}");
-        assert!(out.contains("archivo") || out.contains("commit"),
-            "Expected Spanish file/commit terms, got: {out}");
+        assert!(
+            out.contains("archivo") || out.contains("commit"),
+            "Expected Spanish file/commit terms, got: {out}"
+        );
     }
 
     #[test]
@@ -327,10 +329,14 @@ mod tests_es {
         ctx.insert("requested_changes", Value::Number(1));
         ctx.insert("pending", Value::Number(3));
         let mut session = Session::new();
-        let out = engine.render(&mut session, "pr.review_state", &ctx).unwrap();
+        let out = engine
+            .render(&mut session, "pr.review_state", &ctx)
+            .unwrap();
         assert!(out.contains("#99"), "got: {out}");
-        assert!(out.contains("aprobación") || out.contains("aprobaciones"),
-            "Expected Spanish approval terms, got: {out}");
+        assert!(
+            out.contains("aprobación") || out.contains("aprobaciones"),
+            "Expected Spanish approval terms, got: {out}"
+        );
     }
 
     #[test]
@@ -340,8 +346,13 @@ mod tests_es {
         ctx.insert("number", Value::Number(55));
         ctx.insert("ready", Value::Number(1));
         let mut session = Session::new();
-        let out = engine.render(&mut session, "pr.merge_readiness", &ctx).unwrap();
-        assert!(out.contains("listo para fusionar"), "Expected Spanish merge phrase, got: {out}");
+        let out = engine
+            .render(&mut session, "pr.merge_readiness", &ctx)
+            .unwrap();
+        assert!(
+            out.contains("listo para fusionar"),
+            "Expected Spanish merge phrase, got: {out}"
+        );
     }
 
     #[test]
@@ -355,10 +366,17 @@ mod tests_es {
             Value::List(vec!["CI fallando".into(), "revisión pendiente".into()]),
         );
         let mut session = Session::new();
-        let out = engine.render(&mut session, "pr.merge_readiness", &ctx).unwrap();
-        assert!(out.contains("aún no está listo"), "Expected Spanish not-ready phrase, got: {out}");
-        assert!(out.contains("bloqueado") || out.contains("Bloqueadores"),
-            "Expected Spanish blocker term, got: {out}");
+        let out = engine
+            .render(&mut session, "pr.merge_readiness", &ctx)
+            .unwrap();
+        assert!(
+            out.contains("aún no está listo"),
+            "Expected Spanish not-ready phrase, got: {out}"
+        );
+        assert!(
+            out.contains("bloqueado") || out.contains("Bloqueadores"),
+            "Expected Spanish blocker term, got: {out}"
+        );
     }
 
     #[test]
@@ -372,8 +390,10 @@ mod tests_es {
         let out = engine.render(&mut session, "pr.ci_status", &ctx).unwrap();
         assert!(out.contains("8"), "got: {out}");
         assert!(out.contains("2"), "got: {out}");
-        assert!(out.contains("verificación") || out.contains("fallida"),
-            "Expected Spanish CI terms, got: {out}");
+        assert!(
+            out.contains("verificación") || out.contains("fallida"),
+            "Expected Spanish CI terms, got: {out}"
+        );
     }
 
     #[test]
@@ -385,8 +405,13 @@ mod tests_es {
         ctx.insert("stale", Value::Number(1));
         let mut session = Session::new();
         let out = engine.render(&mut session, "pr.age", &ctx).unwrap();
-        assert!(out.contains("30") && out.contains("día"),
-            "Expected '30 días', got: {out}");
-        assert!(out.contains("desactualizado"), "Expected 'desactualizado', got: {out}");
+        assert!(
+            out.contains("30") && out.contains("día"),
+            "Expected '30 días', got: {out}"
+        );
+        assert!(
+            out.contains("desactualizado"),
+            "Expected 'desactualizado', got: {out}"
+        );
     }
 }

@@ -103,8 +103,10 @@ impl tracing::field::Visit for FieldVisitor<'_> {
     fn record_u64(&mut self, field: &tracing::field::Field, value: u64) {
         // Saturating cast: values above i64::MAX are clamped rather than
         // wrapping. In practice tracing numeric fields are small counters.
-        self.ctx
-            .insert(field.name(), Value::Number(value.min(i64::MAX as u64) as i64));
+        self.ctx.insert(
+            field.name(),
+            Value::Number(value.min(i64::MAX as u64) as i64),
+        );
     }
 
     fn record_bool(&mut self, field: &tracing::field::Field, value: bool) {
@@ -136,7 +138,9 @@ where
         }
 
         let mut prosaic_ctx = Context::new();
-        let mut visitor = FieldVisitor { ctx: &mut prosaic_ctx };
+        let mut visitor = FieldVisitor {
+            ctx: &mut prosaic_ctx,
+        };
         event.record(&mut visitor);
 
         let mut session = self.session.lock().unwrap();
@@ -231,7 +235,8 @@ mod tests {
             .unwrap();
 
         let buf = TestWriter::new();
-        let layer = ProsaicLayer::new(engine, buf.clone()).key_mapper(|_meta| "custom.key".to_string());
+        let layer =
+            ProsaicLayer::new(engine, buf.clone()).key_mapper(|_meta| "custom.key".to_string());
 
         let subscriber = tracing_subscriber::registry().with(layer);
         tracing::subscriber::with_default(subscriber, || {
@@ -252,8 +257,7 @@ mod tests {
             .unwrap();
 
         let buf = TestWriter::new();
-        let layer =
-            ProsaicLayer::new(engine, buf.clone()).key_mapper(|_| "t.e".to_string());
+        let layer = ProsaicLayer::new(engine, buf.clone()).key_mapper(|_| "t.e".to_string());
 
         let subscriber = tracing_subscriber::registry().with(layer);
         tracing::subscriber::with_default(subscriber, || {
@@ -269,9 +273,7 @@ mod tests {
         let mut engine = Engine::new(English::new())
             .strictness(Strictness::Silent)
             .variation(Variation::Fixed);
-        engine
-            .register_template("t.big", "value: {n}")
-            .unwrap();
+        engine.register_template("t.big", "value: {n}").unwrap();
 
         let buf = TestWriter::new();
         let layer = ProsaicLayer::new(engine, buf.clone()).key_mapper(|_| "t.big".to_string());

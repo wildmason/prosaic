@@ -151,10 +151,7 @@ mod tests {
         let s = "The class UserService was renamed to AccountService, \
                  which impacts 6 consumers";
         let out = split_long(s, 60);
-        assert!(
-            out.contains("This impacts 6 consumers"),
-            "got: {out}"
-        );
+        assert!(out.contains("This impacts 6 consumers"), "got: {out}");
         assert!(
             out.starts_with("The class UserService was renamed"),
             "got: {out}"
@@ -175,10 +172,7 @@ mod tests {
         let s = "AuthGuard was modified, affecting 3 routes Dashboard, \
                  Settings, Admin";
         let out = split_long(s, 35);
-        assert!(
-            out.contains("This affects 3 routes"),
-            "got: {out}"
-        );
+        assert!(out.contains("This affects 3 routes"), "got: {out}");
     }
 
     #[test]

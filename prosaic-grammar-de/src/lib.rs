@@ -9,19 +9,19 @@
 //! Deliberately out of scope: attributive adjective declension, Konjunktiv,
 //! Perfekt compound tenses, full strong-verb tables. See the plan doc for rationale.
 
-pub mod gender;
 pub(crate) mod articles;
 pub(crate) mod conjugate;
+pub mod gender;
 pub(crate) mod numbers;
 pub(crate) mod pluralize;
 
 use prosaic_core::{
-    AgreementFeatures, Conjunction, Gender, GrammaticalNumber, Language, Person,
-    PluralCategory, ReferenceForm, RstRelation, Tense,
+    AgreementFeatures, Conjunction, Gender, GrammaticalNumber, Language, Person, PluralCategory,
+    ReferenceForm, RstRelation, Tense,
 };
 
-use articles::{article_with_features, basic_article};
 pub use articles::indefinite_article;
+use articles::{article_with_features, basic_article};
 use conjugate::{conjugate_de, past_participle_de, present_participle_de};
 use numbers::number_to_words_de;
 use pluralize::{pluralize_de, singularize_de};
@@ -146,14 +146,14 @@ impl Language for German {
         use RstRelation::*;
         Some(match relation {
             Elaboration => "Außerdem ",
-            Contrast    => "Allerdings ",
-            Cause       => "Deshalb ",
-            Result      => "Folglich ",
-            Concession  => "Dennoch ",
-            Sequence    => "Dann ",
-            Condition   => "Wenn dies geschieht, ",
-            Background  => "Inzwischen ",
-            Summary     => "Zusammenfassend ",
+            Contrast => "Allerdings ",
+            Cause => "Deshalb ",
+            Result => "Folglich ",
+            Concession => "Dennoch ",
+            Sequence => "Dann ",
+            Condition => "Wenn dies geschieht, ",
+            Background => "Inzwischen ",
+            Summary => "Zusammenfassend ",
         })
     }
 
@@ -324,13 +324,19 @@ mod tests {
     #[test]
     fn conjugate_present_first() {
         let de = German::new();
-        assert_eq!(de.conjugate("machen", Tense::Present, Person::First), "mache");
+        assert_eq!(
+            de.conjugate("machen", Tense::Present, Person::First),
+            "mache"
+        );
     }
 
     #[test]
     fn conjugate_present_third() {
         let de = German::new();
-        assert_eq!(de.conjugate("machen", Tense::Present, Person::Third), "macht");
+        assert_eq!(
+            de.conjugate("machen", Tense::Present, Person::Third),
+            "macht"
+        );
     }
 
     #[test]
@@ -394,7 +400,10 @@ mod tests {
     #[test]
     fn join_list_two_or() {
         let de = German::new();
-        assert_eq!(de.join_list(&["ja", "nein"], Conjunction::Or), "ja oder nein");
+        assert_eq!(
+            de.join_list(&["ja", "nein"], Conjunction::Or),
+            "ja oder nein"
+        );
     }
 
     // ── ordinal ───────────────────────────────────────────────────────────────
@@ -623,9 +632,15 @@ mod tests {
     #[test]
     fn discourse_marker_german() {
         let de = German::new();
-        assert_eq!(de.discourse_marker(RstRelation::Elaboration), Some("Außerdem "));
-        assert_eq!(de.discourse_marker(RstRelation::Contrast),    Some("Allerdings "));
-        assert_eq!(de.discourse_marker(RstRelation::Result),      Some("Folglich "));
+        assert_eq!(
+            de.discourse_marker(RstRelation::Elaboration),
+            Some("Außerdem ")
+        );
+        assert_eq!(
+            de.discourse_marker(RstRelation::Contrast),
+            Some("Allerdings ")
+        );
+        assert_eq!(de.discourse_marker(RstRelation::Result), Some("Folglich "));
     }
 
     // ── Send + Sync ───────────────────────────────────────────────────────────
@@ -664,7 +679,10 @@ mod tests {
     #[test]
     fn since_last_marker_folgende_woche() {
         let de = German::new();
-        assert_eq!(de.since_last_marker(7 * 86_400 + 1), "in der folgenden Woche");
+        assert_eq!(
+            de.since_last_marker(7 * 86_400 + 1),
+            "in der folgenden Woche"
+        );
     }
 
     #[cfg(feature = "time")]

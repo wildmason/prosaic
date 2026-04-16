@@ -1,9 +1,9 @@
 #[cfg(not(feature = "std"))]
+use alloc::format;
+#[cfg(not(feature = "std"))]
 use alloc::string::{String, ToString};
 #[cfg(not(feature = "std"))]
 use alloc::vec::Vec;
-#[cfg(not(feature = "std"))]
-use alloc::format;
 
 use crate::engine::Engine;
 use crate::error::ProsaicError;
@@ -394,11 +394,7 @@ mod tests {
             .subject(subject("class", "Foo"))
             .verb("rename", Tense::Past)
             .object("Foobar")
-            .clause(
-                Clause::which("impacts")
-                    .amount(6)
-                    .noun("direct consumer"),
-            )
+            .clause(Clause::which("impacts").amount(6).noun("direct consumer"))
             .render(&engine)
             .unwrap();
 
@@ -477,11 +473,7 @@ mod tests {
         let s = Sentence::new()
             .subject(subject("module", "Core"))
             .verb("export", Tense::Present)
-            .clause(
-                Clause::with_intro("")
-                    .amount(5)
-                    .noun("component"),
-            )
+            .clause(Clause::with_intro("").amount(5).noun("component"))
             .render(&engine)
             .unwrap();
 

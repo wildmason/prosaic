@@ -24,9 +24,20 @@ const IRREGULAR_PLURALS: &[(&str, &str)] = &[
 ];
 
 const UNSTRESSED_FINAL_S: &[&str] = &[
-    "lunes", "martes", "miércoles", "jueves", "viernes",
-    "atlas", "tesis", "crisis", "análisis", "síntesis",
-    "dosis", "paréntesis", "virus", "focus",
+    "lunes",
+    "martes",
+    "miércoles",
+    "jueves",
+    "viernes",
+    "atlas",
+    "tesis",
+    "crisis",
+    "análisis",
+    "síntesis",
+    "dosis",
+    "paréntesis",
+    "virus",
+    "focus",
 ];
 
 pub fn pluralize_es(word: &str) -> String {
@@ -187,7 +198,10 @@ fn is_likely_monosyllable(word: &str) -> bool {
 /// Preserve the capitalisation pattern of `original` when applying `form`.
 fn recase(form: &str, original: &str) -> String {
     let orig_chars: Vec<char> = original.chars().collect();
-    let is_upper = orig_chars.first().map(|c| c.is_uppercase()).unwrap_or(false);
+    let is_upper = orig_chars
+        .first()
+        .map(|c| c.is_uppercase())
+        .unwrap_or(false);
     if is_upper {
         let mut chars = form.chars();
         match chars.next() {

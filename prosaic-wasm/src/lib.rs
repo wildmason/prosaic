@@ -18,10 +18,10 @@
 //! console.log(result); // "Hello, world!"
 //! ```
 
-use wasm_bindgen::prelude::*;
 use prosaic_core::{Context, Engine, Session, Strictness, Value, Variation};
 use prosaic_grammar_en::English;
 use serde_json::Value as JsonValue;
+use wasm_bindgen::prelude::*;
 
 /// A configured Prosaic NLG engine with registered templates.
 ///
@@ -180,11 +180,9 @@ fn js_object_to_context(obj: &JsValue) -> Result<Context, JsValue> {
     for (k, v) in map {
         let value = match v {
             JsonValue::String(s) => Value::String(s.clone()),
-            JsonValue::Number(n) => Value::Number(
-                n.as_i64().ok_or_else(|| {
-                    JsValue::from_str(&format!("context number `{k}` out of i64 range"))
-                })?,
-            ),
+            JsonValue::Number(n) => Value::Number(n.as_i64().ok_or_else(|| {
+                JsValue::from_str(&format!("context number `{k}` out of i64 range"))
+            })?),
             JsonValue::Array(arr) => {
                 let items: Vec<String> = arr
                     .iter()
@@ -200,7 +198,7 @@ fn js_object_to_context(obj: &JsValue) -> Result<Context, JsValue> {
             _ => {
                 return Err(JsValue::from_str(&format!(
                     "unsupported context value type for key `{k}`"
-                )))
+                )));
             }
         };
         ctx.insert(k.clone(), value);
@@ -281,8 +279,8 @@ mod tests {
     fn session_reset_preserves_temporal_anchor() {
         let mut session = ProsaicSession::new();
         // Simulate anchor being set, then reset (discourse) preserving it.
-        session.inner.reset_temporal();  // ensure no anchor
-        session.reset();                 // discourse reset; no anchor still present
+        session.inner.reset_temporal(); // ensure no anchor
+        session.reset(); // discourse reset; no anchor still present
         // No panic = pass.
     }
 

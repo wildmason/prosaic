@@ -13,9 +13,26 @@ pub fn ordinal(n: usize) -> String {
 }
 
 const ONES: &[&str] = &[
-    "", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine",
-    "ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen",
-    "sixteen", "seventeen", "eighteen", "nineteen",
+    "",
+    "one",
+    "two",
+    "three",
+    "four",
+    "five",
+    "six",
+    "seven",
+    "eight",
+    "nine",
+    "ten",
+    "eleven",
+    "twelve",
+    "thirteen",
+    "fourteen",
+    "fifteen",
+    "sixteen",
+    "seventeen",
+    "eighteen",
+    "nineteen",
 ];
 
 const TENS: &[&str] = &[
@@ -23,7 +40,12 @@ const TENS: &[&str] = &[
 ];
 
 const SCALES: &[&str] = &[
-    "", "thousand", "million", "billion", "trillion", "quadrillion",
+    "",
+    "thousand",
+    "million",
+    "billion",
+    "trillion",
+    "quadrillion",
 ];
 
 /// Spell out a number as English words.

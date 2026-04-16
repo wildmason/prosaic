@@ -2,7 +2,7 @@
 //!
 //! Tests the `Engine::with_faithfulness_gate(threshold)` builder option.
 
-use prosaic_core::{ctx, Engine, ProsaicError, Session, Variation};
+use prosaic_core::{Engine, ProsaicError, Session, Variation, ctx};
 use prosaic_grammar_en::English;
 
 fn base_engine() -> Engine {
@@ -26,10 +26,18 @@ fn gate_off_by_default_allows_unfaithful_render() {
     let mut session = Session::new();
     // No gate → renders fine even though output has polarity drift.
     let result = engine.render(&mut session, "t", &ctx);
-    assert!(result.is_ok(), "no gate → render should succeed; got {:?}", result);
+    assert!(
+        result.is_ok(),
+        "no gate → render should succeed; got {:?}",
+        result
+    );
     let output = result.unwrap();
     // Output should include "not" from the negated pipe
-    assert!(output.contains("not"), "negated pipe should produce 'not'; got: {}", output);
+    assert!(
+        output.contains("not"),
+        "negated pipe should produce 'not'; got: {}",
+        output
+    );
 }
 
 // ── Gate on: rejection ────────────────────────────────────────────────────
@@ -48,7 +56,13 @@ fn gate_on_rejects_polarity_drift() {
     let mut session = Session::new();
     let result = engine.render(&mut session, "t", &ctx);
     assert!(
-        matches!(result, Err(ProsaicError::FaithfulnessRejection { polarity_match: false, .. })),
+        matches!(
+            result,
+            Err(ProsaicError::FaithfulnessRejection {
+                polarity_match: false,
+                ..
+            })
+        ),
         "polarity drift should cause FaithfulnessRejection; got {:?}",
         result
     );
@@ -88,7 +102,11 @@ fn gate_on_permits_fully_faithful_output() {
     let mut session = Session::new();
     // "userservice" is in context, "modified" is in template literal.
     let result = engine.render(&mut session, "t", &ctx);
-    assert!(result.is_ok(), "fully faithful output should pass gate; got {:?}", result);
+    assert!(
+        result.is_ok(),
+        "fully faithful output should pass gate; got {:?}",
+        result
+    );
 }
 
 #[test]
@@ -165,8 +183,16 @@ fn faithfulness_rejection_carries_diagnostic_fields() {
         polarity_match: false,
     };
     let msg = err.to_string();
-    assert!(msg.contains("precision"), "error should include precision: {}", msg);
-    assert!(msg.contains("polarity_match"), "error should include polarity_match: {}", msg);
+    assert!(
+        msg.contains("precision"),
+        "error should include precision: {}",
+        msg
+    );
+    assert!(
+        msg.contains("polarity_match"),
+        "error should include polarity_match: {}",
+        msg
+    );
 
     // Precision only failure
     let precision_err = ProsaicError::FaithfulnessRejection {

@@ -1,8 +1,8 @@
-mod pluralize;
 mod articles;
 mod conjugate;
 mod lists;
 mod numbers;
+mod pluralize;
 
 use prosaic_core::{Conjunction, Language, Person, Tense};
 

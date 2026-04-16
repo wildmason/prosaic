@@ -1,35 +1,35 @@
 use core::sync::atomic::{AtomicUsize, Ordering};
 
 #[cfg(not(feature = "std"))]
-use alloc::string::{String, ToString};
-#[cfg(not(feature = "std"))]
-use alloc::vec::Vec;
-#[cfg(not(feature = "std"))]
-use alloc::vec;
-#[cfg(not(feature = "std"))]
 use alloc::boxed::Box;
 #[cfg(not(feature = "std"))]
 use alloc::format;
+#[cfg(not(feature = "std"))]
+use alloc::string::{String, ToString};
+#[cfg(not(feature = "std"))]
+use alloc::vec;
+#[cfg(not(feature = "std"))]
+use alloc::vec::Vec;
 
 use crate::collections::{HashMap, new_map};
 
 use crate::faithfulness::score_faithfulness;
 use crate::session::Session;
 
+use crate::antonyms::{AntonymRegistry, insert_not};
 use crate::context::{Context, IntoContext, Value};
 use crate::discourse::{ListStyle, ReferenceForm, Transition};
 use crate::error::ProsaicError;
+use crate::hedge::{HedgeMode, hedge as hedge_fn, parse_mode as parse_hedge_mode};
 use crate::language::{Conjunction, Language, Person, PluralCategory, VerbForm};
-use crate::antonyms::{insert_not, AntonymRegistry};
-use crate::hedge::{hedge as hedge_fn, parse_mode as parse_hedge_mode, HedgeMode};
 #[cfg(feature = "polish")]
 use crate::length::split_long_in_place;
 #[cfg(feature = "polish")]
 use crate::punctuation::smart_quotes_in_place;
-use crate::quantify::{parse_mode as parse_quantify_mode, quantify as quantify_fn, QuantifyMode};
+use crate::quantify::{QuantifyMode, parse_mode as parse_quantify_mode, quantify as quantify_fn};
 #[cfg(feature = "reg")]
 use crate::reg::{
-    distinguishing_attributes, distinguishing_subgraph, EntityDescriptor, EntityRegistry,
+    EntityDescriptor, EntityRegistry, distinguishing_attributes, distinguishing_subgraph,
 };
 use crate::salience::{Salience, SalienceThresholds};
 use crate::synonyms::SynonymRegistry;
@@ -166,7 +166,10 @@ impl<'a> Iterator for RenderIter<'a> {
         if action_end > self.i + 1 {
             let key = self.events[self.i].0;
             let run = &self.events[self.i..action_end];
-            let sentence = match self.engine.render_aggregated_subjects(self.session, key, run) {
+            let sentence = match self
+                .engine
+                .render_aggregated_subjects(self.session, key, run)
+            {
                 Ok(s) => s,
                 Err(e) => return Some(Err(e)),
             };
@@ -308,7 +311,10 @@ impl<'e, 's> RenderCtx<'e, 's> {
         let entity_type = context.get("entity_type").map(|v| v.as_display());
 
         // Detect discourse connective
-        let relation = self.session.discourse.detect_relation(key, entity_name.as_deref());
+        let relation = self
+            .session
+            .discourse
+            .detect_relation(key, entity_name.as_deref());
         let connective = self.session.discourse.select_connective(&relation);
 
         // Filter templates by salience level matching the context magnitude.
@@ -320,7 +326,9 @@ impl<'e, 's> RenderCtx<'e, 's> {
             self.select_alternative_scored(key, &alternatives, context)?;
 
         // Record template choice
-        self.session.discourse.record_template_choice(key, variant_index);
+        self.session
+            .discourse
+            .record_template_choice(key, variant_index);
 
         // Render the selected template into a preallocated buffer.
         let mut output = String::with_capacity(128);
@@ -673,13 +681,9 @@ impl<'e, 's> RenderCtx<'e, 's> {
         match self.engine.strictness {
             Strictness::Strict => Err(ProsaicError::InvalidPipe {
                 pipe: "choose".to_string(),
-                reason: format!(
-                    "no matching key for value `{display}` and no default"
-                ),
+                reason: format!("no matching key for value `{display}` and no default"),
             }),
-            Strictness::Lenient => Ok(Value::String(format!(
-                "[choose: no match for {display}]"
-            ))),
+            Strictness::Lenient => Ok(Value::String(format!("[choose: no match for {display}]"))),
             Strictness::Silent => Ok(Value::String(String::new())),
         }
     }
@@ -733,7 +737,8 @@ impl<'e, 's> RenderCtx<'e, 's> {
                     },
                     ..crate::agreement::AgreementFeatures::default()
                 };
-                self.engine.language
+                self.engine
+                    .language
                     .realize_reference(form, &features)
                     .unwrap_or_default()
             }
@@ -788,10 +793,10 @@ impl<'e, 's> RenderCtx<'e, 's> {
                 // variant can carry per-entity features for richer agreement.
                 let features = crate::agreement::AgreementFeatures::default();
 
-                let output =
-                    self.engine
-                        .language
-                        .plural_description(&entity_type, n, &features);
+                let output = self
+                    .engine
+                    .language
+                    .plural_description(&entity_type, n, &features);
                 Ok(Value::String(output))
             }
         }
@@ -895,15 +900,16 @@ impl<'e, 's> RenderCtx<'e, 's> {
             _ => Conjunction::And,
         };
 
-        let style = forced_style.unwrap_or_else(|| {
-            self.session.discourse.next_list_style()
-        });
+        let style = forced_style.unwrap_or_else(|| self.session.discourse.next_list_style());
 
         let refs: Vec<&str> = items.iter().map(|s| s.as_str()).collect();
 
         let has_truncation = items.last().is_some_and(|last| {
             last.ends_with(" more")
-                && last.split_whitespace().next().is_some_and(|w| w.parse::<usize>().is_ok())
+                && last
+                    .split_whitespace()
+                    .next()
+                    .is_some_and(|w| w.parse::<usize>().is_ok())
         });
 
         if has_truncation && items.len() >= 2 {
@@ -1093,7 +1099,11 @@ impl<'e, 's> RenderCtx<'e, 's> {
             }
         };
 
-        Ok(Value::String(quantify_fn(count, mode, &*self.engine.language)))
+        Ok(Value::String(quantify_fn(
+            count,
+            mode,
+            &*self.engine.language,
+        )))
     }
 
     fn pipe_verb(&self, pipe: &Pipe, value: &Value) -> Result<Value, ProsaicError> {
@@ -1109,18 +1119,22 @@ impl<'e, 's> RenderCtx<'e, 's> {
             }
         };
 
-        let (form, voice) = VerbForm::parse_spec(spec).ok_or_else(|| ProsaicError::InvalidPipe {
-            pipe: "verb".to_string(),
-            reason: format!(
-                "unknown verb form spec `{spec}` — expected one of past, present, future, \
+        let (form, voice) =
+            VerbForm::parse_spec(spec).ok_or_else(|| ProsaicError::InvalidPipe {
+                pipe: "verb".to_string(),
+                reason: format!(
+                    "unknown verb form spec `{spec}` — expected one of past, present, future, \
                  present_perfect, past_perfect, future_perfect, present_progressive, \
                  past_progressive, conditional, conditional_perfect \
                  (optionally prefixed with `active_` or `passive_`)"
-            ),
-        })?;
+                ),
+            })?;
 
         let verb = value.as_display();
-        let phrase = self.engine.language.verb_phrase(&verb, form, voice, Person::Third);
+        let phrase = self
+            .engine
+            .language
+            .verb_phrase(&verb, form, voice, Person::Third);
         Ok(Value::String(phrase))
     }
 
@@ -1222,12 +1236,7 @@ impl<'e, 's> RenderCtx<'e, 's> {
         }
 
         // Determine the selected variant
-        let selected_idx = self.pick_variant_index(
-            key,
-            &alternatives,
-            last_variant,
-            &scores,
-        );
+        let selected_idx = self.pick_variant_index(key, &alternatives, last_variant, &scores);
         if let Some(idx) = selected_idx
             && let Some(s) = scores.get_mut(idx)
         {
@@ -1259,7 +1268,10 @@ impl<'e, 's> RenderCtx<'e, 's> {
 
         let is_first = self.session.discourse.is_first_render();
         if !allow_choose_best || is_first {
-            return Some(self.engine.pick_variant_index_static(key, alternatives.len()));
+            return Some(
+                self.engine
+                    .pick_variant_index_static(key, alternatives.len()),
+            );
         }
 
         let mut best_idx: Option<usize> = None;
@@ -1737,7 +1749,12 @@ impl Engine {
         let template = Template::parse(source)?;
         let context = context.into_context();
         let mut output = String::with_capacity(128);
-        RenderCtx::new(self, session).render_template_into(&mut output, "<inline>", &template, &context)?;
+        RenderCtx::new(self, session).render_template_into(
+            &mut output,
+            "<inline>",
+            &template,
+            &context,
+        )?;
         session.discourse.record_output_words(&output);
         Ok(output)
     }
@@ -1799,11 +1816,8 @@ impl Engine {
             if action_end > i + 1 {
                 // Multiple consecutive events with same template key but
                 // different entities — aggregate their subjects.
-                let sentence = self.render_aggregated_subjects(
-                    session,
-                    events[i].0,
-                    &events[i..action_end],
-                )?;
+                let sentence =
+                    self.render_aggregated_subjects(session, events[i].0, &events[i..action_end])?;
                 sentences.push(sentence);
                 i = action_end;
                 continue;
@@ -1920,11 +1934,7 @@ impl Engine {
     /// of same-subject sentences into one conjunction-reduced sentence.
     ///
     /// Returns `start + 1` if no multi-event run exists.
-    fn find_same_entity_run(
-        &self,
-        events: &[(&str, Context)],
-        start: usize,
-    ) -> usize {
+    fn find_same_entity_run(&self, events: &[(&str, Context)], start: usize) -> usize {
         if start >= events.len() {
             return start;
         }
@@ -1984,10 +1994,8 @@ impl Engine {
         // would apply. Run in a snapshot/restore bubble so main session is
         // untouched until the real render below.
         let candidate_scores = {
-            let allow_choose_best = matches!(
-                self.variation,
-                Variation::Seeded(_) | Variation::Random
-            );
+            let allow_choose_best =
+                matches!(self.variation, Variation::Seeded(_) | Variation::Random);
             let is_first = session.discourse.is_first_render();
             if !allow_choose_best || is_first || alternatives.len() < 2 {
                 None
@@ -1999,7 +2007,12 @@ impl Engine {
                 let mut scratch = String::with_capacity(128);
                 for template in &alternatives {
                     scratch.clear();
-                    match RenderCtx::new(self, &mut scoring_session).render_template_into(&mut scratch, key, template, &context) {
+                    match RenderCtx::new(self, &mut scoring_session).render_template_into(
+                        &mut scratch,
+                        key,
+                        template,
+                        &context,
+                    ) {
                         Ok(()) => {
                             let score = scoring_session.discourse.repetition_score(&scratch);
                             scored.push(score);
@@ -2101,11 +2114,7 @@ impl Engine {
     /// different new_name targets or different consumer counts.
     ///
     /// Returns `start + 1` if no aggregation opportunity exists.
-    fn find_same_action_run(
-        &self,
-        events: &[(&str, Context)],
-        start: usize,
-    ) -> usize {
+    fn find_same_action_run(&self, events: &[(&str, Context)], start: usize) -> usize {
         if start >= events.len() {
             return start;
         }
@@ -2155,11 +2164,7 @@ impl Engine {
     ///   already grabbed it for subject-aggregation).
     ///
     /// Returns `start + 1` when no gapping opportunity exists.
-    fn find_gapping_run(
-        &self,
-        events: &[(&str, Context)],
-        start: usize,
-    ) -> usize {
+    fn find_gapping_run(&self, events: &[(&str, Context)], start: usize) -> usize {
         if start >= events.len() {
             return start;
         }
@@ -2170,8 +2175,7 @@ impl Engine {
         };
 
         let mut end = start + 1;
-        let mut seen: crate::collections::HashSet<String> =
-            core::iter::once(first_name).collect();
+        let mut seen: crate::collections::HashSet<String> = core::iter::once(first_name).collect();
 
         while end < events.len() {
             let (k, ctx) = (events[end].0, &events[end].1);
@@ -2313,11 +2317,7 @@ impl Engine {
             };
             match self.reg_algorithm {
                 RegAlgorithm::DaleReiter => (
-                    distinguishing_attributes(
-                        &target,
-                        &self.entity_registry,
-                        &self.reg_preference,
-                    ),
+                    distinguishing_attributes(&target, &self.entity_registry, &self.reg_preference),
                     None,
                 ),
                 RegAlgorithm::GraphBased => {
@@ -2397,7 +2397,6 @@ impl Engine {
     pub fn new_session(&self) -> Session {
         Session::new()
     }
-
 }
 
 /// Format a truncated list with natural style.
@@ -2676,10 +2675,10 @@ fn reduce_gapping(sentences: &[String]) -> Option<String> {
     //   → anchor = "was moved", suffixes = "to core" / "to util"
     //   → "Foo was moved to core, and Bar to util."
     const PREPOSITIONS: &[&str] = &[
-        "to", "from", "at", "in", "on", "by", "for", "with", "into", "onto",
-        "out", "off", "over", "under", "above", "below", "through", "across",
-        "against", "along", "around", "behind", "beside", "between", "during",
-        "inside", "outside", "toward", "towards", "upon", "within", "without",
+        "to", "from", "at", "in", "on", "by", "for", "with", "into", "onto", "out", "off", "over",
+        "under", "above", "below", "through", "across", "against", "along", "around", "behind",
+        "beside", "between", "during", "inside", "outside", "toward", "towards", "upon", "within",
+        "without",
     ];
     let anchor_len = {
         let mut len = raw_anchor_len;
@@ -2805,7 +2804,6 @@ fn strip_leading_connective(s: &str) -> alloc::borrow::Cow<'_, str> {
 
     alloc::borrow::Cow::Borrowed(s)
 }
-
 
 /// Split a head sentence into (full subject + aux prefix, aux word, rest).
 /// Returns None when the sentence doesn't follow the "The X Y was …" or
@@ -2941,13 +2939,11 @@ fn collapse_and_tidy_in_place(output: &mut String) {
 /// and we strip the orphan.
 const ORPHAN_TAIL_WORDS: &[&str] = &[
     // Prepositions taking an object
-    "by", "to", "from", "in", "on", "at", "of", "with", "for", "into",
-    "onto", "upon", "about", "between", "among", "through", "across",
+    "by", "to", "from", "in", "on", "at", "of", "with", "for", "into", "onto", "upon", "about",
+    "between", "among", "through", "across",
     // Coordinating & correlative words that need another clause
-    "and", "or", "but", "nor", "yet",
-    // Subordinating words that need a clause
-    "because", "since", "while", "when", "where", "whether", "unless",
-    "until", "than",
+    "and", "or", "but", "nor", "yet", // Subordinating words that need a clause
+    "because", "since", "while", "when", "where", "whether", "unless", "until", "than",
 ];
 
 /// Strip trailing words that were left orphaned by omitted slots. Repeats
@@ -3039,9 +3035,7 @@ fn terminate_sentence_in_place(output: &mut String) {
 /// rendered output may start with a lowercase word that needs capitalization.
 fn starts_with_refer_pipe(template: &Template) -> bool {
     match template.segments.first() {
-        Some(Segment::Slot { pipes, .. }) => {
-            pipes.iter().any(|p| p.name == "refer")
-        }
+        Some(Segment::Slot { pipes, .. }) => pipes.iter().any(|p| p.name == "refer"),
         _ => false,
     }
 }
@@ -3076,9 +3070,9 @@ fn lowercase_first_if_determiner(s: &str) -> String {
     let first_word_end = s.find(char::is_whitespace).unwrap_or(s.len());
     let first = &s[..first_word_end];
     const DETERMINERS: &[&str] = &[
-        "The", "A", "An",                   // English
+        "The", "A", "An", // English
         "El", "La", "Los", "Las", "Un", "Una", // Spanish
-        "Der", "Die", "Das",                // German
+        "Der", "Die", "Das", // German
     ];
     if DETERMINERS.contains(&first) {
         let mut result = String::with_capacity(s.len());
@@ -3197,8 +3191,14 @@ fn contexts_compatible_for_aggregation(a: &Context, b: &Context) -> bool {
     let entity_keys = ["name", "old_name"];
 
     // Get all keys that need to match
-    let a_keys: Vec<&String> = a.keys().filter(|k| !entity_keys.contains(&k.as_str())).collect();
-    let b_keys: Vec<&String> = b.keys().filter(|k| !entity_keys.contains(&k.as_str())).collect();
+    let a_keys: Vec<&String> = a
+        .keys()
+        .filter(|k| !entity_keys.contains(&k.as_str()))
+        .collect();
+    let b_keys: Vec<&String> = b
+        .keys()
+        .filter(|k| !entity_keys.contains(&k.as_str()))
+        .collect();
 
     // Same set of keys?
     if a_keys.len() != b_keys.len() {
@@ -3223,11 +3223,7 @@ fn pluralize_agreement(output: &str, lang: &dyn Language) -> String {
 
     // "The class Foo, Bar, and Baz was" → "The classes Foo, Bar, and Baz were"
     // Common singular-to-plural verb patterns
-    let verb_replacements = &[
-        (" was ", " were "),
-        (" has ", " have "),
-        (" is ", " are "),
-    ];
+    let verb_replacements = &[(" was ", " were "), (" has ", " have "), (" is ", " are ")];
     for (singular, plural) in verb_replacements {
         result = result.replace(singular, plural);
     }
@@ -3391,7 +3387,10 @@ mod tests {
         ctx.insert("name", Value::String("world".into()));
 
         let mut session = test_session();
-        assert_eq!(engine.render(&mut session, "greet", &ctx).unwrap(), "Hello world!");
+        assert_eq!(
+            engine.render(&mut session, "greet", &ctx).unwrap(),
+            "Hello world!"
+        );
     }
 
     #[test]
@@ -3427,7 +3426,10 @@ mod tests {
         let mut session = test_session();
         // Silent-mode cleanup collapses the " " before "!" produced by
         // the omitted slot.
-        assert_eq!(engine.render(&mut session, "greet", &ctx).unwrap(), "Hello!");
+        assert_eq!(
+            engine.render(&mut session, "greet", &ctx).unwrap(),
+            "Hello!"
+        );
     }
 
     #[test]
@@ -3450,19 +3452,23 @@ mod tests {
         let mut session = test_session();
         let mut ctx = Context::new();
         ctx.insert("n", Value::Number(1));
-        assert_eq!(engine.render(&mut session, "count", &ctx).unwrap(), "1 item");
+        assert_eq!(
+            engine.render(&mut session, "count", &ctx).unwrap(),
+            "1 item"
+        );
 
         session.reset();
         ctx.insert("n", Value::Number(5));
-        assert_eq!(engine.render(&mut session, "count", &ctx).unwrap(), "5 items");
+        assert_eq!(
+            engine.render(&mut session, "count", &ctx).unwrap(),
+            "5 items"
+        );
     }
 
     #[test]
     fn render_article_pipe() {
         let mut engine = test_engine();
-        engine
-            .register_template("a", "{thing|article}")
-            .unwrap();
+        engine.register_template("a", "{thing|article}").unwrap();
 
         let mut session = test_session();
         let mut ctx = Context::new();
@@ -3477,9 +3483,7 @@ mod tests {
     #[test]
     fn render_join_pipe() {
         let mut engine = test_engine();
-        engine
-            .register_template("list", "{items|join}")
-            .unwrap();
+        engine.register_template("list", "{items|join}").unwrap();
 
         let mut session = test_session();
         let mut ctx = Context::new();
@@ -3487,15 +3491,16 @@ mod tests {
             "items",
             Value::List(vec!["a".into(), "b".into(), "c".into()]),
         );
-        assert_eq!(engine.render(&mut session, "list", &ctx).unwrap(), "a, b, and c");
+        assert_eq!(
+            engine.render(&mut session, "list", &ctx).unwrap(),
+            "a, b, and c"
+        );
     }
 
     #[test]
     fn render_join_or_pipe() {
         let mut engine = test_engine();
-        engine
-            .register_template("list", "{items|join:or}")
-            .unwrap();
+        engine.register_template("list", "{items|join:or}").unwrap();
 
         let mut session = test_session();
         let mut ctx = Context::new();
@@ -3503,7 +3508,10 @@ mod tests {
             "items",
             Value::List(vec!["a".into(), "b".into(), "c".into()]),
         );
-        assert_eq!(engine.render(&mut session, "list", &ctx).unwrap(), "a, b, or c");
+        assert_eq!(
+            engine.render(&mut session, "list", &ctx).unwrap(),
+            "a, b, or c"
+        );
     }
 
     #[test]
@@ -3525,7 +3533,10 @@ mod tests {
                 "e".into(),
             ]),
         );
-        assert_eq!(engine.render(&mut session, "t", &ctx).unwrap(), "[a, b, and 3 more]");
+        assert_eq!(
+            engine.render(&mut session, "t", &ctx).unwrap(),
+            "[a, b, and 3 more]"
+        );
     }
 
     #[test]
@@ -3560,7 +3571,9 @@ mod tests {
         ctx.insert("name", Value::String("world".into()));
 
         assert_eq!(
-            engine.render_inline(&mut session, "Hello {name}!", &ctx).unwrap(),
+            engine
+                .render_inline(&mut session, "Hello {name}!", &ctx)
+                .unwrap(),
             "Hello world!"
         );
     }
@@ -3659,9 +3672,15 @@ mod tests {
         // recent output are scored worse, so consecutive renders tend to
         // pick different variants.
         let mut engine = test_engine().variation(Variation::Seeded(1));
-        engine.register_template("t", "alpha distinct tokens").unwrap();
-        engine.register_template("t", "beta different tokens").unwrap();
-        engine.register_template("t", "gamma unique tokens").unwrap();
+        engine
+            .register_template("t", "alpha distinct tokens")
+            .unwrap();
+        engine
+            .register_template("t", "beta different tokens")
+            .unwrap();
+        engine
+            .register_template("t", "gamma unique tokens")
+            .unwrap();
 
         let mut session = test_session();
         let ctx = Context::new();
@@ -3695,7 +3714,12 @@ mod tests {
         // Each should use a different list style
         let results = vec![r1, r2, r3, r4];
         let unique: std::collections::HashSet<&String> = results.iter().collect();
-        assert!(unique.len() >= 3, "Expected at least 3 unique list styles, got {}: {:?}", unique.len(), results);
+        assert!(
+            unique.len() >= 3,
+            "Expected at least 3 unique list styles, got {}: {:?}",
+            unique.len(),
+            results
+        );
     }
 
     #[test]
@@ -3713,8 +3737,10 @@ mod tests {
         );
 
         let result = engine.render(&mut session, "t", &ctx).unwrap();
-        assert!(result.starts_with('[') && result.ends_with(']'),
-            "Expected bracketed format, got: {result}");
+        assert!(
+            result.starts_with('[') && result.ends_with(']'),
+            "Expected bracketed format, got: {result}"
+        );
     }
 
     // ── Refer pipe tests ────────────────────────────────────────────────
@@ -3836,7 +3862,9 @@ mod tests {
         engine
             .register_template("track", "{name|refer} was tracked")
             .unwrap();
-        engine.register_template("other", "Something else happened").unwrap();
+        engine
+            .register_template("other", "Something else happened")
+            .unwrap();
 
         let mut session = test_session();
         let mut ctx = Context::new();
@@ -3869,7 +3897,9 @@ mod tests {
         engine.register_template("t", "beta").unwrap();
 
         let mut session = test_session();
-        let exp = engine.render_explained(&mut session, "t", Context::new()).unwrap();
+        let exp = engine
+            .render_explained(&mut session, "t", Context::new())
+            .unwrap();
         assert_eq!(exp.template_key, "t");
         assert_eq!(exp.variant_index, 0);
         assert_eq!(exp.variant_source, "alpha");
@@ -3949,12 +3979,8 @@ mod tests {
     #[test]
     fn render_iter_yields_one_sentence_per_event_when_no_aggregation() {
         let mut engine = test_engine();
-        engine
-            .register_template("a", "Alpha was seen")
-            .unwrap();
-        engine
-            .register_template("b", "Beta was found")
-            .unwrap();
+        engine.register_template("a", "Alpha was seen").unwrap();
+        engine.register_template("b", "Beta was found").unwrap();
 
         let mut session = test_session();
         let events: Vec<(&str, Context)> = vec![("a", Context::new()), ("b", Context::new())];
@@ -3983,10 +4009,8 @@ mod tests {
         let mut ctx = Context::new();
         ctx.insert("entity_type", Value::String("class".into()));
         ctx.insert("name", Value::String("Foo".into()));
-        let events: Vec<(&str, Context)> = vec![
-            ("renamed", ctx.clone()),
-            ("modified", ctx.clone()),
-        ];
+        let events: Vec<(&str, Context)> =
+            vec![("renamed", ctx.clone()), ("modified", ctx.clone())];
         let iter_results: Vec<_> = engine
             .render_iter(&mut session, &events)
             .collect::<Result<Vec<_>, _>>()
@@ -4010,7 +4034,9 @@ mod tests {
         engine.register_template("t", "gamma").unwrap();
 
         let mut session = test_session();
-        let scores = engine.score_variants(&mut session, "t", Context::new()).unwrap();
+        let scores = engine
+            .score_variants(&mut session, "t", Context::new())
+            .unwrap();
         assert_eq!(scores.len(), 3);
         let sources: Vec<_> = scores.iter().map(|s| s.source.as_str()).collect();
         assert_eq!(sources, vec!["alpha", "beta", "gamma"]);
@@ -4023,7 +4049,9 @@ mod tests {
         engine.register_template("t", "beta").unwrap();
 
         let mut session = test_session();
-        let scores = engine.score_variants(&mut session, "t", Context::new()).unwrap();
+        let scores = engine
+            .score_variants(&mut session, "t", Context::new())
+            .unwrap();
         assert_eq!(scores.iter().filter(|s| s.selected).count(), 1);
     }
 
@@ -4037,7 +4065,9 @@ mod tests {
         // discourse state — a follow-up render must behave as if the
         // score call never happened.
         let mut session = test_session();
-        let _ = engine.score_variants(&mut session, "t", Context::new()).unwrap();
+        let _ = engine
+            .score_variants(&mut session, "t", Context::new())
+            .unwrap();
         let r1 = engine.render(&mut session, "t", Context::new()).unwrap();
         // Fresh discourse: expected Fixed variation returns the first
         // variant (index 0). Single-word output, so no sentence-end period.
@@ -4058,10 +4088,7 @@ mod tests {
     fn partial_expands_inline() {
         let mut engine = test_engine();
         engine
-            .register_partial(
-                "tail",
-                ", affecting {count} {count|pluralize:consumer}",
-            )
+            .register_partial("tail", ", affecting {count} {count|pluralize:consumer}")
             .unwrap();
         engine
             .register_template("t", "The class Foo was modified{>tail}")
@@ -4080,10 +4107,7 @@ mod tests {
     fn partial_shared_across_templates() {
         let mut engine = test_engine();
         engine
-            .register_partial(
-                "tail",
-                ", affecting {count} {count|pluralize:consumer}",
-            )
+            .register_partial("tail", ", affecting {count} {count|pluralize:consumer}")
             .unwrap();
         engine
             .register_template("modified", "The class {name} was modified{>tail}")
@@ -4136,10 +4160,7 @@ mod tests {
 
         let mut session = test_session();
         let out = engine.render(&mut session, "t", Context::new()).unwrap();
-        assert!(
-            out.contains("This impacts 6 consumers"),
-            "got: {out}"
-        );
+        assert!(out.contains("This impacts 6 consumers"), "got: {out}");
         assert!(out.contains(". "), "expected a sentence break, got: {out}");
     }
 
@@ -4161,7 +4182,9 @@ mod tests {
     fn negated_pipe_uses_registered_antonym() {
         let mut engine = test_engine();
         engine.register_antonym("was modified", "remained unchanged");
-        engine.register_template("t", "The class Foo {p|negated}").unwrap();
+        engine
+            .register_template("t", "The class Foo {p|negated}")
+            .unwrap();
 
         let mut session = test_session();
         let mut ctx = Context::new();
@@ -4175,7 +4198,9 @@ mod tests {
     #[test]
     fn negated_pipe_inserts_not_when_no_antonym() {
         let mut engine = test_engine();
-        engine.register_template("t", "The class Foo {p|negated}").unwrap();
+        engine
+            .register_template("t", "The class Foo {p|negated}")
+            .unwrap();
 
         let mut session = test_session();
         let mut ctx = Context::new();
@@ -4189,7 +4214,9 @@ mod tests {
     #[test]
     fn negated_pipe_handles_perfect_aux() {
         let mut engine = test_engine();
-        engine.register_template("t", "The class Foo {p|negated}").unwrap();
+        engine
+            .register_template("t", "The class Foo {p|negated}")
+            .unwrap();
 
         let mut session = test_session();
         let mut ctx = Context::new();
@@ -4262,7 +4289,10 @@ mod tests {
         // the demonstrative at a sentence start combine it with a
         // leading template word that already capitalizes, or with the
         // engine's refer-pipe capitalization path.
-        assert_eq!(engine.render(&mut session, "t", &ctx).unwrap(), "the change");
+        assert_eq!(
+            engine.render(&mut session, "t", &ctx).unwrap(),
+            "the change"
+        );
     }
 
     #[test]
@@ -4275,7 +4305,9 @@ mod tests {
 
         let mut session = test_session();
         // Prior render establishes discourse.
-        engine.render(&mut session, "prime", Context::new()).unwrap();
+        engine
+            .render(&mut session, "prime", Context::new())
+            .unwrap();
 
         let mut ctx = Context::new();
         ctx.insert("noun", Value::String("change".into()));
@@ -4294,12 +4326,17 @@ mod tests {
             .unwrap();
 
         let mut session = test_session();
-        engine.render(&mut session, "prime", Context::new()).unwrap();
+        engine
+            .render(&mut session, "prime", Context::new())
+            .unwrap();
         session.reset();
 
         let mut ctx = Context::new();
         ctx.insert("noun", Value::String("change".into()));
-        assert_eq!(engine.render(&mut session, "t", &ctx).unwrap(), "the change");
+        assert_eq!(
+            engine.render(&mut session, "t", &ctx).unwrap(),
+            "the change"
+        );
     }
 
     // ── Quantify pipe ────────────────────────────────────────────────────
@@ -4310,20 +4347,31 @@ mod tests {
         // "<N>"-style stub. We still exercise the small-number spelling
         // path via QuantifyMode::Natural's language callback.
         let mut engine = test_engine();
-        engine.register_template("t", "{n|quantify} consumer").unwrap();
+        engine
+            .register_template("t", "{n|quantify} consumer")
+            .unwrap();
 
         let mut session = test_session();
         let mut ctx = Context::new();
         ctx.insert("n", Value::Number(0));
-        assert_eq!(engine.render(&mut session, "t", &ctx).unwrap(), "no consumer");
+        assert_eq!(
+            engine.render(&mut session, "t", &ctx).unwrap(),
+            "no consumer"
+        );
         session.reset();
 
         ctx.insert("n", Value::Number(1));
-        assert_eq!(engine.render(&mut session, "t", &ctx).unwrap(), "a single consumer");
+        assert_eq!(
+            engine.render(&mut session, "t", &ctx).unwrap(),
+            "a single consumer"
+        );
         session.reset();
 
         ctx.insert("n", Value::Number(300));
-        assert_eq!(engine.render(&mut session, "t", &ctx).unwrap(), "hundreds of consumer");
+        assert_eq!(
+            engine.render(&mut session, "t", &ctx).unwrap(),
+            "hundreds of consumer"
+        );
     }
 
     #[test]
@@ -4336,7 +4384,10 @@ mod tests {
         let mut session = test_session();
         let mut ctx = Context::new();
         ctx.insert("n", Value::Number(47));
-        assert_eq!(engine.render(&mut session, "t", &ctx).unwrap(), "47 callers");
+        assert_eq!(
+            engine.render(&mut session, "t", &ctx).unwrap(),
+            "47 callers"
+        );
     }
 
     #[test]
@@ -4349,7 +4400,10 @@ mod tests {
         let mut session = test_session();
         let mut ctx = Context::new();
         ctx.insert("n", Value::Number(4));
-        assert_eq!(engine.render(&mut session, "t", &ctx).unwrap(), "a few dependents");
+        assert_eq!(
+            engine.render(&mut session, "t", &ctx).unwrap(),
+            "a few dependents"
+        );
     }
 
     #[test]
@@ -4555,7 +4609,10 @@ mod tests {
         let mut session = test_session();
         let mut ctx = Context::new();
         ctx.insert("word", Value::String("unregistered".into()));
-        assert_eq!(engine.render(&mut session, "t", &ctx).unwrap(), "unregistered");
+        assert_eq!(
+            engine.render(&mut session, "t", &ctx).unwrap(),
+            "unregistered"
+        );
     }
 
     #[test]
@@ -4685,9 +4742,7 @@ mod tests {
 
     #[test]
     fn reduce_rejects_single_sentence() {
-        let reduced = reduce_same_entity_clauses(&[
-            "The class Foo was renamed.".to_string(),
-        ]);
+        let reduced = reduce_same_entity_clauses(&["The class Foo was renamed.".to_string()]);
         assert!(reduced.is_none());
     }
 
@@ -4845,10 +4900,7 @@ mod tests {
     #[test]
     fn reduce_gapping_rejects_short_anchor() {
         // Anchor = ["was"] — length 1, below the 2-token threshold.
-        let ss = vec![
-            "Foo was moved".to_string(),
-            "Bar was modified".to_string(),
-        ];
+        let ss = vec!["Foo was moved".to_string(), "Bar was modified".to_string()];
         assert!(reduce_gapping(&ss).is_none());
     }
 
@@ -4874,10 +4926,7 @@ mod tests {
     #[test]
     fn reduce_gapping_rejects_empty_suffix() {
         // Anchor consumes everything; no divergent tail.
-        let ss = vec![
-            "Foo was moved".to_string(),
-            "Bar was moved".to_string(),
-        ];
+        let ss = vec!["Foo was moved".to_string(), "Bar was moved".to_string()];
         assert!(reduce_gapping(&ss).is_none());
     }
 
@@ -4926,10 +4975,7 @@ mod tests {
             c
         };
 
-        let events = vec![
-            ("code.moved", make("Foo")),
-            ("code.moved", make("Bar")),
-        ];
+        let events = vec![("code.moved", make("Foo")), ("code.moved", make("Bar"))];
 
         let mut s = Session::new();
         let out = engine.render_batch(&mut s, &events).unwrap();
@@ -5095,12 +5141,10 @@ mod tests {
     fn reg_adds_distinguisher_when_same_type_registered() {
         let mut engine = test_engine();
         engine.register_entity(
-            crate::EntityDescriptor::new("UserService", "class")
-                .with_attribute("layer", "domain"),
+            crate::EntityDescriptor::new("UserService", "class").with_attribute("layer", "domain"),
         );
         engine.register_entity(
-            crate::EntityDescriptor::new("AuthService", "class")
-                .with_attribute("layer", "infra"),
+            crate::EntityDescriptor::new("AuthService", "class").with_attribute("layer", "infra"),
         );
         engine
             .register_template("t", "{name|refer} was modified")
@@ -5119,12 +5163,10 @@ mod tests {
     fn reg_no_distinguisher_needed_when_types_differ() {
         let mut engine = test_engine();
         engine.register_entity(
-            crate::EntityDescriptor::new("UserService", "class")
-                .with_attribute("layer", "domain"),
+            crate::EntityDescriptor::new("UserService", "class").with_attribute("layer", "domain"),
         );
         engine.register_entity(
-            crate::EntityDescriptor::new("UserModule", "module")
-                .with_attribute("layer", "infra"),
+            crate::EntityDescriptor::new("UserModule", "module").with_attribute("layer", "infra"),
         );
         engine
             .register_template("t", "{name|refer} was modified")
@@ -5174,12 +5216,10 @@ mod tests {
     fn reg_same_name_different_type_does_not_cross_contaminate() {
         let mut engine = test_engine();
         engine.register_entity(
-            crate::EntityDescriptor::new("UserService", "class")
-                .with_attribute("layer", "domain"),
+            crate::EntityDescriptor::new("UserService", "class").with_attribute("layer", "domain"),
         );
         engine.register_entity(
-            crate::EntityDescriptor::new("UserService", "trait")
-                .with_attribute("scope", "public"),
+            crate::EntityDescriptor::new("UserService", "trait").with_attribute("scope", "public"),
         );
 
         engine
@@ -5310,14 +5350,24 @@ mod tests {
         let empty = Context::new();
 
         // First successful render: alpha
-        assert!(engine.render(&mut session, "ok", &ctx).unwrap().contains("alpha"));
+        assert!(
+            engine
+                .render(&mut session, "ok", &ctx)
+                .unwrap()
+                .contains("alpha")
+        );
 
         // A failed render between the two should NOT advance the counter
         // for "ok" — the missing slot aborts before commit.
         assert!(engine.render(&mut session, "ok", &empty).is_err());
 
         // Next successful render must be beta, not gamma.
-        assert!(engine.render(&mut session, "ok", &ctx).unwrap().contains("beta"));
+        assert!(
+            engine
+                .render(&mut session, "ok", &ctx)
+                .unwrap()
+                .contains("beta")
+        );
     }
 
     /// RoundRobin must rotate through every alternative in order.
@@ -5372,14 +5422,15 @@ mod tests {
     #[test]
     fn verb_pipe_simple_past_passive() {
         let mut engine = test_engine();
-        engine
-            .register_template("t", "{action|verb:past}")
-            .unwrap();
+        engine.register_template("t", "{action|verb:past}").unwrap();
 
         let mut session = test_session();
         let mut ctx = Context::new();
         ctx.insert("action", Value::String("rename".into()));
-        assert_eq!(engine.render(&mut session, "t", &ctx).unwrap(), "was renameed");
+        assert_eq!(
+            engine.render(&mut session, "t", &ctx).unwrap(),
+            "was renameed"
+        );
     }
 
     #[test]
@@ -5392,7 +5443,10 @@ mod tests {
         let mut session = test_session();
         let mut ctx = Context::new();
         ctx.insert("action", Value::String("rename".into()));
-        assert_eq!(engine.render(&mut session, "t", &ctx).unwrap(), "has been renameed");
+        assert_eq!(
+            engine.render(&mut session, "t", &ctx).unwrap(),
+            "has been renameed"
+        );
     }
 
     #[test]
@@ -5405,7 +5459,10 @@ mod tests {
         let mut session = test_session();
         let mut ctx = Context::new();
         ctx.insert("action", Value::String("rename".into()));
-        assert_eq!(engine.render(&mut session, "t", &ctx).unwrap(), "is being renameed");
+        assert_eq!(
+            engine.render(&mut session, "t", &ctx).unwrap(),
+            "is being renameed"
+        );
     }
 
     #[test]
@@ -5418,7 +5475,10 @@ mod tests {
         let mut session = test_session();
         let mut ctx = Context::new();
         ctx.insert("action", Value::String("rename".into()));
-        assert_eq!(engine.render(&mut session, "t", &ctx).unwrap(), "has renameed");
+        assert_eq!(
+            engine.render(&mut session, "t", &ctx).unwrap(),
+            "has renameed"
+        );
     }
 
     #[test]
@@ -5431,7 +5491,10 @@ mod tests {
         let mut session = test_session();
         let mut ctx = Context::new();
         ctx.insert("action", Value::String("rename".into()));
-        assert_eq!(engine.render(&mut session, "t", &ctx).unwrap(), "would be renameed");
+        assert_eq!(
+            engine.render(&mut session, "t", &ctx).unwrap(),
+            "would be renameed"
+        );
     }
 
     #[test]
@@ -5451,9 +5514,7 @@ mod tests {
     #[test]
     fn verb_pipe_missing_spec_is_error() {
         let mut engine = test_engine();
-        engine
-            .register_template("t", "{action|verb}")
-            .unwrap();
+        engine.register_template("t", "{action|verb}").unwrap();
 
         let mut session = test_session();
         let mut ctx = Context::new();
@@ -5492,13 +5553,9 @@ mod tests {
         // If candidate scoring leaked state, we'd see the cycle skip ahead
         // (e.g., render 2's candidate would consume a style, pushing render 3
         // onto the 4th style instead of the 3rd).
-        let styles: std::collections::HashSet<&str> = [
-            r1.as_str(),
-            r2.as_str(),
-            r3.as_str(),
-        ]
-        .into_iter()
-        .collect();
+        let styles: std::collections::HashSet<&str> = [r1.as_str(), r2.as_str(), r3.as_str()]
+            .into_iter()
+            .collect();
         assert_eq!(
             styles.len(),
             3,
@@ -5613,10 +5670,7 @@ mod tests {
         let out = engine
             .render_inline(&mut session, "{level|choose: critical=URGENT}", &ctx)
             .unwrap();
-        assert!(
-            out.contains("[choose: no match for info]"),
-            "got: {out}"
-        );
+        assert!(out.contains("[choose: no match for info]"), "got: {out}");
     }
 
     #[test]
@@ -5725,7 +5779,9 @@ mod tests {
         // pronoun output. If it fails, the trait default impl doesn't match
         // the old inline logic.
         let mut engine = test_engine();
-        engine.register_template("t", "{name|refer} was modified").unwrap();
+        engine
+            .register_template("t", "{name|refer} was modified")
+            .unwrap();
         let mut session = test_session();
         let mut ctx = Context::new();
         ctx.insert("entity_type", Value::String("class".into()));
@@ -5772,18 +5828,36 @@ mod render_batch_with_relations_tests {
 
     impl Language for SimpleLang {
         fn pluralize(&self, word: &str, count: usize) -> String {
-            if count == 1 { word.to_string() } else { format!("{word}s") }
+            if count == 1 {
+                word.to_string()
+            } else {
+                format!("{word}s")
+            }
         }
         fn singularize(&self, word: &str) -> String {
             word.strip_suffix('s').unwrap_or(word).to_string()
         }
-        fn article(&self, _word: &str) -> &str { "the" }
-        fn conjugate(&self, verb: &str, _t: Tense, _p: Person) -> String { verb.to_string() }
-        fn past_participle(&self, verb: &str) -> String { format!("{verb}ed") }
-        fn present_participle(&self, verb: &str) -> String { format!("{verb}ing") }
-        fn join_list(&self, items: &[&str], _c: Conjunction) -> String { items.join(", ") }
-        fn ordinal(&self, n: usize) -> String { format!("{n}th") }
-        fn number_to_words(&self, n: usize) -> String { n.to_string() }
+        fn article(&self, _word: &str) -> &str {
+            "the"
+        }
+        fn conjugate(&self, verb: &str, _t: Tense, _p: Person) -> String {
+            verb.to_string()
+        }
+        fn past_participle(&self, verb: &str) -> String {
+            format!("{verb}ed")
+        }
+        fn present_participle(&self, verb: &str) -> String {
+            format!("{verb}ing")
+        }
+        fn join_list(&self, items: &[&str], _c: Conjunction) -> String {
+            items.join(", ")
+        }
+        fn ordinal(&self, n: usize) -> String {
+            format!("{n}th")
+        }
+        fn number_to_words(&self, n: usize) -> String {
+            n.to_string()
+        }
     }
 
     fn make_engine() -> Engine {
@@ -5834,13 +5908,17 @@ mod render_batch_with_relations_tests {
     #[test]
     fn render_batch_with_all_none_delegates_to_render_batch() {
         let mut engine = make_engine();
-        engine.register_template("t", "{name} was modified").unwrap();
+        engine
+            .register_template("t", "{name} was modified")
+            .unwrap();
         let mut s = Session::new();
         let ctx = ctx_with_name("Foo");
         let triples = vec![("t", ctx.clone(), None), ("t", ctx.clone(), None)];
         let pairs: Vec<_> = triples.iter().map(|(k, c, _)| (*k, c.clone())).collect();
         let mut s2 = Session::new();
-        let from_triples = engine.render_batch_with_relations(&mut s, &triples).unwrap();
+        let from_triples = engine
+            .render_batch_with_relations(&mut s, &triples)
+            .unwrap();
         let from_pairs = engine.render_batch(&mut s2, &pairs).unwrap();
         assert_eq!(from_triples, from_pairs);
     }

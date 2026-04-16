@@ -3,13 +3,13 @@
 
 #![cfg(feature = "serde")]
 
-use prosaic_core::{
-    agreement::{AgreementFeatures, Definiteness, Gender, Number},
-    Context, EntityDescriptor, GroupingStrategy, HedgeMode, ListStyle, QuantifyMode,
-    ReferenceForm, RhetoricalCategory, Salience, Tense, Value, VerbForm, Voice,
-};
 #[cfg(feature = "reg")]
 use prosaic_core::RegAlgorithm;
+use prosaic_core::{
+    Context, EntityDescriptor, GroupingStrategy, HedgeMode, ListStyle, QuantifyMode, ReferenceForm,
+    RhetoricalCategory, Salience, Tense, Value, VerbForm, Voice,
+    agreement::{AgreementFeatures, Definiteness, Gender, Number},
+};
 
 #[test]
 fn value_roundtrips_through_json() {
@@ -31,17 +31,13 @@ fn context_roundtrips_through_json() {
 
     let json = serde_json::to_string(&ctx).unwrap();
     let back: Context = serde_json::from_str(&json).unwrap();
-    assert_eq!(
-        back.get("name"),
-        Some(&Value::String("UserService".into()))
-    );
+    assert_eq!(back.get("name"), Some(&Value::String("UserService".into())));
     assert_eq!(back.get("count"), Some(&Value::Number(6)));
 }
 
 #[test]
 fn entity_descriptor_roundtrips() {
-    let desc = EntityDescriptor::new("UserService", "class")
-        .with_attribute("layer", "domain");
+    let desc = EntityDescriptor::new("UserService", "class").with_attribute("layer", "domain");
     let json = serde_json::to_string(&desc).unwrap();
     let back: EntityDescriptor = serde_json::from_str(&json).unwrap();
     assert_eq!(desc, back);
@@ -53,12 +49,16 @@ fn entity_descriptor_without_relations_field_deserializes() {
     // Simulate a serialized EntityDescriptor from before the relations field
     // was added. The serde(default) annotation must handle missing-field
     // deserialization cleanly.
-    let legacy_json = r#"{"name":"UserService","entity_type":"class","attributes":[["layer","domain"]]}"#;
+    let legacy_json =
+        r#"{"name":"UserService","entity_type":"class","attributes":[["layer","domain"]]}"#;
     let back: EntityDescriptor = serde_json::from_str(legacy_json).unwrap();
     assert_eq!(back.name, "UserService");
     assert_eq!(back.entity_type, "class");
     assert_eq!(back.attribute("layer"), Some("domain"));
-    assert!(back.relations.is_empty(), "relations should default to empty");
+    assert!(
+        back.relations.is_empty(),
+        "relations should default to empty"
+    );
 }
 
 #[test]
@@ -98,10 +98,7 @@ fn enums_serialize_to_names() {
         serde_json::to_string(&Voice::Passive).unwrap(),
         "\"Passive\""
     );
-    assert_eq!(
-        serde_json::to_string(&Tense::Past).unwrap(),
-        "\"Past\""
-    );
+    assert_eq!(serde_json::to_string(&Tense::Past).unwrap(), "\"Past\"");
     assert_eq!(
         serde_json::to_string(&VerbForm::PresentPerfect).unwrap(),
         "\"PresentPerfect\""

@@ -25,11 +25,7 @@ pub fn register(engine: &mut Engine) -> Result<(), ProsaicError> {
 
 fn register_summary(engine: &mut Engine) -> Result<(), ProsaicError> {
     // Low: solo referencia al título
-    engine.register_template_at(
-        "pr.summary",
-        "PR #{number}: {title}",
-        Salience::Low,
-    )?;
+    engine.register_template_at("pr.summary", "PR #{number}: {title}", Salience::Low)?;
 
     // Medium: añade el autor
     engine.register_template(
@@ -78,10 +74,7 @@ fn register_scope(engine: &mut Engine) -> Result<(), ProsaicError> {
     )?;
 
     // Medium: enmarcado como declaración de alcance
-    engine.register_template(
-        "pr.scope",
-        "El PR #{number} abarca {areas|truncate:3|join}",
-    )?;
+    engine.register_template("pr.scope", "El PR #{number} abarca {areas|truncate:3|join}")?;
 
     Ok(())
 }

@@ -23,7 +23,11 @@ pub fn indefinite_article(word: &str) -> &'static str {
     }
 
     // Acronyms (all uppercase, 2+ chars) — check if first letter sounds like a vowel
-    if word.len() >= 2 && word.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit()) {
+    if word.len() >= 2
+        && word
+            .chars()
+            .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit())
+    {
         return if letter_starts_with_vowel_sound(word.as_bytes()[0]) {
             "an"
         } else {
@@ -149,16 +153,16 @@ mod tests {
 
     #[test]
     fn acronyms() {
-        assert_eq!(indefinite_article("FBI"), "an");  // "ef-bee-eye"
-        assert_eq!(indefinite_article("HTML"), "an");  // "aitch-tee-em-el"
-        assert_eq!(indefinite_article("SQL"), "an");   // "es-queue-el"
-        assert_eq!(indefinite_article("URL"), "a");    // "yoo-ar-el"
+        assert_eq!(indefinite_article("FBI"), "an"); // "ef-bee-eye"
+        assert_eq!(indefinite_article("HTML"), "an"); // "aitch-tee-em-el"
+        assert_eq!(indefinite_article("SQL"), "an"); // "es-queue-el"
+        assert_eq!(indefinite_article("URL"), "a"); // "yoo-ar-el"
         // Note: "NASA" is ambiguous — pronounced as a word it's "a NASA",
         // but as an initialism it's "an N-A-S-A". We default to initialism
         // for all-caps strings, which gives "an NASA". Consumers who know
         // the pronunciation should pass "Nasa" to get word-based article selection.
-        assert_eq!(indefinite_article("XML"), "an");   // "ex-em-el"
-        assert_eq!(indefinite_article("API"), "an");   // "ay-pee-eye"
+        assert_eq!(indefinite_article("XML"), "an"); // "ex-em-el"
+        assert_eq!(indefinite_article("API"), "an"); // "ay-pee-eye"
     }
 
     #[test]

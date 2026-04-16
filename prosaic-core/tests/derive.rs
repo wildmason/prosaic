@@ -26,10 +26,7 @@ fn derive_into_context_basic() {
         ctx.get("entity_type"),
         Some(&Value::String("class".to_string()))
     );
-    assert_eq!(
-        ctx.get("old_name"),
-        Some(&Value::String("Foo".to_string()))
-    );
+    assert_eq!(ctx.get("old_name"), Some(&Value::String("Foo".to_string())));
     assert_eq!(
         ctx.get("new_name"),
         Some(&Value::String("Foobar".to_string()))
@@ -37,10 +34,7 @@ fn derive_into_context_basic() {
     assert_eq!(ctx.get("consumer_count"), Some(&Value::Number(6)));
     assert_eq!(
         ctx.get("consumers"),
-        Some(&Value::List(vec![
-            "Baz".to_string(),
-            "Qux".to_string()
-        ]))
+        Some(&Value::List(vec!["Baz".to_string(), "Qux".to_string()]))
     );
 }
 
@@ -61,10 +55,7 @@ fn derive_with_option_some() {
 
     let ctx = event.into_context();
 
-    assert_eq!(
-        ctx.get("name"),
-        Some(&Value::String("test".to_string()))
-    );
+    assert_eq!(ctx.get("name"), Some(&Value::String("test".to_string())));
     assert_eq!(
         ctx.get("description"),
         Some(&Value::String("a description".to_string()))
@@ -82,10 +73,7 @@ fn derive_with_option_none() {
 
     let ctx = event.into_context();
 
-    assert_eq!(
-        ctx.get("name"),
-        Some(&Value::String("test".to_string()))
-    );
+    assert_eq!(ctx.get("name"), Some(&Value::String("test".to_string())));
     assert_eq!(ctx.get("description"), None);
     assert_eq!(ctx.get("count"), None);
 }
@@ -99,7 +87,11 @@ struct NumericTypes {
 
 #[test]
 fn derive_numeric_types() {
-    let event = NumericTypes { a: 10, b: 20, c: -5 };
+    let event = NumericTypes {
+        a: 10,
+        b: 20,
+        c: -5,
+    };
     let ctx = event.into_context();
 
     assert_eq!(ctx.get("a"), Some(&Value::Number(10)));

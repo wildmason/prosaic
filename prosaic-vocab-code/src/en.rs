@@ -74,11 +74,7 @@ fn register_rename_templates(engine: &mut Engine) -> Result<(), ProsaicError> {
 
 fn register_delete_templates(engine: &mut Engine) -> Result<(), ProsaicError> {
     // Low
-    engine.register_template_at(
-        "code.deleted",
-        "{name|refer} was removed",
-        Salience::Low,
-    )?;
+    engine.register_template_at("code.deleted", "{name|refer} was removed", Salience::Low)?;
     engine.register_template_at(
         "code.deleted",
         "{name|refer} has been deleted",
@@ -136,11 +132,7 @@ fn register_add_templates(engine: &mut Engine) -> Result<(), ProsaicError> {
 
 fn register_modify_templates(engine: &mut Engine) -> Result<(), ProsaicError> {
     // Low
-    engine.register_template_at(
-        "code.modified",
-        "{name|refer} was modified",
-        Salience::Low,
-    )?;
+    engine.register_template_at("code.modified", "{name|refer} was modified", Salience::Low)?;
     engine.register_template_at(
         "code.modified",
         "{name|refer} has been updated",

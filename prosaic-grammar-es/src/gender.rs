@@ -14,10 +14,7 @@ use prosaic_core::Gender;
 /// 7. Default → Masculine (most common fallback)
 pub fn infer_gender(word: &str) -> Gender {
     let w = word.to_lowercase();
-    if w.ends_with("ción")
-        || w.ends_with("sión")
-        || w.ends_with("tión")
-        || w.ends_with("xión")
+    if w.ends_with("ción") || w.ends_with("sión") || w.ends_with("tión") || w.ends_with("xión")
     {
         return Gender::Fem;
     }
@@ -31,7 +28,8 @@ pub fn infer_gender(word: &str) -> Gender {
         return Gender::Fem;
     }
     // -e endings that are consistently feminine
-    if w.ends_with("clase") || w.ends_with("llave") || w.ends_with("noche") || w.ends_with("tarde") {
+    if w.ends_with("clase") || w.ends_with("llave") || w.ends_with("noche") || w.ends_with("tarde")
+    {
         return Gender::Fem;
     }
     Gender::Masc

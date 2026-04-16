@@ -186,7 +186,11 @@ fn regular_past(verb: &str) -> String {
 
     // Consonant + y -> ied
     if lower.ends_with('y') {
-        let before_y = lower.as_bytes().get(lower.len().wrapping_sub(2)).copied().unwrap_or(0);
+        let before_y = lower
+            .as_bytes()
+            .get(lower.len().wrapping_sub(2))
+            .copied()
+            .unwrap_or(0);
         if !is_vowel(before_y) {
             return format!("{}ied", &verb[..verb.len() - 1]);
         }
@@ -237,7 +241,11 @@ fn third_person_present(verb: &str) -> String {
 
     // Consonant + y -> ies
     if lower.ends_with('y') {
-        let before_y = lower.as_bytes().get(lower.len().wrapping_sub(2)).copied().unwrap_or(0);
+        let before_y = lower
+            .as_bytes()
+            .get(lower.len().wrapping_sub(2))
+            .copied()
+            .unwrap_or(0);
         if !is_vowel(before_y) {
             return format!("{}ies", &verb[..verb.len() - 1]);
         }

@@ -1,27 +1,136 @@
 /// Uncountable nouns that don't change between singular and plural.
 const UNCOUNTABLE: &[&str] = &[
-    "access", "adulthood", "advice", "aircraft", "aluminum", "anger",
-    "bison", "blood", "bravery", "butter", "cash", "chassis", "chess",
-    "clothing", "cod", "commerce", "cooperation", "corn", "countryside",
-    "courage", "data", "debris", "deer", "diabetes", "education",
-    "electricity", "elk", "emoji", "equipment", "evidence", "evolution",
-    "faith", "feedback", "firmware", "fish", "flour", "food", "footwear",
-    "furniture", "gold", "golf", "grammar", "gratitude", "grief",
-    "grouse", "guilt", "hair", "happiness", "hardware", "headquarters",
-    "health", "help", "homework", "honesty", "hope", "hunger",
-    "ice", "information", "insurance", "jeans", "jewelry", "journalism",
-    "knowledge", "labour", "legislation", "leisure", "lightning",
-    "linguistics", "livestock", "love", "luck", "luggage", "machinery",
-    "mackerel", "mail", "malware", "manga", "mathematics", "media",
-    "metadata", "moose", "mud", "music", "news", "offspring", "oxygen",
-    "patience", "physics", "pliers", "police", "pollution", "poverty",
-    "premises", "pride", "proceedings", "produce", "progress",
-    "rain", "research", "rice", "salmon", "scissors", "series",
-    "sewage", "shambles", "sheep", "shrimp", "software", "spam",
-    "species", "staff", "swine", "tennis", "thanks", "thunder",
-    "timber", "tofu", "traffic", "transportation", "trousers", "trout",
-    "tuna", "vinyl", "warfare", "water", "weather", "wheat",
-    "whitebait", "wildlife", "wisdom", "you",
+    "access",
+    "adulthood",
+    "advice",
+    "aircraft",
+    "aluminum",
+    "anger",
+    "bison",
+    "blood",
+    "bravery",
+    "butter",
+    "cash",
+    "chassis",
+    "chess",
+    "clothing",
+    "cod",
+    "commerce",
+    "cooperation",
+    "corn",
+    "countryside",
+    "courage",
+    "data",
+    "debris",
+    "deer",
+    "diabetes",
+    "education",
+    "electricity",
+    "elk",
+    "emoji",
+    "equipment",
+    "evidence",
+    "evolution",
+    "faith",
+    "feedback",
+    "firmware",
+    "fish",
+    "flour",
+    "food",
+    "footwear",
+    "furniture",
+    "gold",
+    "golf",
+    "grammar",
+    "gratitude",
+    "grief",
+    "grouse",
+    "guilt",
+    "hair",
+    "happiness",
+    "hardware",
+    "headquarters",
+    "health",
+    "help",
+    "homework",
+    "honesty",
+    "hope",
+    "hunger",
+    "ice",
+    "information",
+    "insurance",
+    "jeans",
+    "jewelry",
+    "journalism",
+    "knowledge",
+    "labour",
+    "legislation",
+    "leisure",
+    "lightning",
+    "linguistics",
+    "livestock",
+    "love",
+    "luck",
+    "luggage",
+    "machinery",
+    "mackerel",
+    "mail",
+    "malware",
+    "manga",
+    "mathematics",
+    "media",
+    "metadata",
+    "moose",
+    "mud",
+    "music",
+    "news",
+    "offspring",
+    "oxygen",
+    "patience",
+    "physics",
+    "pliers",
+    "police",
+    "pollution",
+    "poverty",
+    "premises",
+    "pride",
+    "proceedings",
+    "produce",
+    "progress",
+    "rain",
+    "research",
+    "rice",
+    "salmon",
+    "scissors",
+    "series",
+    "sewage",
+    "shambles",
+    "sheep",
+    "shrimp",
+    "software",
+    "spam",
+    "species",
+    "staff",
+    "swine",
+    "tennis",
+    "thanks",
+    "thunder",
+    "timber",
+    "tofu",
+    "traffic",
+    "transportation",
+    "trousers",
+    "trout",
+    "tuna",
+    "vinyl",
+    "warfare",
+    "water",
+    "weather",
+    "wheat",
+    "whitebait",
+    "wildlife",
+    "wisdom",
+    "you",
 ];
 
 /// Irregular plural forms: (singular, plural).
@@ -115,7 +224,11 @@ pub fn pluralize(word: &str) -> String {
         return format!("{}ves", &word[..word.len() - 1]);
     }
     if lower.ends_with("y") {
-        let before_y = lower.as_bytes().get(lower.len().wrapping_sub(2)).copied().unwrap_or(0);
+        let before_y = lower
+            .as_bytes()
+            .get(lower.len().wrapping_sub(2))
+            .copied()
+            .unwrap_or(0);
         if is_vowel(before_y) {
             // day -> days, key -> keys
             return format!("{word}s");
@@ -124,20 +237,29 @@ pub fn pluralize(word: &str) -> String {
         return format!("{}ies", &word[..word.len() - 1]);
     }
     if lower.ends_with("o") {
-        let before_o = lower.as_bytes().get(lower.len().wrapping_sub(2)).copied().unwrap_or(0);
+        let before_o = lower
+            .as_bytes()
+            .get(lower.len().wrapping_sub(2))
+            .copied()
+            .unwrap_or(0);
         if is_vowel(before_o) {
             return format!("{word}s");
         }
         // Special cases: words that take -os
-        let os_words = ["photo", "piano", "memo", "solo", "zero", "auto", "euro", "kilo"];
+        let os_words = [
+            "photo", "piano", "memo", "solo", "zero", "auto", "euro", "kilo",
+        ];
         if os_words.contains(&lower.as_str()) {
             return format!("{word}s");
         }
         // hero -> heroes, potato -> potatoes
         return format!("{word}es");
     }
-    if lower.ends_with("s") || lower.ends_with("x") || lower.ends_with("z")
-        || lower.ends_with("ch") || lower.ends_with("sh")
+    if lower.ends_with("s")
+        || lower.ends_with("x")
+        || lower.ends_with("z")
+        || lower.ends_with("ch")
+        || lower.ends_with("sh")
     {
         return format!("{word}es");
     }
@@ -182,8 +304,11 @@ pub fn singularize(word: &str) -> String {
         // indices -> index, vertices -> vertex (Latin ix/ex plurals)
         return format!("{}ex", &word[..word.len() - 4]);
     }
-    if lower.ends_with("ses") || lower.ends_with("xes") || lower.ends_with("zes")
-        || lower.ends_with("ches") || lower.ends_with("shes")
+    if lower.ends_with("ses")
+        || lower.ends_with("xes")
+        || lower.ends_with("zes")
+        || lower.ends_with("ches")
+        || lower.ends_with("shes")
     {
         return word[..word.len() - 2].to_string();
     }
@@ -195,7 +320,10 @@ pub fn singularize(word: &str) -> String {
 }
 
 fn is_vowel(byte: u8) -> bool {
-    matches!(byte, b'a' | b'e' | b'i' | b'o' | b'u' | b'A' | b'E' | b'I' | b'O' | b'U')
+    matches!(
+        byte,
+        b'a' | b'e' | b'i' | b'o' | b'u' | b'A' | b'E' | b'I' | b'O' | b'U'
+    )
 }
 
 /// Attempt to preserve the case pattern of the original word when replacing.
@@ -367,4 +495,3 @@ mod tests {
         assert_eq!(singularize("child"), "child");
     }
 }
-

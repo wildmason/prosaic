@@ -5,7 +5,7 @@
 //! unit tests — Rust would see two copies of prosaic-core and the Language
 //! trait bound would fail.
 
-use prosaic_core::{ctx, score_faithfulness, FaithfulnessScore, PolarityDrift};
+use prosaic_core::{FaithfulnessScore, PolarityDrift, ctx, score_faithfulness};
 use prosaic_grammar_en::English;
 
 fn lang() -> English {
@@ -24,7 +24,10 @@ fn faithful_simple_rename() {
     let lits: &[&str] = &["The ", " was renamed to ", "."];
     let output = "The class UserService was renamed to AccountService.";
     let score = score_faithfulness(output, &ctx, lits, &lang());
-    assert_eq!(score.precision, 1.0, "all content tokens should be entailed");
+    assert_eq!(
+        score.precision, 1.0,
+        "all content tokens should be entailed"
+    );
     assert!(score.polarity_match);
     assert!(score.unentailed.is_empty());
 }
@@ -193,12 +196,7 @@ fn assert_faithful_passes_on_faithful_output() {
     let ctx = ctx! { name: "UserService", action: "renamed" };
     let lits: &[&str] = &["The class ", " was ", "."];
     // Should not panic
-    prosaic_core::assert_faithful!(
-        "The class UserService was renamed.",
-        ctx,
-        lits,
-        &lang()
-    );
+    prosaic_core::assert_faithful!("The class UserService was renamed.", ctx, lits, &lang());
 }
 
 #[test]

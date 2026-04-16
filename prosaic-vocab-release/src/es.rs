@@ -52,11 +52,7 @@ fn register_tagged(engine: &mut Engine) -> Result<(), ProsaicError> {
 
 fn register_feature_added(engine: &mut Engine) -> Result<(), ProsaicError> {
     // Low: conciso
-    engine.register_template_at(
-        "release.feature_added",
-        "Se agregó {name}",
-        Salience::Low,
-    )?;
+    engine.register_template_at("release.feature_added", "Se agregó {name}", Salience::Low)?;
 
     // Medium: nombra la funcionalidad, muestra descripción si está presente
     engine.register_template(
@@ -94,11 +90,7 @@ fn register_breaking_change(engine: &mut Engine) -> Result<(), ProsaicError> {
 
 fn register_bugfix(engine: &mut Engine) -> Result<(), ProsaicError> {
     // Low: solo la descripción
-    engine.register_template_at(
-        "release.bugfix",
-        "Corregido: {description}",
-        Salience::Low,
-    )?;
+    engine.register_template_at("release.bugfix", "Corregido: {description}", Salience::Low)?;
 
     // Medium: enlaza con el número de incidencia cuando está disponible
     engine.register_template(
@@ -211,10 +203,7 @@ fn register_stats(engine: &mut Engine) -> Result<(), ProsaicError> {
 
 fn register_summary(engine: &mut Engine) -> Result<(), ProsaicError> {
     // Medium: titular conciso
-    engine.register_template(
-        "release.summary",
-        "{version}: {headline}",
-    )?;
+    engine.register_template("release.summary", "{version}: {headline}")?;
 
     // High: anuncio elaborado de la versión
     engine.register_template_at(

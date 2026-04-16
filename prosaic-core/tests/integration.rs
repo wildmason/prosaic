@@ -1,6 +1,7 @@
 use prosaic_core::{
-    subject, named, entity, Clause, Context, DocumentPlan, Engine, EntityDescriptor, GroupingStrategy,
-    RhetoricalCategory, Salience, Sentence, Session, Strictness, Tense, Value, Variation, VerbForm, Voice,
+    Clause, Context, DocumentPlan, Engine, EntityDescriptor, GroupingStrategy, RhetoricalCategory,
+    Salience, Sentence, Session, Strictness, Tense, Value, Variation, VerbForm, Voice, entity,
+    named, subject,
 };
 use prosaic_derive::IntoContext;
 use prosaic_grammar_en::English;
@@ -68,10 +69,7 @@ fn full_rename_scenario_single_consumer() {
     ctx.insert("old_name", Value::String("IUser".into()));
     ctx.insert("new_name", Value::String("User".into()));
     ctx.insert("count", Value::Number(1));
-    ctx.insert(
-        "consumers",
-        Value::List(vec!["UserService".into()]),
-    );
+    ctx.insert("consumers", Value::List(vec!["UserService".into()]));
     let mut session = Session::new();
 
     let result = engine.render(&mut session, "renamed", &ctx).unwrap();
@@ -154,11 +152,7 @@ fn builder_future_tense_passive() {
     let result = Sentence::new()
         .subject(subject("method", "fetchData"))
         .verb("break", Tense::Future)
-        .clause(
-            Clause::with_intro("in")
-                .amount(3)
-                .noun("test"),
-        )
+        .clause(Clause::with_intro("in").amount(3).noun("test"))
         .render(&engine)
         .unwrap();
 
@@ -173,11 +167,7 @@ fn builder_future_tense_active() {
         .subject(subject("method", "fetchData"))
         .verb("break", Tense::Future)
         .voice(Voice::Active)
-        .clause(
-            Clause::with_intro("in")
-                .amount(3)
-                .noun("test"),
-        )
+        .clause(Clause::with_intro("in").amount(3).noun("test"))
         .render(&engine)
         .unwrap();
 
@@ -534,11 +524,7 @@ fn by_action_produces_section_style_narrative() {
         ("code.deleted", del),
     ];
 
-    let plan = DocumentPlan::from_events_grouped(
-        &events,
-        &engine,
-        GroupingStrategy::ByAction,
-    );
+    let plan = DocumentPlan::from_events_grouped(&events, &engine, GroupingStrategy::ByAction);
 
     assert_eq!(plan.paragraphs.len(), 3);
     assert_eq!(
@@ -682,7 +668,11 @@ fn derive_with_template_rendering() {
         entity_type: "service".into(),
         name: "AuthService".into(),
         consumer_count: 3,
-        consumers: vec!["LoginPage".into(), "SignupPage".into(), "AdminDashboard".into()],
+        consumers: vec![
+            "LoginPage".into(),
+            "SignupPage".into(),
+            "AdminDashboard".into(),
+        ],
     };
     let mut session = Session::new();
 
@@ -749,9 +739,15 @@ fn discourse_avoids_repeating_same_variant() {
         .strictness(Strictness::Strict)
         .variation(Variation::Seeded(1));
 
-    engine.register_template("t", "alpha distinct tokens").unwrap();
-    engine.register_template("t", "beta different tokens").unwrap();
-    engine.register_template("t", "gamma unique tokens").unwrap();
+    engine
+        .register_template("t", "alpha distinct tokens")
+        .unwrap();
+    engine
+        .register_template("t", "beta different tokens")
+        .unwrap();
+    engine
+        .register_template("t", "gamma unique tokens")
+        .unwrap();
 
     let ctx = Context::new();
     let mut session = Session::new();
@@ -823,7 +819,9 @@ fn empty_list_join() {
     ctx.insert("items", Value::List(vec![]));
     let mut session = Session::new();
 
-    let result = engine.render_inline(&mut session, "{items|join}", &ctx).unwrap();
+    let result = engine
+        .render_inline(&mut session, "{items|join}", &ctx)
+        .unwrap();
     assert_eq!(result, "");
 }
 
@@ -834,7 +832,9 @@ fn single_item_join() {
     ctx.insert("items", Value::List(vec!["only".into()]));
     let mut session = Session::new();
 
-    let result = engine.render_inline(&mut session, "{items|join}", &ctx).unwrap();
+    let result = engine
+        .render_inline(&mut session, "{items|join}", &ctx)
+        .unwrap();
     assert_eq!(result, "only");
 }
 
@@ -845,7 +845,9 @@ fn two_item_join() {
     ctx.insert("items", Value::List(vec!["alpha".into(), "beta".into()]));
     let mut session = Session::new();
 
-    let result = engine.render_inline(&mut session, "{items|join}", &ctx).unwrap();
+    let result = engine
+        .render_inline(&mut session, "{items|join}", &ctx)
+        .unwrap();
     assert_eq!(result, "alpha and beta");
 }
 
@@ -856,7 +858,9 @@ fn truncate_when_under_limit_is_noop() {
     ctx.insert("items", Value::List(vec!["a".into(), "b".into()]));
     let mut session = Session::new();
 
-    let result = engine.render_inline(&mut session, "{items|truncate:5|join}", &ctx).unwrap();
+    let result = engine
+        .render_inline(&mut session, "{items|truncate:5|join}", &ctx)
+        .unwrap();
     assert_eq!(result, "a and b");
 }
 
@@ -867,7 +871,9 @@ fn number_as_words() {
     ctx.insert("n", Value::Number(42));
     let mut session = Session::new();
 
-    let result = engine.render_inline(&mut session, "{n|words}", &ctx).unwrap();
+    let result = engine
+        .render_inline(&mut session, "{n|words}", &ctx)
+        .unwrap();
     assert_eq!(result, "forty-two");
 }
 
@@ -878,7 +884,9 @@ fn ordinal_rendering() {
     ctx.insert("n", Value::Number(3));
     let mut session = Session::new();
 
-    let result = engine.render_inline(&mut session, "{n|ordinal}", &ctx).unwrap();
+    let result = engine
+        .render_inline(&mut session, "{n|ordinal}", &ctx)
+        .unwrap();
     assert_eq!(result, "3rd");
 }
 
@@ -889,7 +897,9 @@ fn capitalize_rendering() {
     ctx.insert("word", Value::String("hello world".into()));
     let mut session = Session::new();
 
-    let result = engine.render_inline(&mut session, "{word|capitalize}", &ctx).unwrap();
+    let result = engine
+        .render_inline(&mut session, "{word|capitalize}", &ctx)
+        .unwrap();
     assert_eq!(result, "Hello world");
 }
 
@@ -900,16 +910,36 @@ fn article_rendering() {
     let mut ctx = Context::new();
     ctx.insert("thing", Value::String("apple".into()));
     let mut session = Session::new();
-    assert_eq!(engine.render_inline(&mut session, "{thing|article}", &ctx).unwrap(), "an apple");
+    assert_eq!(
+        engine
+            .render_inline(&mut session, "{thing|article}", &ctx)
+            .unwrap(),
+        "an apple"
+    );
 
     ctx.insert("thing", Value::String("banana".into()));
-    assert_eq!(engine.render_inline(&mut session, "{thing|article}", &ctx).unwrap(), "a banana");
+    assert_eq!(
+        engine
+            .render_inline(&mut session, "{thing|article}", &ctx)
+            .unwrap(),
+        "a banana"
+    );
 
     ctx.insert("thing", Value::String("hour".into()));
-    assert_eq!(engine.render_inline(&mut session, "{thing|article}", &ctx).unwrap(), "an hour");
+    assert_eq!(
+        engine
+            .render_inline(&mut session, "{thing|article}", &ctx)
+            .unwrap(),
+        "an hour"
+    );
 
     ctx.insert("thing", Value::String("university".into()));
-    assert_eq!(engine.render_inline(&mut session, "{thing|article}", &ctx).unwrap(), "a university");
+    assert_eq!(
+        engine
+            .render_inline(&mut session, "{thing|article}", &ctx)
+            .unwrap(),
+        "a university"
+    );
 }
 
 // ── Snapshot-style tests: exact output for realistic scenarios ────────────
@@ -1001,7 +1031,9 @@ fn snapshot_method_signature_change() {
 #[test]
 fn batch_produces_periods_between_sentences() {
     let mut engine = engine();
-    engine.register_template("simple", "{name|refer} was modified").unwrap();
+    engine
+        .register_template("simple", "{name|refer} was modified")
+        .unwrap();
 
     let mut ctx1 = Context::new();
     ctx1.insert("entity_type", Value::String("class".into()));
@@ -1011,25 +1043,24 @@ fn batch_produces_periods_between_sentences() {
     ctx2.insert("entity_type", Value::String("class".into()));
     ctx2.insert("name", Value::String("Bar".into()));
 
-    let events: Vec<(&str, Context)> = vec![
-        ("simple", ctx1),
-        ("simple", ctx2),
-    ];
+    let events: Vec<(&str, Context)> = vec![("simple", ctx1), ("simple", ctx2)];
     let mut session = Session::new();
 
     let result = engine.render_batch(&mut session, &events).unwrap();
 
     // Two sentences, both terminated
-    assert!(result.contains("."), "Expected periods in batch output, got: {result}");
+    assert!(
+        result.contains("."),
+        "Expected periods in batch output, got: {result}"
+    );
 }
 
 #[test]
 fn batch_aggregates_same_action_different_subjects() {
     let mut engine = engine();
-    engine.register_template(
-        "code.renamed",
-        "{old_name|refer} was renamed",
-    ).unwrap();
+    engine
+        .register_template("code.renamed", "{old_name|refer} was renamed")
+        .unwrap();
 
     let mut ctx1 = Context::new();
     ctx1.insert("entity_type", Value::String("class".into()));
@@ -1039,10 +1070,7 @@ fn batch_aggregates_same_action_different_subjects() {
     ctx2.insert("entity_type", Value::String("class".into()));
     ctx2.insert("old_name", Value::String("AuthService".into()));
 
-    let events: Vec<(&str, Context)> = vec![
-        ("code.renamed", ctx1),
-        ("code.renamed", ctx2),
-    ];
+    let events: Vec<(&str, Context)> = vec![("code.renamed", ctx1), ("code.renamed", ctx2)];
     let mut session = Session::new();
 
     let result = engine.render_batch(&mut session, &events).unwrap();
@@ -1057,8 +1085,12 @@ fn batch_aggregates_same_action_different_subjects() {
 #[test]
 fn batch_sequential_when_entities_differ_across_actions() {
     let mut engine = engine();
-    engine.register_template("code.renamed", "{name|refer} was renamed").unwrap();
-    engine.register_template("code.deleted", "{name|refer} was removed").unwrap();
+    engine
+        .register_template("code.renamed", "{name|refer} was renamed")
+        .unwrap();
+    engine
+        .register_template("code.deleted", "{name|refer} was removed")
+        .unwrap();
 
     let mut ctx1 = Context::new();
     ctx1.insert("entity_type", Value::String("class".into()));
@@ -1068,10 +1100,7 @@ fn batch_sequential_when_entities_differ_across_actions() {
     ctx2.insert("entity_type", Value::String("interface".into()));
     ctx2.insert("name", Value::String("Bar".into()));
 
-    let events: Vec<(&str, Context)> = vec![
-        ("code.renamed", ctx1),
-        ("code.deleted", ctx2),
-    ];
+    let events: Vec<(&str, Context)> = vec![("code.renamed", ctx1), ("code.deleted", ctx2)];
     let mut session = Session::new();
 
     let result = engine.render_batch(&mut session, &events).unwrap();
@@ -1079,7 +1108,10 @@ fn batch_sequential_when_entities_differ_across_actions() {
     // Different actions, different entities — sequential
     // Periods should separate the sentences
     let period_count = result.matches('.').count();
-    assert!(period_count >= 2, "Expected 2 periods for 2 sentences, got {period_count}: {result}");
+    assert!(
+        period_count >= 2,
+        "Expected 2 periods for 2 sentences, got {period_count}: {result}"
+    );
 }
 
 // ── Conditional sections ────────────────────────────────────────────────
@@ -1087,10 +1119,12 @@ fn batch_sequential_when_entities_differ_across_actions() {
 #[test]
 fn conditional_section_skipped_when_zero() {
     let mut engine = engine();
-    engine.register_template(
-        "t",
-        "{name|refer} was removed{?count}, impacting {count} {count|pluralize:consumer}{/?}",
-    ).unwrap();
+    engine
+        .register_template(
+            "t",
+            "{name|refer} was removed{?count}, impacting {count} {count|pluralize:consumer}{/?}",
+        )
+        .unwrap();
 
     let mut ctx = Context::new();
     ctx.insert("entity_type", Value::String("class".into()));
@@ -1101,16 +1135,21 @@ fn conditional_section_skipped_when_zero() {
     let result = engine.render(&mut session, "t", &ctx).unwrap();
     // 0 count — conditional should be skipped entirely
     assert_eq!(result, "The class Foo was removed.");
-    assert!(!result.contains("0"), "Should not contain '0', got: {result}");
+    assert!(
+        !result.contains("0"),
+        "Should not contain '0', got: {result}"
+    );
 }
 
 #[test]
 fn conditional_section_rendered_when_nonzero() {
     let mut engine = engine();
-    engine.register_template(
-        "t",
-        "{name|refer} was removed{?count}, impacting {count} {count|pluralize:consumer}{/?}",
-    ).unwrap();
+    engine
+        .register_template(
+            "t",
+            "{name|refer} was removed{?count}, impacting {count} {count|pluralize:consumer}{/?}",
+        )
+        .unwrap();
 
     let mut ctx = Context::new();
     ctx.insert("entity_type", Value::String("class".into()));
@@ -1125,10 +1164,9 @@ fn conditional_section_rendered_when_nonzero() {
 #[test]
 fn conditional_section_skipped_for_empty_list() {
     let mut engine = engine();
-    engine.register_template(
-        "t",
-        "Added item{?items} with refs: {items|join}{/?}",
-    ).unwrap();
+    engine
+        .register_template("t", "Added item{?items} with refs: {items|join}{/?}")
+        .unwrap();
 
     let mut ctx = Context::new();
     ctx.insert("items", Value::List(vec![]));
@@ -1141,10 +1179,9 @@ fn conditional_section_skipped_for_empty_list() {
 #[test]
 fn conditional_section_rendered_for_nonempty_list() {
     let mut engine = engine();
-    engine.register_template(
-        "t",
-        "Added item{?items} with refs: {items|join}{/?}",
-    ).unwrap();
+    engine
+        .register_template("t", "Added item{?items} with refs: {items|join}{/?}")
+        .unwrap();
 
     let mut ctx = Context::new();
     ctx.insert("items", Value::List(vec!["a".into(), "b".into()]));
@@ -1157,10 +1194,9 @@ fn conditional_section_rendered_for_nonempty_list() {
 #[test]
 fn conditional_section_skipped_when_key_missing() {
     let mut engine = engine();
-    engine.register_template(
-        "t",
-        "Always{?optional}, maybe{/?}",
-    ).unwrap();
+    engine
+        .register_template("t", "Always{?optional}, maybe{/?}")
+        .unwrap();
 
     let ctx = Context::new();
     let mut session = Session::new();
@@ -1168,7 +1204,10 @@ fn conditional_section_skipped_when_key_missing() {
 
     let result = engine.render(&mut session, "t", &ctx).unwrap();
     // Should not include the conditional content
-    assert!(!result.contains("maybe"), "Should skip missing-key conditional, got: {result}");
+    assert!(
+        !result.contains("maybe"),
+        "Should skip missing-key conditional, got: {result}"
+    );
 }
 
 // ── Salience-based template selection ────────────────────────────────────
@@ -1176,9 +1215,15 @@ fn conditional_section_skipped_when_key_missing() {
 #[test]
 fn salience_selects_correct_level() {
     let mut engine = engine();
-    engine.register_template_at("event", "terse {name}", Salience::Low).unwrap();
-    engine.register_template("event", "standard {name} with impact").unwrap();
-    engine.register_template_at("event", "elaborate full account of {name}", Salience::High).unwrap();
+    engine
+        .register_template_at("event", "terse {name}", Salience::Low)
+        .unwrap();
+    engine
+        .register_template("event", "standard {name} with impact")
+        .unwrap();
+    engine
+        .register_template_at("event", "elaborate full account of {name}", Salience::High)
+        .unwrap();
 
     let mut ctx_low = Context::new();
     ctx_low.insert("name", Value::String("Foo".into()));
@@ -1194,20 +1239,31 @@ fn salience_selects_correct_level() {
 
     let mut session = Session::new();
     let low = engine.render(&mut session, "event", &ctx_low).unwrap();
-    assert!(low.starts_with("terse"), "Expected low template, got: {low}");
+    assert!(
+        low.starts_with("terse"),
+        "Expected low template, got: {low}"
+    );
     session.reset();
     let med = engine.render(&mut session, "event", &ctx_med).unwrap();
-    assert!(med.starts_with("standard"), "Expected medium template, got: {med}");
+    assert!(
+        med.starts_with("standard"),
+        "Expected medium template, got: {med}"
+    );
     session.reset();
     let high = engine.render(&mut session, "event", &ctx_high).unwrap();
-    assert!(high.starts_with("elaborate"), "Expected high template, got: {high}");
+    assert!(
+        high.starts_with("elaborate"),
+        "Expected high template, got: {high}"
+    );
 }
 
 #[test]
 fn salience_falls_back_to_medium_when_level_missing() {
     let mut engine = engine();
     // Only register Medium
-    engine.register_template("event", "standard for {name}").unwrap();
+    engine
+        .register_template("event", "standard for {name}")
+        .unwrap();
 
     let mut ctx = Context::new();
     ctx.insert("name", Value::String("Foo".into()));
@@ -1215,14 +1271,21 @@ fn salience_falls_back_to_medium_when_level_missing() {
     let mut session = Session::new();
 
     let result = engine.render(&mut session, "event", &ctx).unwrap();
-    assert!(result.contains("standard"), "Expected fallback to Medium, got: {result}");
+    assert!(
+        result.contains("standard"),
+        "Expected fallback to Medium, got: {result}"
+    );
 }
 
 #[test]
 fn explicit_salience_key_overrides_count() {
     let mut engine = engine();
-    engine.register_template_at("event", "low {name}", Salience::Low).unwrap();
-    engine.register_template_at("event", "high {name}", Salience::High).unwrap();
+    engine
+        .register_template_at("event", "low {name}", Salience::Low)
+        .unwrap();
+    engine
+        .register_template_at("event", "high {name}", Salience::High)
+        .unwrap();
 
     let mut ctx = Context::new();
     ctx.insert("name", Value::String("Foo".into()));
@@ -1231,7 +1294,10 @@ fn explicit_salience_key_overrides_count() {
     let mut session = Session::new();
 
     let result = engine.render(&mut session, "event", &ctx).unwrap();
-    assert!(result.contains("low"), "Expected Low from explicit override, got: {result}");
+    assert!(
+        result.contains("low"),
+        "Expected Low from explicit override, got: {result}"
+    );
 }
 
 // ── Value::Entity rendering integration ──────────────────────────────────────
@@ -1249,20 +1315,25 @@ fn entity_in_template_renders_as_name() {
 #[test]
 fn entity_with_refer_pipe_uses_name_for_lookup() {
     let mut eng = Engine::new(English::new()).strictness(Strictness::Silent);
-    eng.register_template("t", "{user|refer} logged in.").unwrap();
+    eng.register_template("t", "{user|refer} logged in.")
+        .unwrap();
     let mut session = Session::new();
     let c = prosaic_core::ctx! {
         user: entity("Alice").fem().sing(),
         entity_type: "user",
     };
     let out = eng.render(&mut session, "t", &c).unwrap();
-    assert!(out.contains("Alice"), "entity name should appear: got {out}");
+    assert!(
+        out.contains("Alice"),
+        "entity name should appear: got {out}"
+    );
 }
 
 #[test]
 fn entity_truthy_in_conditional_template() {
     let mut eng = Engine::new(English::new()).strictness(Strictness::Silent);
-    eng.register_template("t", "Hello{?name}, {name}{/?}!").unwrap();
+    eng.register_template("t", "Hello{?name}, {name}{/?}!")
+        .unwrap();
     let mut session = Session::new();
     let c = prosaic_core::ctx! { name: entity("Bob").masc() };
     let out = eng.render(&mut session, "t", &c).unwrap();
@@ -1277,7 +1348,8 @@ fn plural_refer_emits_the_count_type() {
     let mut eng = Engine::new(English::new())
         .strictness(Strictness::Silent)
         .variation(Variation::Fixed);
-    eng.register_template("t", "{names|refer} were modified").unwrap();
+    eng.register_template("t", "{names|refer} were modified")
+        .unwrap();
     let mut session = Session::new();
     let mut ctx = Context::new();
     ctx.insert("entity_type", Value::String("class".into()));
@@ -1292,10 +1364,7 @@ fn plural_refer_emits_the_count_type() {
     let out = eng.render(&mut session, "t", &ctx).unwrap();
     // The engine capitalises the first word when the template starts with |refer,
     // so "the 3 classes" becomes "The 3 classes" at sentence start.
-    assert!(
-        out.to_lowercase().contains("the 3 classes"),
-        "got: {out}"
-    );
+    assert!(out.to_lowercase().contains("the 3 classes"), "got: {out}");
 }
 
 /// Single-item list delegates to the single-entity path (no count phrase).
@@ -1304,7 +1373,8 @@ fn plural_refer_single_item_uses_singular_path() {
     let mut eng = Engine::new(English::new())
         .strictness(Strictness::Silent)
         .variation(Variation::Fixed);
-    eng.register_template("t", "{names|refer} was modified").unwrap();
+    eng.register_template("t", "{names|refer} was modified")
+        .unwrap();
     let mut session = Session::new();
     let mut ctx = Context::new();
     ctx.insert("entity_type", Value::String("class".into()));
@@ -1346,9 +1416,11 @@ fn plural_refer_updates_discourse_focus_to_plural() {
         .strictness(Strictness::Silent)
         .variation(Variation::Fixed);
     // Render plural refer first to set focus_is_plural = true.
-    eng.register_template("t1", "{names|refer} were updated").unwrap();
+    eng.register_template("t1", "{names|refer} were updated")
+        .unwrap();
     // Render a pronoun-form refer for an entity already mentioned individually.
-    eng.register_template("t2", "{name|refer} was deployed").unwrap();
+    eng.register_template("t2", "{name|refer} was deployed")
+        .unwrap();
 
     let mut session = Session::new();
 
@@ -1361,10 +1433,7 @@ fn plural_refer_updates_discourse_focus_to_plural() {
     // First render: plural REG should set focus_is_plural = true.
     let out1 = eng.render(&mut session, "t1", &ctx1).unwrap();
     // The engine capitalises when the template starts with |refer.
-    assert!(
-        out1.to_lowercase().contains("the 3 classes"),
-        "got: {out1}"
-    );
+    assert!(out1.to_lowercase().contains("the 3 classes"), "got: {out1}");
 
     // Verify the plural description was emitted correctly.
     assert!(
@@ -1397,7 +1466,8 @@ fn plural_refer_pipe_arg_overrides_context_entity_type() {
         .strictness(Strictness::Silent)
         .variation(Variation::Fixed);
     // entity_type arg "service" wins over context "class".
-    eng.register_template("t", "{names|refer:service} were affected").unwrap();
+    eng.register_template("t", "{names|refer:service} were affected")
+        .unwrap();
     let mut session = Session::new();
     let mut ctx = Context::new();
     ctx.insert("entity_type", Value::String("class".into()));
@@ -1408,5 +1478,8 @@ fn plural_refer_pipe_arg_overrides_context_entity_type() {
     let out = eng.render(&mut session, "t", &ctx).unwrap();
     // Engine capitalises the first word when the template starts with |refer.
     assert!(out.to_lowercase().contains("the 3 services"), "got: {out}");
-    assert!(!out.contains("classes"), "should use pipe arg, not context: {out}");
+    assert!(
+        !out.contains("classes"),
+        "should use pipe arg, not context: {out}"
+    );
 }

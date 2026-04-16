@@ -71,10 +71,7 @@ mod tests {
         let mut ctx = Context::new();
         ctx.insert("author", Value::String("Alice".into()));
         ctx.insert("files_changed", Value::Number(5));
-        ctx.insert(
-            "message",
-            Value::String("refactor the parser".into()),
-        );
+        ctx.insert("message", Value::String("refactor the parser".into()));
         ctx.insert("additions", Value::Number(40));
         ctx.insert("deletions", Value::Number(10));
         let mut session = Session::new();
@@ -121,10 +118,15 @@ mod tests {
         let mut ctx = Context::new();
         ctx.insert("author", Value::String("Dave".into()));
         ctx.insert("number", Value::Number(99));
-        ctx.insert("title", Value::String("Server returns 500 on logout".into()));
+        ctx.insert(
+            "title",
+            Value::String("Server returns 500 on logout".into()),
+        );
         let mut session = Session::new();
 
-        let result = engine.render(&mut session, "git.issue_opened", &ctx).unwrap();
+        let result = engine
+            .render(&mut session, "git.issue_opened", &ctx)
+            .unwrap();
         assert!(result.contains("#99"), "got: {result}");
     }
 
@@ -137,7 +139,9 @@ mod tests {
         ctx.insert("comment_count", Value::Number(3));
         let mut session = Session::new();
 
-        let result = engine.render(&mut session, "git.review_changes_requested", &ctx).unwrap();
+        let result = engine
+            .render(&mut session, "git.review_changes_requested", &ctx)
+            .unwrap();
         assert!(result.contains("3 comments"), "got: {result}");
     }
 
@@ -173,10 +177,7 @@ mod tests {
         session.reset();
 
         let result = engine.render(&mut session, "git.commit", &ctx).unwrap();
-        assert!(
-            result.contains("Alice"),
-            "got: {result}"
-        );
+        assert!(result.contains("Alice"), "got: {result}");
     }
 }
 
@@ -200,7 +201,10 @@ mod tests_es {
         let mut ctx = Context::new();
         ctx.insert("author", Value::String("Alice".into()));
         ctx.insert("files_changed", Value::Number(5));
-        ctx.insert("message", Value::String("refactorizar el analizador".into()));
+        ctx.insert(
+            "message",
+            Value::String("refactorizar el analizador".into()),
+        );
         ctx.insert("additions", Value::Number(40));
         ctx.insert("deletions", Value::Number(10));
         let mut session = Session::new();
@@ -208,7 +212,10 @@ mod tests_es {
         let result = engine.render(&mut session, "git.commit", &ctx).unwrap();
         assert!(result.contains("Alice"), "got: {result}");
         assert!(result.contains("5"), "got: {result}");
-        assert!(result.contains("archivo"), "Expected Spanish 'archivo', got: {result}");
+        assert!(
+            result.contains("archivo"),
+            "Expected Spanish 'archivo', got: {result}"
+        );
     }
 
     #[test]
@@ -217,7 +224,10 @@ mod tests_es {
         let mut ctx = Context::new();
         ctx.insert("author", Value::String("Bob".into()));
         ctx.insert("number", Value::Number(42));
-        ctx.insert("title", Value::String("Agregar lógica de reintentos".into()));
+        ctx.insert(
+            "title",
+            Value::String("Agregar lógica de reintentos".into()),
+        );
         let mut session = Session::new();
 
         let result = engine.render(&mut session, "git.pr_opened", &ctx).unwrap();
@@ -237,8 +247,10 @@ mod tests_es {
         let result = engine.render(&mut session, "git.pr_merged", &ctx).unwrap();
         assert!(result.contains("#17"), "got: {result}");
         assert!(result.contains("Charlie"), "got: {result}");
-        assert!(result.contains("fusionado") || result.contains("fusionó"),
-            "Expected Spanish merge phrase, got: {result}");
+        assert!(
+            result.contains("fusionado") || result.contains("fusionó"),
+            "Expected Spanish merge phrase, got: {result}"
+        );
     }
 
     #[test]
@@ -247,12 +259,20 @@ mod tests_es {
         let mut ctx = Context::new();
         ctx.insert("author", Value::String("Dave".into()));
         ctx.insert("number", Value::Number(99));
-        ctx.insert("title", Value::String("El servidor devuelve 500 al cerrar sesión".into()));
+        ctx.insert(
+            "title",
+            Value::String("El servidor devuelve 500 al cerrar sesión".into()),
+        );
         let mut session = Session::new();
 
-        let result = engine.render(&mut session, "git.issue_opened", &ctx).unwrap();
+        let result = engine
+            .render(&mut session, "git.issue_opened", &ctx)
+            .unwrap();
         assert!(result.contains("#99"), "got: {result}");
-        assert!(result.contains("incidencia"), "Expected Spanish 'incidencia', got: {result}");
+        assert!(
+            result.contains("incidencia"),
+            "Expected Spanish 'incidencia', got: {result}"
+        );
     }
 
     #[test]
@@ -264,8 +284,13 @@ mod tests_es {
         ctx.insert("comment_count", Value::Number(3));
         let mut session = Session::new();
 
-        let result = engine.render(&mut session, "git.review_changes_requested", &ctx).unwrap();
-        assert!(result.contains("3 comentarios"), "Expected '3 comentarios', got: {result}");
+        let result = engine
+            .render(&mut session, "git.review_changes_requested", &ctx)
+            .unwrap();
+        assert!(
+            result.contains("3 comentarios"),
+            "Expected '3 comentarios', got: {result}"
+        );
     }
 
     #[test]
@@ -279,7 +304,9 @@ mod tests_es {
 
         let result = engine.render(&mut session, "git.release", &ctx).unwrap();
         assert!(result.contains("1.2.0"), "got: {result}");
-        assert!(result.contains("14") && result.contains("cambio"),
-            "Expected '14 cambios', got: {result}");
+        assert!(
+            result.contains("14") && result.contains("cambio"),
+            "Expected '14 cambios', got: {result}"
+        );
     }
 }

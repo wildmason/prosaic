@@ -76,11 +76,7 @@ fn register_rename_templates(engine: &mut Engine) -> Result<(), ProsaicError> {
 
 fn register_delete_templates(engine: &mut Engine) -> Result<(), ProsaicError> {
     // Low
-    engine.register_template_at(
-        "code.deleted",
-        "{name|refer} fue eliminado",
-        Salience::Low,
-    )?;
+    engine.register_template_at("code.deleted", "{name|refer} fue eliminado", Salience::Low)?;
     engine.register_template_at(
         "code.deleted",
         "{name|refer} ha sido eliminado",

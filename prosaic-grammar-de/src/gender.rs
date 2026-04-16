@@ -59,13 +59,11 @@ pub fn infer_gender(word: &str) -> Gender {
 fn exception_lookup(lower: &str) -> Option<Gender> {
     match lower {
         // Neuter exceptions
-        "mädchen" | "fräulein" | "kind" | "haus" | "buch" | "auto" | "wort"
-        | "bett" | "geld" | "jahr" | "land" | "licht" | "meer" | "tier" => {
-            Some(Gender::Neut)
-        }
+        "mädchen" | "fräulein" | "kind" | "haus" | "buch" | "auto" | "wort" | "bett" | "geld"
+        | "jahr" | "land" | "licht" | "meer" | "tier" => Some(Gender::Neut),
         // Masculine exceptions
-        "tisch" | "stuhl" | "mann" | "tag" | "monat" | "herbst" | "brief"
-        | "baum" | "berg" | "hund" | "zug" => Some(Gender::Masc),
+        "tisch" | "stuhl" | "mann" | "tag" | "monat" | "herbst" | "brief" | "baum" | "berg"
+        | "hund" | "zug" => Some(Gender::Masc),
         // Feminine exceptions
         "frau" | "nacht" | "stadt" | "hand" | "welt" | "zeit" => Some(Gender::Fem),
         _ => None,

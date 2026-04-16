@@ -54,11 +54,7 @@ impl EntityDescriptor {
     }
 
     /// Append an attribute. Chainable.
-    pub fn with_attribute(
-        mut self,
-        key: impl Into<String>,
-        value: impl Into<String>,
-    ) -> Self {
+    pub fn with_attribute(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
         self.attributes.push((key.into(), value.into()));
         self
     }
@@ -70,11 +66,7 @@ impl EntityDescriptor {
     /// (e.g. `"that calls"`). `target` is the name of the target entity.
     ///
     /// Relations are considered in insertion order during REG.
-    pub fn with_relation(
-        mut self,
-        label: impl Into<String>,
-        target: impl Into<String>,
-    ) -> Self {
+    pub fn with_relation(mut self, label: impl Into<String>, target: impl Into<String>) -> Self {
         self.relations.push((label.into(), target.into()));
         self
     }
@@ -281,7 +273,10 @@ pub fn distinguishing_subgraph(
 
     // Attributes alone were sufficient — no relation needed.
     if remaining.is_empty() {
-        return SubgraphDescription { attributes: attrs, relation: None };
+        return SubgraphDescription {
+            attributes: attrs,
+            relation: None,
+        };
     }
 
     // Walk target's relations in insertion order. Pick the first relation
@@ -301,7 +296,10 @@ pub fn distinguishing_subgraph(
     }
 
     // Exhausted — return best-effort (may still be ambiguous).
-    SubgraphDescription { attributes: attrs, relation: None }
+    SubgraphDescription {
+        attributes: attrs,
+        relation: None,
+    }
 }
 
 #[cfg(test)]
@@ -318,8 +316,8 @@ mod tests {
 
     #[test]
     fn no_distractors_yields_empty_attribute_list() {
-        let target = EntityDescriptor::new("UserService", "class")
-            .with_attribute("layer", "domain");
+        let target =
+            EntityDescriptor::new("UserService", "class").with_attribute("layer", "domain");
         let registry = reg_with(vec![target.clone()]);
         let attrs = distinguishing_attributes(&target, &registry, &[]);
         assert!(attrs.is_empty());
@@ -327,10 +325,9 @@ mod tests {
 
     #[test]
     fn different_type_distractor_does_not_force_attribute() {
-        let target = EntityDescriptor::new("UserService", "class")
-            .with_attribute("layer", "domain");
-        let other = EntityDescriptor::new("UserService", "trait")
-            .with_attribute("layer", "infra");
+        let target =
+            EntityDescriptor::new("UserService", "class").with_attribute("layer", "domain");
+        let other = EntityDescriptor::new("UserService", "trait").with_attribute("layer", "infra");
         let registry = reg_with(vec![target.clone(), other]);
         // Same name but different type — the head noun alone disambiguates.
         let attrs = distinguishing_attributes(&target, &registry, &[]);
@@ -339,10 +336,10 @@ mod tests {
 
     #[test]
     fn same_type_requires_distinguishing_attribute() {
-        let target = EntityDescriptor::new("UserService", "class")
-            .with_attribute("layer", "domain");
-        let distractor = EntityDescriptor::new("AuthService", "class")
-            .with_attribute("layer", "infra");
+        let target =
+            EntityDescriptor::new("UserService", "class").with_attribute("layer", "domain");
+        let distractor =
+            EntityDescriptor::new("AuthService", "class").with_attribute("layer", "infra");
         let registry = reg_with(vec![target.clone(), distractor]);
         let attrs = distinguishing_attributes(&target, &registry, &[]);
         assert_eq!(attrs, vec!["domain".to_string()]);
@@ -439,11 +436,7 @@ mod tests {
         let attrs = distinguishing_attributes(
             &target,
             &registry,
-            &[
-                "color".to_string(),
-                "size".to_string(),
-                "shape".to_string(),
-            ],
+            &["color".to_string(), "size".to_string(), "shape".to_string()],
         );
         // color alone is enough; size and shape must not be included.
         assert_eq!(attrs, vec!["red".to_string()]);
@@ -467,8 +460,7 @@ mod tests {
 
     #[test]
     fn missing_attribute_on_target_skips_without_panic() {
-        let target = EntityDescriptor::new("Foo", "widget")
-            .with_attribute("size", "small");
+        let target = EntityDescriptor::new("Foo", "widget").with_attribute("size", "small");
         let d1 = EntityDescriptor::new("Bar", "widget").with_attribute("size", "large");
 
         let registry = reg_with(vec![target.clone(), d1]);
@@ -510,8 +502,7 @@ mod tests {
 
     #[test]
     fn with_relation_adds_edge() {
-        let e = EntityDescriptor::new("Handler", "function")
-            .with_relation("calls", "AuthService");
+        let e = EntityDescriptor::new("Handler", "function").with_relation("calls", "AuthService");
         assert_eq!(
             e.relations,
             vec![("calls".to_string(), "AuthService".to_string())]
@@ -547,10 +538,9 @@ mod tests {
 
     #[test]
     fn graph_reg_falls_back_to_dale_reiter_when_attributes_suffice() {
-        let target = EntityDescriptor::new("UserService", "class")
-            .with_attribute("layer", "domain");
-        let other = EntityDescriptor::new("AuthService", "class")
-            .with_attribute("layer", "infra");
+        let target =
+            EntityDescriptor::new("UserService", "class").with_attribute("layer", "domain");
+        let other = EntityDescriptor::new("AuthService", "class").with_attribute("layer", "infra");
         let registry = reg_with(vec![target.clone(), other]);
         let desc = distinguishing_subgraph(&target, &registry, &[]);
         assert_eq!(desc.attributes, vec!["domain".to_string()]);
@@ -599,10 +589,8 @@ mod tests {
     fn graph_reg_gives_up_when_nothing_distinguishes() {
         // Two identical entities — no attributes, no distinguishing
         // relations.
-        let target = EntityDescriptor::new("Foo", "thing")
-            .with_relation("calls", "X");
-        let other = EntityDescriptor::new("Bar", "thing")
-            .with_relation("calls", "X");
+        let target = EntityDescriptor::new("Foo", "thing").with_relation("calls", "X");
+        let other = EntityDescriptor::new("Bar", "thing").with_relation("calls", "X");
         let registry = reg_with(vec![target.clone(), other]);
         let desc = distinguishing_subgraph(&target, &registry, &[]);
         // Returns whatever attributes D&R could find (none here) and no

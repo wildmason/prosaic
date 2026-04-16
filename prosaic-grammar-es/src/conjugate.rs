@@ -17,44 +17,119 @@ fn irregular_lookup(verb: &str, tense: Tense, person: Person) -> Option<&'static
     let forms: Option<[&'static str; 6]> = match (verb, tense) {
         // ser
         ("ser", Tense::Present) => Some(["soy", "eres", "es", "somos", "sois", "son"]),
-        ("ser", Tense::Past)    => Some(["fui", "fuiste", "fue", "fuimos", "fuisteis", "fueron"]),
-        ("ser", Tense::Future)  => Some(["seré", "serás", "será", "seremos", "seréis", "serán"]),
+        ("ser", Tense::Past) => Some(["fui", "fuiste", "fue", "fuimos", "fuisteis", "fueron"]),
+        ("ser", Tense::Future) => Some(["seré", "serás", "será", "seremos", "seréis", "serán"]),
         // estar
         ("estar", Tense::Present) => Some(["estoy", "estás", "está", "estamos", "estáis", "están"]),
-        ("estar", Tense::Past)    => Some(["estuve", "estuviste", "estuvo", "estuvimos", "estuvisteis", "estuvieron"]),
-        ("estar", Tense::Future)  => Some(["estaré", "estarás", "estará", "estaremos", "estaréis", "estarán"]),
+        ("estar", Tense::Past) => Some([
+            "estuve",
+            "estuviste",
+            "estuvo",
+            "estuvimos",
+            "estuvisteis",
+            "estuvieron",
+        ]),
+        ("estar", Tense::Future) => Some([
+            "estaré",
+            "estarás",
+            "estará",
+            "estaremos",
+            "estaréis",
+            "estarán",
+        ]),
         // haber
         ("haber", Tense::Present) => Some(["he", "has", "ha", "hemos", "habéis", "han"]),
-        ("haber", Tense::Past)    => Some(["hube", "hubiste", "hubo", "hubimos", "hubisteis", "hubieron"]),
-        ("haber", Tense::Future)  => Some(["habré", "habrás", "habrá", "habremos", "habréis", "habrán"]),
+        ("haber", Tense::Past) => Some([
+            "hube",
+            "hubiste",
+            "hubo",
+            "hubimos",
+            "hubisteis",
+            "hubieron",
+        ]),
+        ("haber", Tense::Future) => {
+            Some(["habré", "habrás", "habrá", "habremos", "habréis", "habrán"])
+        }
         // tener
-        ("tener", Tense::Present) => Some(["tengo", "tienes", "tiene", "tenemos", "tenéis", "tienen"]),
-        ("tener", Tense::Past)    => Some(["tuve", "tuviste", "tuvo", "tuvimos", "tuvisteis", "tuvieron"]),
-        ("tener", Tense::Future)  => Some(["tendré", "tendrás", "tendrá", "tendremos", "tendréis", "tendrán"]),
+        ("tener", Tense::Present) => {
+            Some(["tengo", "tienes", "tiene", "tenemos", "tenéis", "tienen"])
+        }
+        ("tener", Tense::Past) => Some([
+            "tuve",
+            "tuviste",
+            "tuvo",
+            "tuvimos",
+            "tuvisteis",
+            "tuvieron",
+        ]),
+        ("tener", Tense::Future) => Some([
+            "tendré",
+            "tendrás",
+            "tendrá",
+            "tendremos",
+            "tendréis",
+            "tendrán",
+        ]),
         // ir
         ("ir", Tense::Present) => Some(["voy", "vas", "va", "vamos", "vais", "van"]),
-        ("ir", Tense::Past)    => Some(["fui", "fuiste", "fue", "fuimos", "fuisteis", "fueron"]),
-        ("ir", Tense::Future)  => Some(["iré", "irás", "irá", "iremos", "iréis", "irán"]),
+        ("ir", Tense::Past) => Some(["fui", "fuiste", "fue", "fuimos", "fuisteis", "fueron"]),
+        ("ir", Tense::Future) => Some(["iré", "irás", "irá", "iremos", "iréis", "irán"]),
         // ver
         ("ver", Tense::Present) => Some(["veo", "ves", "ve", "vemos", "veis", "ven"]),
-        ("ver", Tense::Past)    => Some(["vi", "viste", "vio", "vimos", "visteis", "vieron"]),
-        ("ver", Tense::Future)  => Some(["veré", "verás", "verá", "veremos", "veréis", "verán"]),
+        ("ver", Tense::Past) => Some(["vi", "viste", "vio", "vimos", "visteis", "vieron"]),
+        ("ver", Tense::Future) => Some(["veré", "verás", "verá", "veremos", "veréis", "verán"]),
         // hacer
         ("hacer", Tense::Present) => Some(["hago", "haces", "hace", "hacemos", "hacéis", "hacen"]),
-        ("hacer", Tense::Past)    => Some(["hice", "hiciste", "hizo", "hicimos", "hicisteis", "hicieron"]),
-        ("hacer", Tense::Future)  => Some(["haré", "harás", "hará", "haremos", "haréis", "harán"]),
+        ("hacer", Tense::Past) => Some([
+            "hice",
+            "hiciste",
+            "hizo",
+            "hicimos",
+            "hicisteis",
+            "hicieron",
+        ]),
+        ("hacer", Tense::Future) => Some(["haré", "harás", "hará", "haremos", "haréis", "harán"]),
         // decir
         ("decir", Tense::Present) => Some(["digo", "dices", "dice", "decimos", "decís", "dicen"]),
-        ("decir", Tense::Past)    => Some(["dije", "dijiste", "dijo", "dijimos", "dijisteis", "dijeron"]),
-        ("decir", Tense::Future)  => Some(["diré", "dirás", "dirá", "diremos", "diréis", "dirán"]),
+        ("decir", Tense::Past) => {
+            Some(["dije", "dijiste", "dijo", "dijimos", "dijisteis", "dijeron"])
+        }
+        ("decir", Tense::Future) => Some(["diré", "dirás", "dirá", "diremos", "diréis", "dirán"]),
         // poder
-        ("poder", Tense::Present) => Some(["puedo", "puedes", "puede", "podemos", "podéis", "pueden"]),
-        ("poder", Tense::Past)    => Some(["pude", "pudiste", "pudo", "pudimos", "pudisteis", "pudieron"]),
-        ("poder", Tense::Future)  => Some(["podré", "podrás", "podrá", "podremos", "podréis", "podrán"]),
+        ("poder", Tense::Present) => {
+            Some(["puedo", "puedes", "puede", "podemos", "podéis", "pueden"])
+        }
+        ("poder", Tense::Past) => Some([
+            "pude",
+            "pudiste",
+            "pudo",
+            "pudimos",
+            "pudisteis",
+            "pudieron",
+        ]),
+        ("poder", Tense::Future) => {
+            Some(["podré", "podrás", "podrá", "podremos", "podréis", "podrán"])
+        }
         // querer
-        ("querer", Tense::Present) => Some(["quiero", "quieres", "quiere", "queremos", "queréis", "quieren"]),
-        ("querer", Tense::Past)    => Some(["quise", "quisiste", "quiso", "quisimos", "quisisteis", "quisieron"]),
-        ("querer", Tense::Future)  => Some(["querré", "querrás", "querrá", "querremos", "querréis", "querrán"]),
+        ("querer", Tense::Present) => Some([
+            "quiero", "quieres", "quiere", "queremos", "queréis", "quieren",
+        ]),
+        ("querer", Tense::Past) => Some([
+            "quise",
+            "quisiste",
+            "quiso",
+            "quisimos",
+            "quisisteis",
+            "quisieron",
+        ]),
+        ("querer", Tense::Future) => Some([
+            "querré",
+            "querrás",
+            "querrá",
+            "querremos",
+            "querréis",
+            "querrán",
+        ]),
         _ => None,
     };
     forms.map(|f| f[person_index(person)])
@@ -66,9 +141,9 @@ fn person_index(person: Person) -> usize {
     // but since the Language trait only exposes First/Second/Third we map:
     // First → yo (0), Second → tú (1), Third → él/ella (2)
     match person {
-        Person::First  => 0,
+        Person::First => 0,
         Person::Second => 1,
-        Person::Third  => 2,
+        Person::Third => 2,
     }
 }
 
@@ -81,8 +156,8 @@ pub fn conjugate_es(verb: &str, tense: Tense, person: Person) -> String {
     }
     match tense {
         Tense::Present => conjugate_present(verb, person),
-        Tense::Past    => conjugate_preterite(verb, person),
-        Tense::Future  => conjugate_future(verb, person),
+        Tense::Past => conjugate_preterite(verb, person),
+        Tense::Future => conjugate_future(verb, person),
     }
 }
 
@@ -128,16 +203,16 @@ fn conjugate_future(verb: &str, person: Person) -> String {
 // ── Participles ───────────────────────────────────────────────────────────────
 
 const IRREGULAR_PAST_PARTICIPLES: &[(&str, &str)] = &[
-    ("hacer",   "hecho"),
-    ("decir",   "dicho"),
-    ("ver",     "visto"),
-    ("volver",  "vuelto"),
-    ("poner",   "puesto"),
-    ("romper",  "roto"),
-    ("morir",   "muerto"),
-    ("escribir","escrito"),
-    ("abrir",   "abierto"),
-    ("cubrir",  "cubierto"),
+    ("hacer", "hecho"),
+    ("decir", "dicho"),
+    ("ver", "visto"),
+    ("volver", "vuelto"),
+    ("poner", "puesto"),
+    ("romper", "roto"),
+    ("morir", "muerto"),
+    ("escribir", "escrito"),
+    ("abrir", "abierto"),
+    ("cubrir", "cubierto"),
 ];
 
 /// Return the past participle of a Spanish verb.
@@ -184,17 +259,26 @@ mod tests {
 
     #[test]
     fn regular_ar_present_first() {
-        assert_eq!(conjugate_es("hablar", Tense::Present, Person::First), "hablo");
+        assert_eq!(
+            conjugate_es("hablar", Tense::Present, Person::First),
+            "hablo"
+        );
     }
 
     #[test]
     fn regular_ar_present_second() {
-        assert_eq!(conjugate_es("hablar", Tense::Present, Person::Second), "hablas");
+        assert_eq!(
+            conjugate_es("hablar", Tense::Present, Person::Second),
+            "hablas"
+        );
     }
 
     #[test]
     fn regular_ar_present_third() {
-        assert_eq!(conjugate_es("hablar", Tense::Present, Person::Third), "habla");
+        assert_eq!(
+            conjugate_es("hablar", Tense::Present, Person::Third),
+            "habla"
+        );
     }
 
     #[test]
@@ -238,12 +322,18 @@ mod tests {
 
     #[test]
     fn regular_ar_future_third() {
-        assert_eq!(conjugate_es("hablar", Tense::Future, Person::Third), "hablará");
+        assert_eq!(
+            conjugate_es("hablar", Tense::Future, Person::Third),
+            "hablará"
+        );
     }
 
     #[test]
     fn regular_er_future_first() {
-        assert_eq!(conjugate_es("comer", Tense::Future, Person::First), "comeré");
+        assert_eq!(
+            conjugate_es("comer", Tense::Future, Person::First),
+            "comeré"
+        );
     }
 
     // ── Irregulars ───────────────────────────────────────────────────────────
@@ -265,12 +355,18 @@ mod tests {
 
     #[test]
     fn irregular_estar_present_first() {
-        assert_eq!(conjugate_es("estar", Tense::Present, Person::First), "estoy");
+        assert_eq!(
+            conjugate_es("estar", Tense::Present, Person::First),
+            "estoy"
+        );
     }
 
     #[test]
     fn irregular_tener_present_first() {
-        assert_eq!(conjugate_es("tener", Tense::Present, Person::First), "tengo");
+        assert_eq!(
+            conjugate_es("tener", Tense::Present, Person::First),
+            "tengo"
+        );
     }
 
     #[test]
@@ -285,7 +381,10 @@ mod tests {
 
     #[test]
     fn irregular_poder_present_third() {
-        assert_eq!(conjugate_es("poder", Tense::Present, Person::Third), "puede");
+        assert_eq!(
+            conjugate_es("poder", Tense::Present, Person::Third),
+            "puede"
+        );
     }
 
     // ── Past participle ──────────────────────────────────────────────────────
@@ -310,7 +409,7 @@ mod tests {
     fn past_participle_irregulars() {
         assert_eq!(past_participle_es("hacer"), "hecho");
         assert_eq!(past_participle_es("decir"), "dicho");
-        assert_eq!(past_participle_es("ver"),   "visto");
+        assert_eq!(past_participle_es("ver"), "visto");
     }
 
     // ── Present participle ───────────────────────────────────────────────────

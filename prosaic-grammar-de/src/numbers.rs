@@ -24,8 +24,8 @@ pub fn number_to_words_de(n: usize) -> String {
         13 => "dreizehn".into(),
         14 => "vierzehn".into(),
         15 => "fünfzehn".into(),
-        16 => "sechzehn".into(),  // sechs → sech
-        17 => "siebzehn".into(),  // sieben → sieb
+        16 => "sechzehn".into(), // sechs → sech
+        17 => "siebzehn".into(), // sieben → sieb
         18 => "achtzehn".into(),
         19 => "neunzehn".into(),
         20..=99 => compound_tens(n),
@@ -41,8 +41,8 @@ fn tens_word(t: usize) -> &'static str {
         3 => "dreißig",
         4 => "vierzig",
         5 => "fünfzig",
-        6 => "sechzig",  // sechs → sech
-        7 => "siebzig",  // sieben → sieb
+        6 => "sechzig", // sechs → sech
+        7 => "siebzig", // sieben → sieb
         8 => "achtzig",
         9 => "neunzig",
         _ => "",
@@ -116,8 +116,8 @@ mod tests {
     #[test]
     fn teen_irregulars() {
         assert_eq!(number_to_words_de(13), "dreizehn");
-        assert_eq!(number_to_words_de(16), "sechzehn");  // sechs → sech
-        assert_eq!(number_to_words_de(17), "siebzehn");  // sieben → sieb
+        assert_eq!(number_to_words_de(16), "sechzehn"); // sechs → sech
+        assert_eq!(number_to_words_de(17), "siebzehn"); // sieben → sieb
         assert_eq!(number_to_words_de(19), "neunzehn");
     }
 

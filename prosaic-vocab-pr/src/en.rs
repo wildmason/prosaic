@@ -22,11 +22,7 @@ pub fn register(engine: &mut Engine) -> Result<(), ProsaicError> {
 
 fn register_summary(engine: &mut Engine) -> Result<(), ProsaicError> {
     // Low: terse title reference only.
-    engine.register_template_at(
-        "pr.summary",
-        "PR #{number}: {title}",
-        Salience::Low,
-    )?;
+    engine.register_template_at("pr.summary", "PR #{number}: {title}", Salience::Low)?;
 
     // Medium: adds author.
     engine.register_template(
@@ -75,10 +71,7 @@ fn register_scope(engine: &mut Engine) -> Result<(), ProsaicError> {
     )?;
 
     // Medium: framed as scope statement.
-    engine.register_template(
-        "pr.scope",
-        "PR #{number} spans {areas|truncate:3|join}",
-    )?;
+    engine.register_template("pr.scope", "PR #{number} spans {areas|truncate:3|join}")?;
 
     Ok(())
 }

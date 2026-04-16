@@ -13,9 +13,9 @@
 //! test input space so generated data remains within the invariant's
 //! domain.
 
+use proptest::prelude::*;
 use prosaic_core::{Context, Engine, Session, Strictness, Value, Variation};
 use prosaic_grammar_en::English;
-use proptest::prelude::*;
 
 fn base_engine() -> Engine {
     Engine::new(English::new())

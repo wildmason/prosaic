@@ -31,11 +31,7 @@ fn register_commit(engine: &mut Engine) -> Result<(), ProsaicError> {
         "{author} envió un cambio menor",
         Salience::Low,
     )?;
-    engine.register_template_at(
-        "git.commit",
-        "{author} realizó un ajuste",
-        Salience::Low,
-    )?;
+    engine.register_template_at("git.commit", "{author} realizó un ajuste", Salience::Low)?;
 
     // Medium: commit estándar con conteo de archivos
     engine.register_template(
@@ -174,10 +170,6 @@ fn register_release(engine: &mut Engine) -> Result<(), ProsaicError> {
          fue publicado con {changes_count} {changes_count|pluralize:cambio} destacado",
         Salience::High,
     )?;
-    engine.register_template_at(
-        "git.release",
-        "{version} fue lanzado",
-        Salience::Low,
-    )?;
+    engine.register_template_at("git.release", "{version} fue lanzado", Salience::Low)?;
     Ok(())
 }

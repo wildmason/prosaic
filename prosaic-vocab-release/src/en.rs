@@ -49,11 +49,7 @@ fn register_tagged(engine: &mut Engine) -> Result<(), ProsaicError> {
 
 fn register_feature_added(engine: &mut Engine) -> Result<(), ProsaicError> {
     // Low: terse.
-    engine.register_template_at(
-        "release.feature_added",
-        "Added {name}",
-        Salience::Low,
-    )?;
+    engine.register_template_at("release.feature_added", "Added {name}", Salience::Low)?;
 
     // Medium: names the feature, surfaces description if present.
     engine.register_template(
@@ -91,11 +87,7 @@ fn register_breaking_change(engine: &mut Engine) -> Result<(), ProsaicError> {
 
 fn register_bugfix(engine: &mut Engine) -> Result<(), ProsaicError> {
     // Low: just the description.
-    engine.register_template_at(
-        "release.bugfix",
-        "Fixed: {description}",
-        Salience::Low,
-    )?;
+    engine.register_template_at("release.bugfix", "Fixed: {description}", Salience::Low)?;
 
     // Medium: links to issue number when present.
     engine.register_template(
@@ -208,10 +200,7 @@ fn register_stats(engine: &mut Engine) -> Result<(), ProsaicError> {
 
 fn register_summary(engine: &mut Engine) -> Result<(), ProsaicError> {
     // Medium: concise headline.
-    engine.register_template(
-        "release.summary",
-        "{version}: {headline}",
-    )?;
+    engine.register_template("release.summary", "{version}: {headline}")?;
 
     // High: elaborated release announcement.
     engine.register_template_at(

@@ -23,9 +23,7 @@ fn irregular_lookup(verb: &str, tense: Tense, person: Person) -> Option<&'static
         ("sein", Tense::Past) => Some(["war", "warst", "war", "waren", "wart", "waren"]),
         // haben
         ("haben", Tense::Present) => Some(["habe", "hast", "hat", "haben", "habt", "haben"]),
-        ("haben", Tense::Past) => {
-            Some(["hatte", "hattest", "hatte", "hatten", "hattet", "hatten"])
-        }
+        ("haben", Tense::Past) => Some(["hatte", "hattest", "hatte", "hatten", "hattet", "hatten"]),
         // werden
         ("werden", Tense::Present) => {
             Some(["werde", "wirst", "wird", "werden", "werdet", "werden"])
@@ -37,30 +35,24 @@ fn irregular_lookup(verb: &str, tense: Tense, person: Person) -> Option<&'static
         ("können", Tense::Present) => {
             Some(["kann", "kannst", "kann", "können", "könnt", "können"])
         }
-        ("können", Tense::Past) => {
-            Some(["konnte", "konntest", "konnte", "konnten", "konntet", "konnten"])
-        }
+        ("können", Tense::Past) => Some([
+            "konnte", "konntest", "konnte", "konnten", "konntet", "konnten",
+        ]),
         // müssen
-        ("müssen", Tense::Present) => {
-            Some(["muss", "musst", "muss", "müssen", "müsst", "müssen"])
-        }
-        ("müssen", Tense::Past) => {
-            Some(["musste", "musstest", "musste", "mussten", "musstet", "mussten"])
-        }
+        ("müssen", Tense::Present) => Some(["muss", "musst", "muss", "müssen", "müsst", "müssen"]),
+        ("müssen", Tense::Past) => Some([
+            "musste", "musstest", "musste", "mussten", "musstet", "mussten",
+        ]),
         // sollen
-        ("sollen", Tense::Present) => {
-            Some(["soll", "sollst", "soll", "sollen", "sollt", "sollen"])
-        }
-        ("sollen", Tense::Past) => {
-            Some(["sollte", "solltest", "sollte", "sollten", "solltet", "sollten"])
-        }
+        ("sollen", Tense::Present) => Some(["soll", "sollst", "soll", "sollen", "sollt", "sollen"]),
+        ("sollen", Tense::Past) => Some([
+            "sollte", "solltest", "sollte", "sollten", "solltet", "sollten",
+        ]),
         // wollen
-        ("wollen", Tense::Present) => {
-            Some(["will", "willst", "will", "wollen", "wollt", "wollen"])
-        }
-        ("wollen", Tense::Past) => {
-            Some(["wollte", "wolltest", "wollte", "wollten", "wolltet", "wollten"])
-        }
+        ("wollen", Tense::Present) => Some(["will", "willst", "will", "wollen", "wollt", "wollen"]),
+        ("wollen", Tense::Past) => Some([
+            "wollte", "wolltest", "wollte", "wollten", "wolltet", "wollten",
+        ]),
         // gehen — strong past only; present is regular
         ("gehen", Tense::Past) => Some(["ging", "gingst", "ging", "gingen", "gingt", "gingen"]),
         // kommen — strong past only
@@ -152,17 +144,26 @@ mod tests {
 
     #[test]
     fn regular_present_first_machen() {
-        assert_eq!(conjugate_de("machen", Tense::Present, Person::First), "mache");
+        assert_eq!(
+            conjugate_de("machen", Tense::Present, Person::First),
+            "mache"
+        );
     }
 
     #[test]
     fn regular_present_second_machen() {
-        assert_eq!(conjugate_de("machen", Tense::Present, Person::Second), "machst");
+        assert_eq!(
+            conjugate_de("machen", Tense::Present, Person::Second),
+            "machst"
+        );
     }
 
     #[test]
     fn regular_present_third_machen() {
-        assert_eq!(conjugate_de("machen", Tense::Present, Person::Third), "macht");
+        assert_eq!(
+            conjugate_de("machen", Tense::Present, Person::Third),
+            "macht"
+        );
     }
 
     // ── Regular preterite ─────────────────────────────────────────────────────
@@ -174,7 +175,10 @@ mod tests {
 
     #[test]
     fn regular_preterite_second_machen() {
-        assert_eq!(conjugate_de("machen", Tense::Past, Person::Second), "machtest");
+        assert_eq!(
+            conjugate_de("machen", Tense::Past, Person::Second),
+            "machtest"
+        );
     }
 
     #[test]
@@ -261,17 +265,26 @@ mod tests {
 
     #[test]
     fn irregular_werden_present_third() {
-        assert_eq!(conjugate_de("werden", Tense::Present, Person::Third), "wird");
+        assert_eq!(
+            conjugate_de("werden", Tense::Present, Person::Third),
+            "wird"
+        );
     }
 
     #[test]
     fn irregular_können_present_first() {
-        assert_eq!(conjugate_de("können", Tense::Present, Person::First), "kann");
+        assert_eq!(
+            conjugate_de("können", Tense::Present, Person::First),
+            "kann"
+        );
     }
 
     #[test]
     fn irregular_wollen_present_first() {
-        assert_eq!(conjugate_de("wollen", Tense::Present, Person::First), "will");
+        assert_eq!(
+            conjugate_de("wollen", Tense::Present, Person::First),
+            "will"
+        );
     }
 
     #[test]

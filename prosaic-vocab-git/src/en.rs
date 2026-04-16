@@ -28,11 +28,7 @@ fn register_commit(engine: &mut Engine) -> Result<(), ProsaicError> {
         "{author} pushed a small change",
         Salience::Low,
     )?;
-    engine.register_template_at(
-        "git.commit",
-        "{author} landed a tweak",
-        Salience::Low,
-    )?;
+    engine.register_template_at("git.commit", "{author} landed a tweak", Salience::Low)?;
 
     // Medium: standard commits with file counts.
     engine.register_template(
@@ -60,10 +56,7 @@ fn register_commit(engine: &mut Engine) -> Result<(), ProsaicError> {
 }
 
 fn register_pr_opened(engine: &mut Engine) -> Result<(), ProsaicError> {
-    engine.register_template(
-        "git.pr_opened",
-        "{author} opened PR #{number}: \"{title}\"",
-    )?;
+    engine.register_template("git.pr_opened", "{author} opened PR #{number}: \"{title}\"")?;
     engine.register_template(
         "git.pr_opened",
         "PR #{number} was opened by {author} \u{2014} \"{title}\"",
@@ -134,10 +127,7 @@ fn register_issue_closed(engine: &mut Engine) -> Result<(), ProsaicError> {
 }
 
 fn register_review_approved(engine: &mut Engine) -> Result<(), ProsaicError> {
-    engine.register_template(
-        "git.review_approved",
-        "{reviewer} approved PR #{pr_number}",
-    )?;
+    engine.register_template("git.review_approved", "{reviewer} approved PR #{pr_number}")?;
     engine.register_template(
         "git.review_approved",
         "PR #{pr_number} received approval from {reviewer}",
@@ -172,10 +162,6 @@ fn register_release(engine: &mut Engine) -> Result<(), ProsaicError> {
          {changes_count|pluralize:change}",
         Salience::High,
     )?;
-    engine.register_template_at(
-        "git.release",
-        "{version} was released",
-        Salience::Low,
-    )?;
+    engine.register_template_at("git.release", "{version} was released", Salience::Low)?;
     Ok(())
 }

@@ -207,13 +207,11 @@ const ENTITY_REINTRODUCE_DISTANCE: usize = 3;
 
 /// Stopwords excluded from the word frequency map.
 const STOPWORDS: &[&str] = &[
-    "a", "an", "the", "and", "or", "but", "in", "on", "at", "to", "for",
-    "of", "with", "by", "from", "is", "was", "are", "were", "be", "been",
-    "being", "have", "has", "had", "do", "does", "did", "will", "would",
-    "could", "should", "may", "might", "shall", "can", "not", "no",
-    "it", "its", "this", "that", "these", "those", "which", "who",
-    "what", "where", "when", "how", "if", "then", "than", "so",
-    "as", "up", "out", "into", "also", "just", "more", "most",
+    "a", "an", "the", "and", "or", "but", "in", "on", "at", "to", "for", "of", "with", "by",
+    "from", "is", "was", "are", "were", "be", "been", "being", "have", "has", "had", "do", "does",
+    "did", "will", "would", "could", "should", "may", "might", "shall", "can", "not", "no", "it",
+    "its", "this", "that", "these", "those", "which", "who", "what", "where", "when", "how", "if",
+    "then", "than", "so", "as", "up", "out", "into", "also", "just", "more", "most",
 ];
 
 const LIST_STYLES: &[ListStyle] = &[
@@ -224,31 +222,17 @@ const LIST_STYLES: &[ListStyle] = &[
 ];
 
 /// Connective pools by relationship type.
-const SAME_ENTITY_CONNECTIVES: &[&str] = &[
-    "Additionally,",
-    "Furthermore,",
-    "It also",
-];
+const SAME_ENTITY_CONNECTIVES: &[&str] = &["Additionally,", "Furthermore,", "It also"];
 
-const SAME_ACTION_CONNECTIVES: &[&str] = &[
-    "Similarly,",
-    "Likewise,",
-];
+const SAME_ACTION_CONNECTIVES: &[&str] = &["Similarly,", "Likewise,"];
 
-const CONTRAST_CONNECTIVES: &[&str] = &[
-    "Meanwhile,",
-    "However,",
-    "On the other hand,",
-];
+const CONTRAST_CONNECTIVES: &[&str] = &["Meanwhile,", "However,", "On the other hand,"];
 
 impl DiscourseState {
     pub fn new() -> Self {
         let mut interner = WordInterner::default();
         // Pre-intern all stopwords so membership checks are O(1) u32 lookups.
-        let stopword_ids: HashSet<u32> = STOPWORDS
-            .iter()
-            .map(|&w| interner.intern(w))
-            .collect();
+        let stopword_ids: HashSet<u32> = STOPWORDS.iter().map(|&w| interner.intern(w)).collect();
 
         Self {
             entities: new_map(),
@@ -319,11 +303,14 @@ impl DiscourseState {
     /// set yet for this render; this keeps the Cp semantics: the Subject is
     /// the preferred center.
     pub fn mention_entity_ranked(&mut self, name: &str, entity_type: &str, rank: u8) {
-        let entry = self.entities.entry(name.to_string()).or_insert(EntityMention {
-            entity_type: entity_type.to_string(),
-            last_mentioned: 0,
-            mention_count: 0,
-        });
+        let entry = self
+            .entities
+            .entry(name.to_string())
+            .or_insert(EntityMention {
+                entity_type: entity_type.to_string(),
+                last_mentioned: 0,
+                mention_count: 0,
+            });
         entry.last_mentioned = self.render_index;
         entry.mention_count += 1;
         entry.entity_type = entity_type.to_string();
@@ -344,7 +331,10 @@ impl DiscourseState {
                 self.current_cf.sort_by_key(|c| c.rank);
             }
         } else {
-            self.current_cf.push(Cf { name: name.to_string(), rank });
+            self.current_cf.push(Cf {
+                name: name.to_string(),
+                rank,
+            });
             // Sort stably so Cp = first element.
             self.current_cf.sort_by_key(|c| c.rank);
         }
@@ -404,8 +394,7 @@ impl DiscourseState {
             .entities
             .iter()
             .filter(|(n, m)| {
-                n.as_str() != name
-                    && self.render_index.saturating_sub(m.last_mentioned) <= 2
+                n.as_str() != name && self.render_index.saturating_sub(m.last_mentioned) <= 2
             })
             .count();
         recent_count > 0
@@ -469,12 +458,9 @@ impl DiscourseState {
         };
 
         // Find a connective not recently used
-        let selected = pool.iter().find(|&&c| {
-            !self
-                .connective_history
-                .iter()
-                .any(|h| h == c)
-        });
+        let selected = pool
+            .iter()
+            .find(|&&c| !self.connective_history.iter().any(|h| h == c));
 
         if let Some(&connective) = selected {
             self.connective_history.push_back(connective.to_string());
@@ -492,7 +478,9 @@ impl DiscourseState {
     pub fn record_output_words(&mut self, output: &str) {
         let mut ids: HashSet<u32> = new_set();
         for raw in output.split_whitespace() {
-            let w = raw.trim_matches(|c: char| !c.is_alphanumeric()).to_lowercase();
+            let w = raw
+                .trim_matches(|c: char| !c.is_alphanumeric())
+                .to_lowercase();
             if w.len() <= 2 {
                 continue;
             }
@@ -520,7 +508,9 @@ impl DiscourseState {
         let candidate_ids: HashSet<u32> = candidate
             .split_whitespace()
             .filter_map(|raw| {
-                let w = raw.trim_matches(|c: char| !c.is_alphanumeric()).to_lowercase();
+                let w = raw
+                    .trim_matches(|c: char| !c.is_alphanumeric())
+                    .to_lowercase();
                 if w.len() <= 2 {
                     return None;
                 }
@@ -651,9 +641,11 @@ impl DiscourseState {
         let prev_cb = self.cb.clone();
 
         // New Cb: highest-ranked Cf member shared with the previous Cf.
-        let new_cb: Option<String> = self.current_cf.iter().find(|c| {
-            self.previous_cf.iter().any(|p| p.name == c.name)
-        }).map(|c| c.name.clone());
+        let new_cb: Option<String> = self
+            .current_cf
+            .iter()
+            .find(|c| self.previous_cf.iter().any(|p| p.name == c.name))
+            .map(|c| c.name.clone());
 
         // Fallback when the Cf-overlap definition yields nothing.
         let new_cb = match (new_cb, current_cp.clone(), self.previous_focus.clone()) {
@@ -680,11 +672,8 @@ impl DiscourseState {
         };
 
         // Classify the transition.
-        let transition = classify_transition(
-            new_cb.as_deref(),
-            prev_cb.as_deref(),
-            current_cp.as_deref(),
-        );
+        let transition =
+            classify_transition(new_cb.as_deref(), prev_cb.as_deref(), current_cp.as_deref());
 
         self.cb = new_cb;
         self.last_transition = transition;
@@ -713,12 +702,12 @@ fn classify_transition(cb: Option<&str>, prev_cb: Option<&str>, cp: Option<&str>
         None => return Transition::NoCb,
     };
     let cb_eq_prev = prev_cb == cb;
-    let cb_eq_cp   = matches!(cp, Some(c) if c == cb);
+    let cb_eq_cp = matches!(cp, Some(c) if c == cb);
 
     match (cb_eq_prev, cb_eq_cp) {
-        (true,  true)  => Transition::Continue,
-        (true,  false) => Transition::Retain,
-        (false, true)  => Transition::SmoothShift,
+        (true, true) => Transition::Continue,
+        (true, false) => Transition::Retain,
+        (false, true) => Transition::SmoothShift,
         (false, false) => Transition::RoughShift,
     }
 }
@@ -738,16 +727,13 @@ fn keys_share_action(a: &str, b: &str) -> bool {
 
 /// Check if two template keys represent contrasting actions.
 fn keys_contrast(a: &str, b: &str) -> bool {
-    let contrasts = &[
-        ("added", "deleted"),
-        ("added", "removed"),
-    ];
+    let contrasts = &[("added", "deleted"), ("added", "removed")];
     let a_action = a.rsplit('.').next().unwrap_or("");
     let b_action = b.rsplit('.').next().unwrap_or("");
 
-    contrasts.iter().any(|&(x, y)| {
-        (a_action == x && b_action == y) || (a_action == y && b_action == x)
-    })
+    contrasts
+        .iter()
+        .any(|&(x, y)| (a_action == x && b_action == y) || (a_action == y && b_action == x))
 }
 
 #[cfg(test)]
@@ -767,10 +753,7 @@ mod tests {
         state.mention_entity("UserService", "class");
 
         state.begin_render();
-        assert_eq!(
-            state.reference_form("UserService"),
-            ReferenceForm::Pronoun
-        );
+        assert_eq!(state.reference_form("UserService"), ReferenceForm::Pronoun);
     }
 
     #[test]
@@ -799,10 +782,7 @@ mod tests {
         state.begin_render();
         state.begin_render();
 
-        assert_eq!(
-            state.reference_form("UserService"),
-            ReferenceForm::Full
-        );
+        assert_eq!(state.reference_form("UserService"), ReferenceForm::Full);
     }
 
     #[test]
@@ -885,10 +865,7 @@ mod tests {
         state.last_template_key = Some("t".to_string());
         state.last_entity_name = Some("Foo".to_string());
 
-        assert_eq!(
-            state.detect_relation("t", None),
-            DiscourseRelation::None
-        );
+        assert_eq!(state.detect_relation("t", None), DiscourseRelation::None);
     }
 
     #[test]
@@ -937,12 +914,9 @@ mod tests {
         state.record_output_words("The class UserService was renamed to AccountService");
 
         state.begin_render();
-        let score_high = state.repetition_score(
-            "The class UserService was modified affecting AccountService",
-        );
-        let score_low = state.repetition_score(
-            "AuthGuard removed from the application entirely",
-        );
+        let score_high =
+            state.repetition_score("The class UserService was modified affecting AccountService");
+        let score_low = state.repetition_score("AuthGuard removed from the application entirely");
 
         assert!(score_high > score_low);
     }
@@ -1259,7 +1233,11 @@ mod tests {
         assert_eq!(state.cf().len(), 1);
 
         state.begin_render();
-        assert_eq!(state.cf().len(), 0, "current_cf must be cleared by begin_render");
+        assert_eq!(
+            state.cf().len(),
+            0,
+            "current_cf must be cleared by begin_render"
+        );
     }
 
     #[test]
@@ -1314,10 +1292,7 @@ mod tests {
             Transition::NoCb
         );
         // NoCb with all None.
-        assert_eq!(
-            classify_transition(None, None, None),
-            Transition::NoCb
-        );
+        assert_eq!(classify_transition(None, None, None), Transition::NoCb);
     }
 
     #[test]

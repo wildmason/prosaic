@@ -42,9 +42,9 @@ use alloc::string::{String, ToString};
 #[cfg(not(feature = "std"))]
 use alloc::vec::Vec;
 
+use crate::collections::{HashSet, new_set};
 use crate::context::{Context, Value};
 use crate::language::Language;
-use crate::collections::{HashSet, new_set};
 
 /// Polarity (negation) tokens treated separately from content tokens.
 /// These are NOT in STOPWORDS — they are scored as a distinct multiset gate.
@@ -55,13 +55,11 @@ const POLARITY_TOKENS: &[&str] = &[
 /// Stopwords excluded from content scoring. Polarity tokens are deliberately
 /// absent from this list — they are handled by the polarity gate instead.
 const STOPWORDS: &[&str] = &[
-    "a", "an", "the", "and", "or", "but", "in", "on", "at", "to", "for",
-    "of", "with", "by", "from", "is", "was", "are", "were", "be", "been",
-    "being", "have", "has", "had", "do", "does", "did", "will", "would",
-    "could", "should", "may", "might", "shall", "can",
-    "it", "its", "this", "that", "these", "those", "which", "who",
-    "what", "where", "when", "how", "if", "then", "than", "so",
-    "as", "up", "out", "into", "also", "just", "more", "most",
+    "a", "an", "the", "and", "or", "but", "in", "on", "at", "to", "for", "of", "with", "by",
+    "from", "is", "was", "are", "were", "be", "been", "being", "have", "has", "had", "do", "does",
+    "did", "will", "would", "could", "should", "may", "might", "shall", "can", "it", "its", "this",
+    "that", "these", "those", "which", "who", "what", "where", "when", "how", "if", "then", "than",
+    "so", "as", "up", "out", "into", "also", "just", "more", "most",
 ];
 
 /// A faithfulness score for a rendered hypothesis against its source.
@@ -146,8 +144,14 @@ pub fn score_faithfulness(
     let mut polarity_drift = Vec::new();
     let mut polarity_match = true;
     for &tok in POLARITY_TOKENS {
-        let s = src_tokens.iter().filter(|t| t.as_ref() as &str == tok).count();
-        let h = hyp_tokens.iter().filter(|t| t.as_ref() as &str == tok).count();
+        let s = src_tokens
+            .iter()
+            .filter(|t| t.as_ref() as &str == tok)
+            .count();
+        let h = hyp_tokens
+            .iter()
+            .filter(|t| t.as_ref() as &str == tok)
+            .count();
         if s != h {
             polarity_match = false;
             polarity_drift.push(PolarityDrift {
@@ -159,8 +163,7 @@ pub fn score_faithfulness(
     }
 
     // ── Content precision ──────────────────────────────────────────────
-    let hyp_content: Vec<&String> =
-        hyp_tokens.iter().filter(|t| is_content_token(t)).collect();
+    let hyp_content: Vec<&String> = hyp_tokens.iter().filter(|t| is_content_token(t)).collect();
 
     if hyp_content.is_empty() {
         return FaithfulnessScore {

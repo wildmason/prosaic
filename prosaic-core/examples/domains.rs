@@ -1,5 +1,5 @@
 use prosaic_core::{
-    ctx, Context, DocumentPlan, Engine, GroupingStrategy, Session, Strictness, Variation,
+    Context, DocumentPlan, Engine, GroupingStrategy, Session, Strictness, Variation, ctx,
 };
 use prosaic_grammar_en::English;
 
@@ -55,14 +55,23 @@ fn monitoring_alerts() {
 
     let mut session = Session::new();
 
-    show("CPU threshold (critical)", &engine.render(&mut session, "alert.threshold_breached", &ctx! {
-        metric: "CPU utilisation",
-        service: "api-gateway-prod",
-        severity: "critical",
-        current_value: "98.2%",
-        threshold: "85%",
-        duration: "12 minutes",
-    }).unwrap());
+    show(
+        "CPU threshold (critical)",
+        &engine
+            .render(
+                &mut session,
+                "alert.threshold_breached",
+                &ctx! {
+                    metric: "CPU utilisation",
+                    service: "api-gateway-prod",
+                    severity: "critical",
+                    current_value: "98.2%",
+                    threshold: "85%",
+                    duration: "12 minutes",
+                },
+            )
+            .unwrap(),
+    );
 
     session.reset();
     show("Error spike", &engine.render(&mut session, "alert.error_spike", &ctx! {
@@ -73,20 +82,38 @@ fn monitoring_alerts() {
     }).unwrap());
 
     session.reset();
-    show("Recovery", &engine.render(&mut session, "alert.recovery", &ctx! {
-        service: "auth-service",
-        incident_type: "elevated 5xx error rate",
-        downtime_minutes: 7,
-    }).unwrap());
+    show(
+        "Recovery",
+        &engine
+            .render(
+                &mut session,
+                "alert.recovery",
+                &ctx! {
+                    service: "auth-service",
+                    incident_type: "elevated 5xx error rate",
+                    downtime_minutes: 7,
+                },
+            )
+            .unwrap(),
+    );
 
     session.reset();
-    show("Anomaly (high confidence)", &engine.render(&mut session, "alert.anomaly", &ctx! {
-        service: "recommendation-engine",
-        metric: "p99 latency",
-        deviation: "340",
-        direction: "above",
-        confidence: 92,
-    }).unwrap());
+    show(
+        "Anomaly (high confidence)",
+        &engine
+            .render(
+                &mut session,
+                "alert.anomaly",
+                &ctx! {
+                    service: "recommendation-engine",
+                    metric: "p99 latency",
+                    deviation: "340",
+                    direction: "above",
+                    confidence: 92,
+                },
+            )
+            .unwrap(),
+    );
 }
 
 // ── Deployment Events ────────────────────────────────────────────────────
@@ -121,28 +148,37 @@ fn deployment_events() {
     let mut session = Session::new();
 
     let events: Vec<(&str, Context)> = vec![
-        ("deploy.started", ctx! {
-            service: "billing-api",
-            version: "3.4.1",
-            environment: "production",
-            deployer: "Alice Chen",
-            strategy: "blue-green",
-        }),
-        ("deploy.canary_promoted", ctx! {
-            service: "billing-api",
-            version: "3.4.1",
-            environment: "production",
-            canary_duration: "45 minutes",
-            canary_error_rate: "0.02%",
-            canary_traffic: 10,
-        }),
-        ("deploy.completed", ctx! {
-            service: "billing-api",
-            version: "3.4.1",
-            environment: "production",
-            instances: 12,
-            duration: "8 minutes",
-        }),
+        (
+            "deploy.started",
+            ctx! {
+                service: "billing-api",
+                version: "3.4.1",
+                environment: "production",
+                deployer: "Alice Chen",
+                strategy: "blue-green",
+            },
+        ),
+        (
+            "deploy.canary_promoted",
+            ctx! {
+                service: "billing-api",
+                version: "3.4.1",
+                environment: "production",
+                canary_duration: "45 minutes",
+                canary_error_rate: "0.02%",
+                canary_traffic: 10,
+            },
+        ),
+        (
+            "deploy.completed",
+            ctx! {
+                service: "billing-api",
+                version: "3.4.1",
+                environment: "production",
+                instances: 12,
+                duration: "8 minutes",
+            },
+        ),
     ];
 
     let narrative = engine.render_batch(&mut session, &events).unwrap();
@@ -153,14 +189,23 @@ fn deployment_events() {
     println!();
 
     session.reset();
-    show("Rollback", &engine.render(&mut session, "deploy.rollback", &ctx! {
-        service: "checkout-service",
-        environment: "production",
-        bad_version: "2.1.0",
-        good_version: "2.0.9",
-        reason: "elevated 5xx error rate exceeding 2% SLO",
-        affected_users: 3400,
-    }).unwrap());
+    show(
+        "Rollback",
+        &engine
+            .render(
+                &mut session,
+                "deploy.rollback",
+                &ctx! {
+                    service: "checkout-service",
+                    environment: "production",
+                    bad_version: "2.1.0",
+                    good_version: "2.0.9",
+                    reason: "elevated 5xx error rate exceeding 2% SLO",
+                    affected_users: 3400,
+                },
+            )
+            .unwrap(),
+    );
 }
 
 // ── User Activity Digest ─────────────────────────────────────────────────
@@ -194,35 +239,71 @@ fn user_activity_digest() {
 
     let mut session = Session::new();
 
-    show("Signups", &engine.render(&mut session, "user.signup", &ctx! {
-        count: 234,
-        source: "organic search",
-        plan: "Professional",
-    }).unwrap());
+    show(
+        "Signups",
+        &engine
+            .render(
+                &mut session,
+                "user.signup",
+                &ctx! {
+                    count: 234,
+                    source: "organic search",
+                    plan: "Professional",
+                },
+            )
+            .unwrap(),
+    );
 
     session.reset();
-    show("Churn", &engine.render(&mut session, "user.churn", &ctx! {
-        count: 18,
-        top_reason: "pricing concerns",
-        retention_rate: "94.2%",
-    }).unwrap());
+    show(
+        "Churn",
+        &engine
+            .render(
+                &mut session,
+                "user.churn",
+                &ctx! {
+                    count: 18,
+                    top_reason: "pricing concerns",
+                    retention_rate: "94.2%",
+                },
+            )
+            .unwrap(),
+    );
 
     session.reset();
-    show("Milestone", &engine.render(&mut session, "user.milestone", &ctx! {
-        user_name: "Acme Corp",
-        milestone: "1000th API call",
-        value: "1,024 calls",
-        days_since_signup: 3,
-    }).unwrap());
+    show(
+        "Milestone",
+        &engine
+            .render(
+                &mut session,
+                "user.milestone",
+                &ctx! {
+                    user_name: "Acme Corp",
+                    milestone: "1000th API call",
+                    value: "1,024 calls",
+                    days_since_signup: 3,
+                },
+            )
+            .unwrap(),
+    );
 
     session.reset();
-    show("Feature adoption", &engine.render(&mut session, "user.feature_adoption", &ctx! {
-        feature_name: "Batch Export",
-        adoption_rate: "37%",
-        change: "+8%",
-        power_users: 42,
-        power_user_pct: "61%",
-    }).unwrap());
+    show(
+        "Feature adoption",
+        &engine
+            .render(
+                &mut session,
+                "user.feature_adoption",
+                &ctx! {
+                    feature_name: "Batch Export",
+                    adoption_rate: "37%",
+                    change: "+8%",
+                    power_users: 42,
+                    power_user_pct: "61%",
+                },
+            )
+            .unwrap(),
+    );
 }
 
 // ── Infrastructure Changes ───────────────────────────────────────────────
@@ -256,39 +337,75 @@ fn infrastructure_changes() {
 
     let mut session = Session::new();
 
-    show("Auto-scale", &engine.render(&mut session, "infra.scaled", &ctx! {
-        resource_type: "ECS cluster",
-        resource_name: "api-workers",
-        region: "us-east-1",
-        old_count: 4,
-        new_count: 12,
-        reason: "CPU utilisation exceeding 80% for 5 minutes",
-    }).unwrap());
+    show(
+        "Auto-scale",
+        &engine
+            .render(
+                &mut session,
+                "infra.scaled",
+                &ctx! {
+                    resource_type: "ECS cluster",
+                    resource_name: "api-workers",
+                    region: "us-east-1",
+                    old_count: 4,
+                    new_count: 12,
+                    reason: "CPU utilisation exceeding 80% for 5 minutes",
+                },
+            )
+            .unwrap(),
+    );
 
     session.reset();
-    show("Cert expiry warning", &engine.render(&mut session, "infra.cert_expiry", &ctx! {
-        domain: "*.wildmason.com",
-        days_until: 14,
-        auto_renew: 1,
-    }).unwrap());
+    show(
+        "Cert expiry warning",
+        &engine
+            .render(
+                &mut session,
+                "infra.cert_expiry",
+                &ctx! {
+                    domain: "*.wildmason.com",
+                    days_until: 14,
+                    auto_renew: 1,
+                },
+            )
+            .unwrap(),
+    );
 
     session.reset();
-    show("Cost alert", &engine.render(&mut session, "infra.cost_alert", &ctx! {
-        resource_type: "Compute",
-        account: "production-main",
-        current_spend: "$14,200",
-        percentage_of_budget: 87,
-        projected_overage: "$2,300",
-    }).unwrap());
+    show(
+        "Cost alert",
+        &engine
+            .render(
+                &mut session,
+                "infra.cost_alert",
+                &ctx! {
+                    resource_type: "Compute",
+                    account: "production-main",
+                    current_spend: "$14,200",
+                    percentage_of_budget: 87,
+                    projected_overage: "$2,300",
+                },
+            )
+            .unwrap(),
+    );
 
     session.reset();
-    show("Region failover", &engine.render(&mut session, "infra.region_failover", &ctx! {
-        service: "payment-gateway",
-        primary_region: "us-east-1",
-        failover_region: "eu-west-1",
-        trigger: "health check failures exceeding threshold",
-        eta: "15 minutes",
-    }).unwrap());
+    show(
+        "Region failover",
+        &engine
+            .render(
+                &mut session,
+                "infra.region_failover",
+                &ctx! {
+                    service: "payment-gateway",
+                    primary_region: "us-east-1",
+                    failover_region: "eu-west-1",
+                    trigger: "health check failures exceeding threshold",
+                    eta: "15 minutes",
+                },
+            )
+            .unwrap(),
+    );
 }
 
 // ── Business Metrics ─────────────────────────────────────────────────────
@@ -317,30 +434,57 @@ fn business_metrics() {
 
     let mut session = Session::new();
 
-    show("Revenue", &engine.render(&mut session, "metrics.revenue", &ctx! {
-        period: "Q1 2026",
-        amount: "$2.4M",
-        direction: "up",
-        change_pct: "18%",
-        top_driver: "enterprise tier expansion in EMEA",
-    }).unwrap());
+    show(
+        "Revenue",
+        &engine
+            .render(
+                &mut session,
+                "metrics.revenue",
+                &ctx! {
+                    period: "Q1 2026",
+                    amount: "$2.4M",
+                    direction: "up",
+                    change_pct: "18%",
+                    top_driver: "enterprise tier expansion in EMEA",
+                },
+            )
+            .unwrap(),
+    );
 
     session.reset();
-    show("Conversion", &engine.render(&mut session, "metrics.conversion", &ctx! {
-        funnel_stage: "trial-to-paid",
-        direction: "improved",
-        rate: "14.2%",
-        delta: "+2.1pp",
-        segment: "enterprise",
-    }).unwrap());
+    show(
+        "Conversion",
+        &engine
+            .render(
+                &mut session,
+                "metrics.conversion",
+                &ctx! {
+                    funnel_stage: "trial-to-paid",
+                    direction: "improved",
+                    rate: "14.2%",
+                    delta: "+2.1pp",
+                    segment: "enterprise",
+                },
+            )
+            .unwrap(),
+    );
 
     session.reset();
-    show("SLA compliance", &engine.render(&mut session, "metrics.sla_compliance", &ctx! {
-        service: "Core API",
-        compliance_rate: "99.93%",
-        violations: 2,
-        worst_incident: "a 4-minute outage on March 12 caused by a database failover",
-    }).unwrap());
+    show(
+        "SLA compliance",
+        &engine
+            .render(
+                &mut session,
+                "metrics.sla_compliance",
+                &ctx! {
+                    service: "Core API",
+                    compliance_rate: "99.93%",
+                    violations: 2,
+                    worst_incident: "a 4-minute outage on March 12 caused by a database failover",
+                },
+            )
+            .unwrap(),
+    );
 }
 
 // ── Incident Narrative ───────────────────────────────────────────────────
@@ -352,20 +496,24 @@ fn incident_narrative() {
         .strictness(Strictness::Silent)
         .variation(Variation::Fixed);
 
-    engine.register_template(
-        "incident.detected",
-        "An incident was detected on {service} at {timestamp}: {description}",
-    ).unwrap();
+    engine
+        .register_template(
+            "incident.detected",
+            "An incident was detected on {service} at {timestamp}: {description}",
+        )
+        .unwrap();
 
     engine.register_template(
         "incident.impact",
         "The incident affected {affected_users|quantify} {affected_users|pluralize:user} across {affected_regions|join}{?error_rate}, with error rates reaching {error_rate}{/?}",
     ).unwrap();
 
-    engine.register_template(
-        "incident.mitigation",
-        "{responder} applied {action}{?duration} within {duration} of detection{/?}",
-    ).unwrap();
+    engine
+        .register_template(
+            "incident.mitigation",
+            "{responder} applied {action}{?duration} within {duration} of detection{/?}",
+        )
+        .unwrap();
 
     engine.register_template(
         "incident.resolved",
@@ -373,26 +521,38 @@ fn incident_narrative() {
     ).unwrap();
 
     let events: Vec<(&str, Context)> = vec![
-        ("incident.detected", ctx! {
-            service: "checkout-service",
-            timestamp: "14:23 UTC",
-            description: "elevated 5xx error rate exceeding 5% SLO threshold",
-        }),
-        ("incident.impact", ctx! {
-            affected_users: 12000,
-            affected_regions: vec!["us-east-1".to_string(), "eu-west-1".to_string()],
-            error_rate: "8.3%",
-        }),
-        ("incident.mitigation", ctx! {
-            responder: "Alice Chen",
-            action: "a connection pool size increase from 50 to 200",
-            duration: "6 minutes",
-        }),
-        ("incident.resolved", ctx! {
-            timestamp: "14:41 UTC",
-            root_cause: "connection pool exhaustion under sustained Black Friday traffic",
-            total_duration: "18 minutes",
-        }),
+        (
+            "incident.detected",
+            ctx! {
+                service: "checkout-service",
+                timestamp: "14:23 UTC",
+                description: "elevated 5xx error rate exceeding 5% SLO threshold",
+            },
+        ),
+        (
+            "incident.impact",
+            ctx! {
+                affected_users: 12000,
+                affected_regions: vec!["us-east-1".to_string(), "eu-west-1".to_string()],
+                error_rate: "8.3%",
+            },
+        ),
+        (
+            "incident.mitigation",
+            ctx! {
+                responder: "Alice Chen",
+                action: "a connection pool size increase from 50 to 200",
+                duration: "6 minutes",
+            },
+        ),
+        (
+            "incident.resolved",
+            ctx! {
+                timestamp: "14:41 UTC",
+                root_cause: "connection pool exhaustion under sustained Black Friday traffic",
+                total_duration: "18 minutes",
+            },
+        ),
     ];
 
     let mut session = Session::new();
@@ -432,30 +592,57 @@ fn database_operations() {
 
     let mut session = Session::new();
 
-    show("Migration", &engine.render(&mut session, "db.migration_applied", &ctx! {
-        migration_name: "20260415_add_audit_log_table",
-        database: "production-primary",
-        duration: "3.2 seconds",
-        tables_affected: 2,
-        rows_affected: 0,
-    }).unwrap());
+    show(
+        "Migration",
+        &engine
+            .render(
+                &mut session,
+                "db.migration_applied",
+                &ctx! {
+                    migration_name: "20260415_add_audit_log_table",
+                    database: "production-primary",
+                    duration: "3.2 seconds",
+                    tables_affected: 2,
+                    rows_affected: 0,
+                },
+            )
+            .unwrap(),
+    );
 
     session.reset();
-    show("Slow query", &engine.render(&mut session, "db.slow_query", &ctx! {
-        database: "analytics-replica",
-        query_fingerprint: "SELECT * FROM events WHERE user_id = ? AND created_at > ?",
-        duration: "4.7 seconds",
-        rows_scanned: 2400000,
-        missing_index: "events(user_id, created_at)",
-    }).unwrap());
+    show(
+        "Slow query",
+        &engine
+            .render(
+                &mut session,
+                "db.slow_query",
+                &ctx! {
+                    database: "analytics-replica",
+                    query_fingerprint: "SELECT * FROM events WHERE user_id = ? AND created_at > ?",
+                    duration: "4.7 seconds",
+                    rows_scanned: 2400000,
+                    missing_index: "events(user_id, created_at)",
+                },
+            )
+            .unwrap(),
+    );
 
     session.reset();
-    show("Backup", &engine.render(&mut session, "db.backup_completed", &ctx! {
-        database: "production-primary",
-        duration: "12 minutes",
-        size: "47 GB",
-        retention: "30 days with daily snapshots",
-    }).unwrap());
+    show(
+        "Backup",
+        &engine
+            .render(
+                &mut session,
+                "db.backup_completed",
+                &ctx! {
+                    database: "production-primary",
+                    duration: "12 minutes",
+                    size: "47 GB",
+                    retention: "30 days with daily snapshots",
+                },
+            )
+            .unwrap(),
+    );
 }
 
 // ── Security Audit ───────────────────────────────────────────────────────
@@ -484,28 +671,55 @@ fn security_audit() {
 
     let mut session = Session::new();
 
-    show("Vulnerability (critical)", &engine.render(&mut session, "security.vulnerability_found", &ctx! {
-        severity: "critical",
-        component: "openssl 3.0.2",
-        description: "buffer overflow in X.509 certificate verification",
-        cve: "CVE-2026-1234",
-    }).unwrap());
+    show(
+        "Vulnerability (critical)",
+        &engine
+            .render(
+                &mut session,
+                "security.vulnerability_found",
+                &ctx! {
+                    severity: "critical",
+                    component: "openssl 3.0.2",
+                    description: "buffer overflow in X.509 certificate verification",
+                    cve: "CVE-2026-1234",
+                },
+            )
+            .unwrap(),
+    );
 
     session.reset();
-    show("Access anomaly", &engine.render(&mut session, "security.access_anomaly", &ctx! {
-        principal: "service-account-47",
-        action_count: 3400,
-        resource: "secrets-manager",
-        source_ip: "203.0.113.42",
-        time_window: "5 minutes",
-    }).unwrap());
+    show(
+        "Access anomaly",
+        &engine
+            .render(
+                &mut session,
+                "security.access_anomaly",
+                &ctx! {
+                    principal: "service-account-47",
+                    action_count: 3400,
+                    resource: "secrets-manager",
+                    source_ip: "203.0.113.42",
+                    time_window: "5 minutes",
+                },
+            )
+            .unwrap(),
+    );
 
     session.reset();
-    show("Dependency audit", &engine.render(&mut session, "security.dependency_audit", &ctx! {
-        project: "billing-api",
-        total_issues: 14,
-        critical: 2,
-        high: 5,
-        outdated: 7,
-    }).unwrap());
+    show(
+        "Dependency audit",
+        &engine
+            .render(
+                &mut session,
+                "security.dependency_audit",
+                &ctx! {
+                    project: "billing-api",
+                    total_issues: 14,
+                    critical: 2,
+                    high: 5,
+                    outdated: 7,
+                },
+            )
+            .unwrap(),
+    );
 }

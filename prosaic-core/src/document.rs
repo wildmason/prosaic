@@ -210,8 +210,7 @@ impl DocumentPlan {
 
         // Bucket events by category, preserving input order within each.
         use crate::collections::BTreeMap;
-        let mut buckets: BTreeMap<RhetoricalCategory, Vec<(String, Context)>> =
-            BTreeMap::new();
+        let mut buckets: BTreeMap<RhetoricalCategory, Vec<(String, Context)>> = BTreeMap::new();
 
         for (key, ctx) in events {
             let category = classifier(key);
@@ -508,20 +507,36 @@ mod tests {
 
     impl Language for TestLang {
         fn pluralize(&self, word: &str, count: usize) -> String {
-            if count == 1 { word.to_string() } else { format!("{word}s") }
+            if count == 1 {
+                word.to_string()
+            } else {
+                format!("{word}s")
+            }
         }
         fn singularize(&self, word: &str) -> String {
             word.strip_suffix('s').unwrap_or(word).to_string()
         }
-        fn article(&self, _word: &str) -> &str { "a" }
-        fn conjugate(&self, verb: &str, _t: Tense, _p: Person) -> String { verb.to_string() }
-        fn past_participle(&self, verb: &str) -> String { format!("{verb}ed") }
-        fn present_participle(&self, verb: &str) -> String { format!("{verb}ing") }
+        fn article(&self, _word: &str) -> &str {
+            "a"
+        }
+        fn conjugate(&self, verb: &str, _t: Tense, _p: Person) -> String {
+            verb.to_string()
+        }
+        fn past_participle(&self, verb: &str) -> String {
+            format!("{verb}ed")
+        }
+        fn present_participle(&self, verb: &str) -> String {
+            format!("{verb}ing")
+        }
         fn join_list(&self, items: &[&str], _c: Conjunction) -> String {
             items.join(", ")
         }
-        fn ordinal(&self, n: usize) -> String { format!("{n}th") }
-        fn number_to_words(&self, n: usize) -> String { n.to_string() }
+        fn ordinal(&self, n: usize) -> String {
+            format!("{n}th")
+        }
+        fn number_to_words(&self, n: usize) -> String {
+            n.to_string()
+        }
     }
 
     fn test_engine() -> Engine {
@@ -557,11 +572,7 @@ mod tests {
         c3.insert("name", Value::String("Bar".into()));
         c3.insert("consumer_count", Value::Number(1));
 
-        let events: Vec<(&str, Context)> = vec![
-            ("t", c1),
-            ("t", c2),
-            ("t", c3),
-        ];
+        let events: Vec<(&str, Context)> = vec![("t", c1), ("t", c2), ("t", c3)];
 
         let plan = DocumentPlan::from_events(&events, &engine);
         assert_eq!(plan.paragraphs.len(), 2);
@@ -582,10 +593,7 @@ mod tests {
         high.insert("name", Value::String("Big".into()));
         high.insert("consumer_count", Value::Number(50));
 
-        let events: Vec<(&str, Context)> = vec![
-            ("t", low),
-            ("t", high),
-        ];
+        let events: Vec<(&str, Context)> = vec![("t", low), ("t", high)];
 
         let plan = DocumentPlan::from_events(&events, &engine);
         assert_eq!(plan.paragraphs.len(), 2);
@@ -613,7 +621,10 @@ mod tests {
         let mut session = Session::new();
         let rendered = plan.render(&engine, &mut session).unwrap();
 
-        assert!(rendered.contains("\n\n"), "Expected paragraph break, got: {rendered}");
+        assert!(
+            rendered.contains("\n\n"),
+            "Expected paragraph break, got: {rendered}"
+        );
     }
 
     // ── Rhetorical grouping ──────────────────────────────────────────────
@@ -628,10 +639,22 @@ mod tests {
 
     #[test]
     fn default_classifier_buckets_common_keys() {
-        assert_eq!(default_classifier("code.deleted"), RhetoricalCategory::Removal);
-        assert_eq!(default_classifier("code.removed"), RhetoricalCategory::Removal);
-        assert_eq!(default_classifier("code.added"), RhetoricalCategory::Addition);
-        assert_eq!(default_classifier("code.introduced"), RhetoricalCategory::Addition);
+        assert_eq!(
+            default_classifier("code.deleted"),
+            RhetoricalCategory::Removal
+        );
+        assert_eq!(
+            default_classifier("code.removed"),
+            RhetoricalCategory::Removal
+        );
+        assert_eq!(
+            default_classifier("code.added"),
+            RhetoricalCategory::Addition
+        );
+        assert_eq!(
+            default_classifier("code.introduced"),
+            RhetoricalCategory::Addition
+        );
         assert_eq!(
             default_classifier("code.modified"),
             RhetoricalCategory::Modification,
@@ -658,11 +681,7 @@ mod tests {
             ("code.deleted", ctx_with_entity("C", 1)),
         ];
 
-        let plan = DocumentPlan::from_events_grouped(
-            &events,
-            &engine,
-            GroupingStrategy::ByAction,
-        );
+        let plan = DocumentPlan::from_events_grouped(&events, &engine, GroupingStrategy::ByAction);
 
         // Removal first, then Addition, then Modification.
         assert_eq!(plan.paragraphs.len(), 3);
@@ -691,11 +710,7 @@ mod tests {
             ("code.modified", ctx_with_entity("Beta", 1)),
         ];
 
-        let plan = DocumentPlan::from_events_grouped(
-            &events,
-            &engine,
-            GroupingStrategy::ByAction,
-        );
+        let plan = DocumentPlan::from_events_grouped(&events, &engine, GroupingStrategy::ByAction);
 
         assert_eq!(plan.paragraphs.len(), 2);
         for p in &plan.paragraphs {
@@ -713,11 +728,7 @@ mod tests {
             ("code.renamed", ctx_with_entity("Alpha", 1)),
         ];
 
-        let plan = DocumentPlan::from_events_grouped(
-            &events,
-            &engine,
-            GroupingStrategy::ByAction,
-        );
+        let plan = DocumentPlan::from_events_grouped(&events, &engine, GroupingStrategy::ByAction);
 
         // Both are Modification category, same entity → one paragraph, two events.
         assert_eq!(plan.paragraphs.len(), 1);
@@ -794,7 +805,12 @@ mod tests {
     fn paragraph_relations_len_matches_events_len() {
         let mut p = Paragraph::new();
         p.push("t".into(), Context::new(), Salience::Low);
-        p.push_with_relation("t".into(), Context::new(), Salience::Low, Some(RstRelation::Elaboration));
+        p.push_with_relation(
+            "t".into(),
+            Context::new(),
+            Salience::Low,
+            Some(RstRelation::Elaboration),
+        );
         p.push("t".into(), Context::new(), Salience::Medium);
         assert_eq!(p.events.len(), p.relations.len());
         assert_eq!(p.relations.len(), 3);
@@ -807,12 +823,19 @@ mod tests {
         let engine = test_engine();
         let events = vec![
             ("t", ctx_with_entity("Foo", 1), None),
-            ("t", ctx_with_entity("Foo", 1), Some(RstRelation::Elaboration)),
+            (
+                "t",
+                ctx_with_entity("Foo", 1),
+                Some(RstRelation::Elaboration),
+            ),
         ];
         let plan = DocumentPlan::from_events_with_relations(&events, &engine);
         assert_eq!(plan.paragraphs.len(), 1);
         assert_eq!(plan.paragraphs[0].relations[0], None);
-        assert_eq!(plan.paragraphs[0].relations[1], Some(RstRelation::Elaboration));
+        assert_eq!(
+            plan.paragraphs[0].relations[1],
+            Some(RstRelation::Elaboration)
+        );
     }
 
     #[test]
@@ -874,7 +897,9 @@ mod tests {
     #[test]
     fn document_render_uses_marker_when_paragraph_has_relation() {
         let mut engine = test_engine();
-        engine.register_template("t", "The class {name} was modified").unwrap();
+        engine
+            .register_template("t", "The class {name} was modified")
+            .unwrap();
 
         let events = vec![
             ("t", ctx_with_entity("Foo", 1), None),
@@ -903,9 +928,7 @@ mod tests {
         let mut engine = Engine::new(TestLang)
             .strictness(Strictness::Strict)
             .variation(Variation::Fixed);
-        engine
-            .register_template("t", "{name} changed")
-            .unwrap();
+        engine.register_template("t", "{name} changed").unwrap();
 
         let events: Vec<(&str, Context)> = vec![
             ("t", ctx_with_entity("Alpha", 1)),

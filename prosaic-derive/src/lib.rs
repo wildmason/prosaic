@@ -1,10 +1,10 @@
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::{
+    Data, DeriveInput, Fields, GenericArgument, Ident, LitStr, PathArguments, Token, Type,
     parse::{Parse, ParseStream},
     parse_macro_input,
     punctuated::Punctuated,
-    Data, DeriveInput, Fields, GenericArgument, Ident, LitStr, PathArguments, Token, Type,
 };
 
 /// Derive `IntoContext` for a struct, converting its fields into `Context` key-value pairs.
@@ -92,11 +92,7 @@ pub fn derive_into_context(input: TokenStream) -> TokenStream {
     TokenStream::from(expanded)
 }
 
-fn unsupported_field_error(
-    field: &syn::Ident,
-    ty: &Type,
-    was_option: bool,
-) -> TokenStream {
+fn unsupported_field_error(field: &syn::Ident, ty: &Type, was_option: bool) -> TokenStream {
     let wrapper = if was_option { "Option<…>" } else { "" };
     let message = format!(
         "IntoContext: field `{field}` has unsupported type {wrapper}`{ty}`. \
@@ -290,9 +286,8 @@ impl Parse for ProsaicTemplateInput {
             }
         }
 
-        let template = template.ok_or_else(|| {
-            syn::Error::new(input.span(), "missing `template: \"...\"` argument")
-        })?;
+        let template = template
+            .ok_or_else(|| syn::Error::new(input.span(), "missing `template: \"...\"` argument"))?;
         let slots = slots.unwrap_or_default();
 
         Ok(ProsaicTemplateInput { template, slots })
@@ -303,9 +298,8 @@ fn validate_template(input: &ProsaicTemplateInput) -> syn::Result<()> {
     let template_str = input.template.value();
     let span = input.template.span();
 
-    let parsed = prosaic_core::Template::parse(&template_str).map_err(|e| {
-        syn::Error::new(span, format!("invalid template: {e}"))
-    })?;
+    let parsed = prosaic_core::Template::parse(&template_str)
+        .map_err(|e| syn::Error::new(span, format!("invalid template: {e}")))?;
 
     let declared: std::collections::HashSet<String> =
         input.slots.iter().map(|i| i.to_string()).collect();
@@ -322,10 +316,7 @@ fn validate_slots(
     span: proc_macro2::Span,
 ) -> syn::Result<()> {
     let used = template.slot_keys();
-    let mut undeclared: Vec<String> = used
-        .into_iter()
-        .filter(|k| !declared.contains(k))
-        .collect();
+    let mut undeclared: Vec<String> = used.into_iter().filter(|k| !declared.contains(k)).collect();
     undeclared.sort();
     undeclared.dedup();
 
@@ -344,10 +335,7 @@ fn validate_slots(
     Ok(())
 }
 
-fn validate_pipes(
-    template: &prosaic_core::Template,
-    span: proc_macro2::Span,
-) -> syn::Result<()> {
+fn validate_pipes(template: &prosaic_core::Template, span: proc_macro2::Span) -> syn::Result<()> {
     let used = template.pipe_names();
     let mut unknown: Vec<String> = used
         .into_iter()

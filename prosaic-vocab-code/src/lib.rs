@@ -85,10 +85,7 @@ mod tests {
         ctx.insert("old_name", Value::String("getData".into()));
         ctx.insert("new_name", Value::String("fetchData".into()));
         ctx.insert("consumer_count", Value::Number(1));
-        ctx.insert(
-            "consumers",
-            Value::List(vec!["DashboardComponent".into()]),
-        );
+        ctx.insert("consumers", Value::List(vec!["DashboardComponent".into()]));
         let mut session = Session::new();
 
         let result = engine.render(&mut session, "code.renamed", &ctx).unwrap();
@@ -214,7 +211,9 @@ mod tests {
         );
         let mut session = Session::new();
 
-        let result = engine.render(&mut session, "code.signature_changed", &ctx).unwrap();
+        let result = engine
+            .render(&mut session, "code.signature_changed", &ctx)
+            .unwrap();
         assert!(result.contains("getUser"));
         assert!(result.contains("method"));
         assert!(result.contains("5 callers"));
@@ -237,10 +236,7 @@ mod tests {
         ctx.insert("old_name", Value::String("Foo".into()));
         ctx.insert("new_name", Value::String("Bar".into()));
         ctx.insert("consumer_count", Value::Number(2));
-        ctx.insert(
-            "consumers",
-            Value::List(vec!["A".into(), "B".into()]),
-        );
+        ctx.insert("consumers", Value::List(vec!["A".into(), "B".into()]));
 
         let mut session1 = Session::new();
         let mut session2 = Session::new();
@@ -266,7 +262,10 @@ mod tests {
 
         let result = engine.render(&mut session, "code.modified", &ctx).unwrap();
         // Low salience: drop impact clause, keep it terse
-        assert!(!result.contains("affect"), "Low salience should drop impact clause, got: {result}");
+        assert!(
+            !result.contains("affect"),
+            "Low salience should drop impact clause, got: {result}"
+        );
     }
 
     #[test]
@@ -279,8 +278,14 @@ mod tests {
         ctx.insert(
             "consumers",
             Value::List(vec![
-                "A".into(), "B".into(), "C".into(), "D".into(), "E".into(),
-                "F".into(), "G".into(), "H".into(),
+                "A".into(),
+                "B".into(),
+                "C".into(),
+                "D".into(),
+                "E".into(),
+                "F".into(),
+                "G".into(),
+                "H".into(),
             ]),
         );
         let mut session = Session::new();
@@ -288,7 +293,9 @@ mod tests {
         let result = engine.render(&mut session, "code.modified", &ctx).unwrap();
         // High salience: elaborate with emphasis language
         assert!(
-            result.contains("substantial") || result.contains("significant") || result.contains("recommended"),
+            result.contains("substantial")
+                || result.contains("significant")
+                || result.contains("recommended"),
             "Expected elaborated high-salience output, got: {result}"
         );
         // Should show more consumers (truncate:5 vs truncate:3)
@@ -304,7 +311,13 @@ mod tests {
         ctx.insert("consumer_count", Value::Number(5));
         ctx.insert(
             "consumers",
-            Value::List(vec!["A".into(), "B".into(), "C".into(), "D".into(), "E".into()]),
+            Value::List(vec![
+                "A".into(),
+                "B".into(),
+                "C".into(),
+                "D".into(),
+                "E".into(),
+            ]),
         );
         let mut session = Session::new();
 
@@ -343,16 +356,27 @@ mod tests_es {
         ctx.insert(
             "consumers",
             Value::List(vec![
-                "Baz".into(), "Qux".into(), "Quux".into(),
-                "Corge".into(), "Grault".into(), "Garply".into(),
+                "Baz".into(),
+                "Qux".into(),
+                "Quux".into(),
+                "Corge".into(),
+                "Grault".into(),
+                "Garply".into(),
             ]),
         );
         let mut session = Session::new();
 
         let result = engine.render(&mut session, "code.renamed", &ctx).unwrap();
-        assert!(result.contains("fue renombrado a") || result.contains("ahora se llama") || result.contains("ha sido renombrado a"),
-            "Expected Spanish rename phrase, got: {result}");
-        assert!(result.contains("Foobar"), "Expected new name, got: {result}");
+        assert!(
+            result.contains("fue renombrado a")
+                || result.contains("ahora se llama")
+                || result.contains("ha sido renombrado a"),
+            "Expected Spanish rename phrase, got: {result}"
+        );
+        assert!(
+            result.contains("Foobar"),
+            "Expected new name, got: {result}"
+        );
     }
 
     #[test]
@@ -365,14 +389,15 @@ mod tests_es {
         ctx.insert("consumer_count", Value::Number(6));
         ctx.insert(
             "consumers",
-            Value::List(vec![
-                "Baz".into(), "Qux".into(), "Quux".into(),
-            ]),
+            Value::List(vec!["Baz".into(), "Qux".into(), "Quux".into()]),
         );
         let mut session = Session::new();
 
         let result = engine.render(&mut session, "code.renamed", &ctx).unwrap();
-        assert!(result.contains("6"), "Expected consumer count in output, got: {result}");
+        assert!(
+            result.contains("6"),
+            "Expected consumer count in output, got: {result}"
+        );
     }
 
     #[test]
@@ -385,15 +410,24 @@ mod tests_es {
         ctx.insert(
             "consumers",
             Value::List(vec![
-                "UserService".into(), "ProfilePage".into(), "AdminPanel".into(),
+                "UserService".into(),
+                "ProfilePage".into(),
+                "AdminPanel".into(),
             ]),
         );
         let mut session = Session::new();
 
         let result = engine.render(&mut session, "code.deleted", &ctx).unwrap();
-        assert!(result.contains("fue eliminado") || result.contains("ha sido eliminado") || result.contains("ya no existe"),
-            "Expected Spanish delete phrase, got: {result}");
-        assert!(result.contains("UserProfile"), "Expected entity name, got: {result}");
+        assert!(
+            result.contains("fue eliminado")
+                || result.contains("ha sido eliminado")
+                || result.contains("ya no existe"),
+            "Expected Spanish delete phrase, got: {result}"
+        );
+        assert!(
+            result.contains("UserProfile"),
+            "Expected entity name, got: {result}"
+        );
     }
 
     #[test]
@@ -408,7 +442,10 @@ mod tests_es {
         let result = engine.render(&mut session, "code.added", &ctx).unwrap();
         assert!(result.contains("AuthGuard"), "got: {result}");
         assert!(result.contains("src/guards/auth.guard.ts"), "got: {result}");
-        assert!(result.contains("servicio"), "Expected entity type in Spanish, got: {result}");
+        assert!(
+            result.contains("servicio"),
+            "Expected entity type in Spanish, got: {result}"
+        );
     }
 
     #[test]
@@ -421,15 +458,21 @@ mod tests_es {
         ctx.insert(
             "consumers",
             Value::List(vec![
-                "OrderPage".into(), "CartService".into(),
-                "CheckoutFlow".into(), "OrderHistory".into(),
+                "OrderPage".into(),
+                "CartService".into(),
+                "CheckoutFlow".into(),
+                "OrderHistory".into(),
             ]),
         );
         let mut session = Session::new();
 
         let result = engine.render(&mut session, "code.modified", &ctx).unwrap();
-        assert!(result.contains("fue modificado") || result.contains("ha sido actualizado") || result.contains("afectan"),
-            "Expected Spanish modify phrase, got: {result}");
+        assert!(
+            result.contains("fue modificado")
+                || result.contains("ha sido actualizado")
+                || result.contains("afectan"),
+            "Expected Spanish modify phrase, got: {result}"
+        );
         assert!(result.contains("processOrder"), "got: {result}");
     }
 
@@ -445,17 +488,24 @@ mod tests_es {
         ctx.insert(
             "consumers",
             Value::List(vec![
-                "AppModule".into(), "AuthService".into(),
-                "UserService".into(), "OrderService".into(),
+                "AppModule".into(),
+                "AuthService".into(),
+                "UserService".into(),
+                "OrderService".into(),
             ]),
         );
         let mut session = Session::new();
 
         let result = engine.render(&mut session, "code.moved", &ctx).unwrap();
         assert!(result.contains("Logger"), "got: {result}");
-        assert!(result.contains("src/utils/logger.ts") || result.contains("src/core/logger.ts"),
-            "Expected location in output, got: {result}");
-        assert!(result.contains("12"), "Expected consumer count, got: {result}");
+        assert!(
+            result.contains("src/utils/logger.ts") || result.contains("src/core/logger.ts"),
+            "Expected location in output, got: {result}"
+        );
+        assert!(
+            result.contains("12"),
+            "Expected consumer count, got: {result}"
+        );
     }
 
     #[test]
@@ -468,16 +518,23 @@ mod tests_es {
         ctx.insert(
             "consumers",
             Value::List(vec![
-                "ProfileController".into(), "AuthMiddleware".into(),
-                "UserTest".into(), "AdminPanel".into(), "SettingsPage".into(),
+                "ProfileController".into(),
+                "AuthMiddleware".into(),
+                "UserTest".into(),
+                "AdminPanel".into(),
+                "SettingsPage".into(),
             ]),
         );
         let mut session = Session::new();
 
-        let result = engine.render(&mut session, "code.signature_changed", &ctx).unwrap();
+        let result = engine
+            .render(&mut session, "code.signature_changed", &ctx)
+            .unwrap();
         assert!(result.contains("getUser"), "got: {result}");
-        assert!(result.contains("firma") || result.contains("invocador"),
-            "Expected Spanish signature/caller terms, got: {result}");
+        assert!(
+            result.contains("firma") || result.contains("invocador"),
+            "Expected Spanish signature/caller terms, got: {result}"
+        );
     }
 
     #[test]

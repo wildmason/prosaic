@@ -36,7 +36,11 @@ pub fn format_relative(diff_secs: i64) -> String {
     if abs < HOUR {
         let n = (abs + MINUTE / 2) / MINUTE;
         let n = n.max(1);
-        return phrase(past, &format!("{n} minute{s} ago", s = s(n)), &format!("in {n} minute{s}", s = s(n)));
+        return phrase(
+            past,
+            &format!("{n} minute{s} ago", s = s(n)),
+            &format!("in {n} minute{s}", s = s(n)),
+        );
     }
 
     // Hours
@@ -64,11 +68,7 @@ pub fn format_relative(diff_secs: i64) -> String {
     // Days
     if abs < WEEK {
         let n = abs / DAY;
-        return phrase(
-            past,
-            &format!("{n} days ago"),
-            &format!("in {n} days"),
-        );
+        return phrase(past, &format!("{n} days ago"), &format!("in {n} days"));
     }
 
     // Last/next week
@@ -79,11 +79,7 @@ pub fn format_relative(diff_secs: i64) -> String {
     // Weeks
     if abs < MONTH {
         let n = abs / WEEK;
-        return phrase(
-            past,
-            &format!("{n} weeks ago"),
-            &format!("in {n} weeks"),
-        );
+        return phrase(past, &format!("{n} weeks ago"), &format!("in {n} weeks"));
     }
 
     // Last/next month
@@ -94,11 +90,7 @@ pub fn format_relative(diff_secs: i64) -> String {
     // Months
     if abs < YEAR {
         let n = abs / MONTH;
-        return phrase(
-            past,
-            &format!("{n} months ago"),
-            &format!("in {n} months"),
-        );
+        return phrase(past, &format!("{n} months ago"), &format!("in {n} months"));
     }
 
     // Last/next year

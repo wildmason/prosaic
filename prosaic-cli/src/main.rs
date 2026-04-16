@@ -271,12 +271,20 @@ fn run(cfg: Config) -> Result<(), String> {
 
     match cfg.strategy {
         Strategy::Sequential => run_sequential(&engine, &mut out, stdin.lock(), &cfg),
-        Strategy::ByEntity => {
-            run_document_plan(&engine, &mut out, stdin.lock(), GroupingStrategy::ByEntity, &cfg)
-        }
-        Strategy::ByAction => {
-            run_document_plan(&engine, &mut out, stdin.lock(), GroupingStrategy::ByAction, &cfg)
-        }
+        Strategy::ByEntity => run_document_plan(
+            &engine,
+            &mut out,
+            stdin.lock(),
+            GroupingStrategy::ByEntity,
+            &cfg,
+        ),
+        Strategy::ByAction => run_document_plan(
+            &engine,
+            &mut out,
+            stdin.lock(),
+            GroupingStrategy::ByAction,
+            &cfg,
+        ),
     }
 }
 
@@ -304,16 +312,16 @@ fn run_sequential<R: BufRead, W: Write>(
             continue;
         }
 
-        let raw: RawEvent = serde_json::from_str(&line)
-            .map_err(|e| format!("parsing line `{line}`: {e}"))?;
+        let raw: RawEvent =
+            serde_json::from_str(&line).map_err(|e| format!("parsing line `{line}`: {e}"))?;
         let ctx = context_from_slots(&raw.slots)?;
 
         if cfg.explain {
             let exp = engine
                 .render_explained(&mut session, &raw.key, &ctx)
                 .map_err(|e| format!("rendering `{}`: {e}", raw.key))?;
-            let json = serde_json::to_string(&exp)
-                .map_err(|e| format!("serializing explanation: {e}"))?;
+            let json =
+                serde_json::to_string(&exp).map_err(|e| format!("serializing explanation: {e}"))?;
             writeln!(out, "{json}").map_err(|e| format!("writing stdout: {e}"))?;
         } else {
             let rendered = engine
@@ -338,8 +346,8 @@ fn run_document_plan<R: BufRead, W: Write>(
         if line.trim().is_empty() {
             continue;
         }
-        let raw: RawEvent = serde_json::from_str(&line)
-            .map_err(|e| format!("parsing line `{line}`: {e}"))?;
+        let raw: RawEvent =
+            serde_json::from_str(&line).map_err(|e| format!("parsing line `{line}`: {e}"))?;
         let ctx = context_from_slots(&raw.slots)?;
         events.push((raw.key, ctx));
     }
@@ -368,9 +376,10 @@ fn context_from_slots(
             serde_json::Value::Number(n) if n.is_i64() => Value::Number(n.as_i64().unwrap()),
             serde_json::Value::Number(n) if n.is_u64() => {
                 let u = n.as_u64().unwrap();
-                Value::Number(i64::try_from(u).map_err(|_| {
-                    format!("field `{k}`: number {u} exceeds i64 range")
-                })?)
+                Value::Number(
+                    i64::try_from(u)
+                        .map_err(|_| format!("field `{k}`: number {u} exceeds i64 range"))?,
+                )
             }
             serde_json::Value::Bool(b) => Value::Number(if *b { 1 } else { 0 }),
             serde_json::Value::Array(items) => {

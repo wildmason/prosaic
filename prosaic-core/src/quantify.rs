@@ -8,9 +8,9 @@
 //! optional `:exact` and `:hedged` flavours.
 
 #[cfg(not(feature = "std"))]
-use alloc::string::{String, ToString};
-#[cfg(not(feature = "std"))]
 use alloc::format;
+#[cfg(not(feature = "std"))]
+use alloc::string::{String, ToString};
 
 use crate::language::Language;
 
@@ -138,8 +138,8 @@ mod tests {
         }
         fn number_to_words(&self, n: usize) -> String {
             let words = [
-                "zero", "one", "two", "three", "four", "five", "six",
-                "seven", "eight", "nine", "ten", "eleven", "twelve",
+                "zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine",
+                "ten", "eleven", "twelve",
             ];
             if n < words.len() {
                 words[n].to_string()
@@ -187,10 +187,7 @@ mod tests {
             quantify(150, QuantifyMode::Natural, &lang()),
             "over a hundred"
         );
-        assert_eq!(
-            quantify(473, QuantifyMode::Natural, &lang()),
-            "hundreds of"
-        );
+        assert_eq!(quantify(473, QuantifyMode::Natural, &lang()), "hundreds of");
     }
 
     #[test]

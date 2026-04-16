@@ -1,9 +1,9 @@
 #[cfg(not(feature = "std"))]
+use alloc::format;
+#[cfg(not(feature = "std"))]
 use alloc::string::{String, ToString};
 #[cfg(not(feature = "std"))]
 use alloc::vec::Vec;
-#[cfg(not(feature = "std"))]
-use alloc::format;
 
 use crate::error::ProsaicError;
 
@@ -163,7 +163,10 @@ fn collect_slot_keys(segments: &[Segment], out: &mut Vec<String>) {
     for seg in segments {
         match seg {
             Segment::Slot { key, .. } => out.push(key.clone()),
-            Segment::Conditional { condition_key, inner } => {
+            Segment::Conditional {
+                condition_key,
+                inner,
+            } => {
                 out.push(condition_key.clone());
                 collect_slot_keys(inner, out);
             }
@@ -278,8 +281,7 @@ fn parse_segments(source: &str, start: usize, end: usize) -> Result<Vec<Segment>
                 }
             })?;
 
-            let inner_segments =
-                parse_segments(source, start + inner_start, start + inner_end)?;
+            let inner_segments = parse_segments(source, start + inner_start, start + inner_end)?;
 
             segments.push(Segment::Conditional {
                 condition_key,
@@ -422,7 +424,10 @@ mod tests {
     #[test]
     fn parse_literal_only() {
         let t = Template::parse("hello world").unwrap();
-        assert_eq!(t.segments, vec![Segment::Literal("hello world".to_string())]);
+        assert_eq!(
+            t.segments,
+            vec![Segment::Literal("hello world".to_string())]
+        );
     }
 
     #[test]
@@ -541,19 +546,28 @@ mod tests {
     #[test]
     fn parse_unclosed_brace_is_error() {
         let result = Template::parse("hello {name");
-        assert!(matches!(result, Err(ProsaicError::TemplateParseError { .. })));
+        assert!(matches!(
+            result,
+            Err(ProsaicError::TemplateParseError { .. })
+        ));
     }
 
     #[test]
     fn parse_empty_slot_is_error() {
         let result = Template::parse("hello {}");
-        assert!(matches!(result, Err(ProsaicError::TemplateParseError { .. })));
+        assert!(matches!(
+            result,
+            Err(ProsaicError::TemplateParseError { .. })
+        ));
     }
 
     #[test]
     fn parse_empty_pipe_name_is_error() {
         let result = Template::parse("{name|}");
-        assert!(matches!(result, Err(ProsaicError::TemplateParseError { .. })));
+        assert!(matches!(
+            result,
+            Err(ProsaicError::TemplateParseError { .. })
+        ));
     }
 
     #[test]
@@ -561,8 +575,9 @@ mod tests {
         let t = Template::parse(
             "The {entity_type} {old_name} was renamed to {new_name} \
              which impacts {count} direct {count|pluralize:consumer} \
-             [{consumers|truncate:3|join}]"
-        ).unwrap();
+             [{consumers|truncate:3|join}]",
+        )
+        .unwrap();
 
         // "The " {entity_type} " " {old_name} " was renamed to " {new_name}
         // " which impacts " {count} " direct " {count|pluralize:consumer}
@@ -585,7 +600,11 @@ mod tests {
     fn parse_conditional_with_inner_slot() {
         let t = Template::parse("{name}{?count}, {count} items{/?}").unwrap();
         assert_eq!(t.segments.len(), 2);
-        if let Segment::Conditional { condition_key, inner } = &t.segments[1] {
+        if let Segment::Conditional {
+            condition_key,
+            inner,
+        } = &t.segments[1]
+        {
             assert_eq!(condition_key, "count");
             assert_eq!(inner.len(), 3); // ", ", {count}, " items"
         } else {
@@ -596,13 +615,19 @@ mod tests {
     #[test]
     fn parse_unclosed_conditional_is_error() {
         let result = Template::parse("{?count} never closed");
-        assert!(matches!(result, Err(ProsaicError::TemplateParseError { .. })));
+        assert!(matches!(
+            result,
+            Err(ProsaicError::TemplateParseError { .. })
+        ));
     }
 
     #[test]
     fn parse_empty_conditional_key_is_error() {
         let result = Template::parse("{?}content{/?}");
-        assert!(matches!(result, Err(ProsaicError::TemplateParseError { .. })));
+        assert!(matches!(
+            result,
+            Err(ProsaicError::TemplateParseError { .. })
+        ));
     }
 
     // ── Partial tests ───────────────────────────────────────────────────
@@ -617,13 +642,19 @@ mod tests {
     #[test]
     fn parse_empty_partial_name_is_error() {
         let result = Template::parse("{>}");
-        assert!(matches!(result, Err(ProsaicError::TemplateParseError { .. })));
+        assert!(matches!(
+            result,
+            Err(ProsaicError::TemplateParseError { .. })
+        ));
     }
 
     #[test]
     fn parse_unclosed_partial_is_error() {
         let result = Template::parse("{>tail");
-        assert!(matches!(result, Err(ProsaicError::TemplateParseError { .. })));
+        assert!(matches!(
+            result,
+            Err(ProsaicError::TemplateParseError { .. })
+        ));
     }
 
     // ── literal_tokens tests ────────────────────────────────────────────

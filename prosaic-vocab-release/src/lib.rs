@@ -296,8 +296,10 @@ mod tests_es {
         let mut session = Session::new();
         let out = engine.render(&mut session, "release.tagged", &ctx).unwrap();
         assert!(out.contains("1.2.0"), "got: {out}");
-        assert!(out.contains("etiquetada") || out.contains("etiquetada"),
-            "Expected Spanish tagged phrase, got: {out}");
+        assert!(
+            out.contains("etiquetada") || out.contains("etiquetada"),
+            "Expected Spanish tagged phrase, got: {out}"
+        );
     }
 
     #[test]
@@ -305,12 +307,19 @@ mod tests_es {
         let engine = engine();
         let mut ctx = Context::new();
         ctx.insert("name", Value::String("API de streaming".into()));
-        ctx.insert("description", Value::String("eventos enviados por el servidor vía HTTP".into()));
+        ctx.insert(
+            "description",
+            Value::String("eventos enviados por el servidor vía HTTP".into()),
+        );
         let mut session = Session::new();
-        let out = engine.render(&mut session, "release.feature_added", &ctx).unwrap();
+        let out = engine
+            .render(&mut session, "release.feature_added", &ctx)
+            .unwrap();
         assert!(out.contains("API de streaming"), "got: {out}");
-        assert!(out.contains("funcionalidad") || out.contains("Nueva") || out.contains("introduce"),
-            "Expected Spanish feature phrase, got: {out}");
+        assert!(
+            out.contains("funcionalidad") || out.contains("Nueva") || out.contains("introduce"),
+            "Expected Spanish feature phrase, got: {out}"
+        );
     }
 
     #[test]
@@ -318,26 +327,38 @@ mod tests_es {
         let engine = engine();
         let mut ctx = Context::new();
         ctx.insert("name", Value::String("Config::load()".into()));
-        ctx.insert("migration_path", Value::String("use Config::from_file() en su lugar".into()));
+        ctx.insert(
+            "migration_path",
+            Value::String("use Config::from_file() en su lugar".into()),
+        );
         ctx.insert("salience", Value::String("high".into()));
         let mut session = Session::new();
-        let out = engine.render(&mut session, "release.breaking_change", &ctx).unwrap();
+        let out = engine
+            .render(&mut session, "release.breaking_change", &ctx)
+            .unwrap();
         assert!(out.contains("Config::load()"), "got: {out}");
-        assert!(out.contains("disruptivo") || out.contains("Disruptivo"),
-            "Expected 'disruptivo', got: {out}");
+        assert!(
+            out.contains("disruptivo") || out.contains("Disruptivo"),
+            "Expected 'disruptivo', got: {out}"
+        );
     }
 
     #[test]
     fn bugfix_with_issue_number() {
         let engine = engine();
         let mut ctx = Context::new();
-        ctx.insert("description", Value::String("agotamiento del pool de conexiones bajo carga".into()));
+        ctx.insert(
+            "description",
+            Value::String("agotamiento del pool de conexiones bajo carga".into()),
+        );
         ctx.insert("issue_number", Value::Number(512));
         let mut session = Session::new();
         let out = engine.render(&mut session, "release.bugfix", &ctx).unwrap();
         assert!(out.contains("512"), "got: {out}");
-        assert!(out.contains("Corregido") || out.contains("error") || out.contains("incidencia"),
-            "Expected Spanish bugfix phrase, got: {out}");
+        assert!(
+            out.contains("Corregido") || out.contains("error") || out.contains("incidencia"),
+            "Expected Spanish bugfix phrase, got: {out}"
+        );
     }
 
     #[test]
@@ -347,11 +368,21 @@ mod tests_es {
         ctx.insert("count", Value::Number(7));
         ctx.insert(
             "top_contributors",
-            Value::List(vec!["Alice".into(), "Bob".into(), "Carol".into(), "Dave".into()]),
+            Value::List(vec![
+                "Alice".into(),
+                "Bob".into(),
+                "Carol".into(),
+                "Dave".into(),
+            ]),
         );
         let mut session = Session::new();
-        let out = engine.render(&mut session, "release.contributor_summary", &ctx).unwrap();
-        assert!(out.contains("7 colaboradores"), "Expected '7 colaboradores', got: {out}");
+        let out = engine
+            .render(&mut session, "release.contributor_summary", &ctx)
+            .unwrap();
+        assert!(
+            out.contains("7 colaboradores"),
+            "Expected '7 colaboradores', got: {out}"
+        );
     }
 
     #[test]
@@ -366,7 +397,10 @@ mod tests_es {
         let out = engine.render(&mut session, "release.stats", &ctx).unwrap();
         assert!(out.contains("42"), "got: {out}");
         assert!(out.contains("18"), "got: {out}");
-        assert!(out.contains("archivo"), "Expected Spanish 'archivo', got: {out}");
+        assert!(
+            out.contains("archivo"),
+            "Expected Spanish 'archivo', got: {out}"
+        );
     }
 
     #[test]
@@ -374,9 +408,14 @@ mod tests_es {
         let engine = engine();
         let mut ctx = Context::new();
         ctx.insert("version", Value::String("3.0.0".into()));
-        ctx.insert("headline", Value::String("Revisión arquitectónica importante para escalabilidad".into()));
+        ctx.insert(
+            "headline",
+            Value::String("Revisión arquitectónica importante para escalabilidad".into()),
+        );
         let mut session = Session::new();
-        let out = engine.render(&mut session, "release.summary", &ctx).unwrap();
+        let out = engine
+            .render(&mut session, "release.summary", &ctx)
+            .unwrap();
         assert!(out.contains("3.0.0"), "got: {out}");
         assert!(out.contains("Revisión"), "got: {out}");
     }

@@ -8,9 +8,9 @@
 //! regardless of whether the caller thought to register an antonym.
 
 #[cfg(not(feature = "std"))]
-use alloc::string::{String, ToString};
-#[cfg(not(feature = "std"))]
 use alloc::format;
+#[cfg(not(feature = "std"))]
+use alloc::string::{String, ToString};
 
 use crate::collections::HashMap;
 
@@ -56,8 +56,8 @@ impl AntonymRegistry {
 /// been renamed"), not after "has been". A first-word match is all we
 /// need.
 const SIMPLE_AUX: &[&str] = &[
-    "is", "are", "was", "were", "has", "have", "had", "will", "would",
-    "could", "should", "may", "might", "must", "can",
+    "is", "are", "was", "were", "has", "have", "had", "will", "would", "could", "should", "may",
+    "might", "must", "can",
 ];
 
 /// Fallback negation: split the phrase after its first auxiliary and
@@ -99,10 +99,7 @@ mod tests {
 
     #[test]
     fn insert_not_after_has_been() {
-        assert_eq!(
-            insert_not("has been renamed"),
-            "has not been renamed"
-        );
+        assert_eq!(insert_not("has been renamed"), "has not been renamed");
     }
 
     #[test]

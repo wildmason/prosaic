@@ -8,22 +8,22 @@
 //! Uses only pure Rust — no CLDR data. Expansion (subjunctive, imperfecto,
 //! full irregular tables, dialectal variation) is planned for follow-up crates.
 
-pub mod gender;
-pub(crate) mod pluralize;
 pub(crate) mod articles;
 pub(crate) mod conjugate;
+pub mod gender;
 pub(crate) mod numbers;
+pub(crate) mod pluralize;
 
 use prosaic_core::{
-    AgreementFeatures, Conjunction, Gender, GrammaticalNumber, Language, Person,
-    PluralCategory, ReferenceForm, RstRelation, Tense,
+    AgreementFeatures, Conjunction, Gender, GrammaticalNumber, Language, Person, PluralCategory,
+    ReferenceForm, RstRelation, Tense,
 };
 
-use articles::{article_with_features, basic_article};
 pub use articles::indefinite_article;
-use pluralize::{pluralize_es, singularize_es};
+use articles::{article_with_features, basic_article};
 use conjugate::{conjugate_es, past_participle_es, present_participle_es};
 use numbers::number_to_words_es;
+use pluralize::{pluralize_es, singularize_es};
 
 /// Spanish language grammar implementation.
 ///
@@ -74,7 +74,7 @@ impl Language for Spanish {
     fn join_list(&self, items: &[&str], conjunction: Conjunction) -> String {
         let conj = match conjunction {
             Conjunction::And => "y",
-            Conjunction::Or  => "o",
+            Conjunction::Or => "o",
         };
         join_list_es(items, conj)
     }
@@ -82,17 +82,17 @@ impl Language for Spanish {
     fn ordinal(&self, n: usize) -> String {
         // Spanish ordinals beyond 10 are verbose; return numeric form for n >= 11.
         match n {
-            1  => "primero".to_string(),
-            2  => "segundo".to_string(),
-            3  => "tercero".to_string(),
-            4  => "cuarto".to_string(),
-            5  => "quinto".to_string(),
-            6  => "sexto".to_string(),
-            7  => "séptimo".to_string(),
-            8  => "octavo".to_string(),
-            9  => "noveno".to_string(),
+            1 => "primero".to_string(),
+            2 => "segundo".to_string(),
+            3 => "tercero".to_string(),
+            4 => "cuarto".to_string(),
+            5 => "quinto".to_string(),
+            6 => "sexto".to_string(),
+            7 => "séptimo".to_string(),
+            8 => "octavo".to_string(),
+            9 => "noveno".to_string(),
             10 => "décimo".to_string(),
-            _  => format!("{n}º"),
+            _ => format!("{n}º"),
         }
     }
 
@@ -120,9 +120,9 @@ impl Language for Spanish {
         features: &AgreementFeatures,
     ) -> Option<String> {
         match form {
-            ReferenceForm::Pronoun      => Some(spanish_pronoun(features)),
+            ReferenceForm::Pronoun => Some(spanish_pronoun(features)),
             ReferenceForm::Demonstrative => Some(spanish_demonstrative(features)),
-            ReferenceForm::Zero         => None,
+            ReferenceForm::Zero => None,
             ReferenceForm::Full | ReferenceForm::ShortName => None,
         }
     }
@@ -138,11 +138,7 @@ impl Language for Spanish {
         // Gender-aware: "las 3 clases" (fem), "los 3 servicios" (masc).
         match count {
             0 => String::new(),
-            1 => format!(
-                "{} {}",
-                singular_article(features),
-                entity_type
-            ),
+            1 => format!("{} {}", singular_article(features), entity_type),
             _ => format!(
                 "{} {count} {}",
                 plural_article(features),
@@ -155,14 +151,14 @@ impl Language for Spanish {
         use RstRelation::*;
         Some(match relation {
             Elaboration => "Además, ",
-            Contrast    => "Sin embargo, ",
-            Cause       => "Debido a esto, ",
-            Result      => "Como resultado, ",
-            Concession  => "No obstante, ",
-            Sequence    => "Luego, ",
-            Condition   => "Si esto ocurre, ",
-            Background  => "Mientras tanto, ",
-            Summary     => "En resumen, ",
+            Contrast => "Sin embargo, ",
+            Cause => "Debido a esto, ",
+            Result => "Como resultado, ",
+            Concession => "No obstante, ",
+            Sequence => "Luego, ",
+            Condition => "Si esto ocurre, ",
+            Background => "Mientras tanto, ",
+            Summary => "En resumen, ",
         })
     }
 
@@ -231,11 +227,11 @@ impl Language for Spanish {
 
 fn spanish_pronoun(features: &AgreementFeatures) -> String {
     match (features.gender, features.number) {
-        (Gender::Fem, GrammaticalNumber::Plural)
-        | (Gender::Fem, GrammaticalNumber::Dual) => "ellas".to_string(),
+        (Gender::Fem, GrammaticalNumber::Plural) | (Gender::Fem, GrammaticalNumber::Dual) => {
+            "ellas".to_string()
+        }
         (Gender::Fem, _) => "ella".to_string(),
-        (_, GrammaticalNumber::Plural)
-        | (_, GrammaticalNumber::Dual) => "ellos".to_string(),
+        (_, GrammaticalNumber::Plural) | (_, GrammaticalNumber::Dual) => "ellos".to_string(),
         _ => "él".to_string(),
     }
 }
@@ -324,7 +320,10 @@ mod tests {
     #[test]
     fn conjugate_delegates_to_module() {
         let es = Spanish::new();
-        assert_eq!(es.conjugate("hablar", Tense::Present, Person::First), "hablo");
+        assert_eq!(
+            es.conjugate("hablar", Tense::Present, Person::First),
+            "hablo"
+        );
     }
 
     #[test]
@@ -552,9 +551,18 @@ mod tests {
     #[test]
     fn discourse_marker_spanish() {
         let es = Spanish::new();
-        assert_eq!(es.discourse_marker(RstRelation::Elaboration), Some("Además, "));
-        assert_eq!(es.discourse_marker(RstRelation::Contrast),    Some("Sin embargo, "));
-        assert_eq!(es.discourse_marker(RstRelation::Result),      Some("Como resultado, "));
+        assert_eq!(
+            es.discourse_marker(RstRelation::Elaboration),
+            Some("Además, ")
+        );
+        assert_eq!(
+            es.discourse_marker(RstRelation::Contrast),
+            Some("Sin embargo, ")
+        );
+        assert_eq!(
+            es.discourse_marker(RstRelation::Result),
+            Some("Como resultado, ")
+        );
     }
 
     // ── Send + Sync assertion ─────────────────────────────────────────────────

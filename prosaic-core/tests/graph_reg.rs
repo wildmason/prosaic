@@ -35,7 +35,9 @@ fn graph_based_relation_in_referring_expression() {
             .with_attribute("layer", "api")
             .with_relation("that calls", "SessionService"),
     );
-    engine.register_template("t", "{name|refer} was modified").unwrap();
+    engine
+        .register_template("t", "{name|refer} was modified")
+        .unwrap();
 
     let mut session = Session::new();
     let mut ctx = Context::new();
@@ -53,14 +55,14 @@ fn graph_based_relation_in_referring_expression() {
 fn graph_based_falls_back_to_plain_when_attributes_suffice() {
     let mut engine = engine_graph();
     engine.register_entity(
-        EntityDescriptor::new("UserService", "class")
-            .with_attribute("layer", "domain"),
+        EntityDescriptor::new("UserService", "class").with_attribute("layer", "domain"),
     );
     engine.register_entity(
-        EntityDescriptor::new("AuthService", "class")
-            .with_attribute("layer", "infra"),
+        EntityDescriptor::new("AuthService", "class").with_attribute("layer", "infra"),
     );
-    engine.register_template("t", "{name|refer} was modified").unwrap();
+    engine
+        .register_template("t", "{name|refer} was modified")
+        .unwrap();
 
     let mut session = Session::new();
     let mut ctx = Context::new();
@@ -96,7 +98,9 @@ fn graph_based_default_dale_reiter_does_not_emit_relations() {
             .with_attribute("layer", "api")
             .with_relation("that calls", "SessionService"),
     );
-    engine.register_template("t", "{name|refer} was modified").unwrap();
+    engine
+        .register_template("t", "{name|refer} was modified")
+        .unwrap();
 
     let mut session = Session::new();
     let mut ctx = Context::new();
@@ -124,7 +128,9 @@ fn graph_based_single_entity_no_distractors() {
             .with_attribute("layer", "domain")
             .with_relation("that handles", "Logins"),
     );
-    engine.register_template("t", "{name|refer} was modified").unwrap();
+    engine
+        .register_template("t", "{name|refer} was modified")
+        .unwrap();
 
     let mut session = Session::new();
     let mut ctx = Context::new();
@@ -149,7 +155,9 @@ fn graph_based_full_surface_form_with_relation() {
             .with_attribute("layer", "api")
             .with_relation("that calls", "SessionService"),
     );
-    engine.register_template("t", "{name|refer} was modified").unwrap();
+    engine
+        .register_template("t", "{name|refer} was modified")
+        .unwrap();
 
     let mut session = Session::new();
     let mut ctx = Context::new();

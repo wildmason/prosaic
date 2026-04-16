@@ -44,9 +44,7 @@ pub(crate) fn smart_quotes_in_place(output: &mut String) {
                 let next = chars.get(i + 1).copied();
                 // Apostrophe heuristic: alphanumeric on both sides →
                 // contraction or possessive (e.g. "it's", "Alice's").
-                let is_apostrophe = prev
-                    .map(|p| p.is_alphanumeric())
-                    .unwrap_or(false)
+                let is_apostrophe = prev.map(|p| p.is_alphanumeric()).unwrap_or(false)
                     && next.map(|n| n.is_alphanumeric()).unwrap_or(false);
                 if is_apostrophe {
                     scratch.push('\u{2019}');

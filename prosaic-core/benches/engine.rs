@@ -9,7 +9,7 @@
 //! large registry, and document-plan rendering. Use as a baseline
 //! against which to compare future perf changes.
 
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use prosaic_core::{
     Context, DocumentPlan, Engine, EntityDescriptor, GroupingStrategy, Session, Strictness, Value,
     Variation,
@@ -71,7 +71,9 @@ fn bench_single_render(c: &mut Criterion) {
     c.bench_function("render_single_rename_medium", |b| {
         b.iter(|| {
             let mut session = Session::new();
-            let out = engine.render(&mut session, "code.renamed", black_box(&ctx)).unwrap();
+            let out = engine
+                .render(&mut session, "code.renamed", black_box(&ctx))
+                .unwrap();
             black_box(out);
         });
     });
@@ -86,22 +88,24 @@ fn bench_batch_with_aggregation(c: &mut Criterion) {
         ctx.insert("old_name", Value::String(old.into()));
         ctx.insert("new_name", Value::String(new.into()));
         ctx.insert("consumer_count", Value::Number(2));
-        ctx.insert(
-            "consumers",
-            Value::List(vec!["Foo".into(), "Bar".into()]),
-        );
+        ctx.insert("consumers", Value::List(vec!["Foo".into(), "Bar".into()]));
         ctx
     };
     let events: Vec<(&str, Context)> = vec![
         ("code.renamed", make_rename("UserService", "AccountService")),
-        ("code.renamed", make_rename("AuthService", "IdentityService")),
+        (
+            "code.renamed",
+            make_rename("AuthService", "IdentityService"),
+        ),
         ("code.renamed", make_rename("DataService", "StorageService")),
     ];
 
     c.bench_function("render_batch_same_action_aggregation", |b| {
         b.iter(|| {
             let mut session = Session::new();
-            let out = engine.render_batch(&mut session, black_box(&events)).unwrap();
+            let out = engine
+                .render_batch(&mut session, black_box(&events))
+                .unwrap();
             black_box(out);
         });
     });
@@ -204,7 +208,9 @@ fn bench_clause_reduction(c: &mut Criterion) {
     c.bench_function("clause_reduction_three_same_entity", |b| {
         b.iter(|| {
             let mut session = Session::new();
-            let out = engine.render_batch(&mut session, black_box(&events)).unwrap();
+            let out = engine
+                .render_batch(&mut session, black_box(&events))
+                .unwrap();
             black_box(out);
         });
     });
