@@ -113,9 +113,9 @@ side-by-side translation guide for RosaeNLG Spanish users.
 
 ```toml
 [dependencies]
-prosaic-core = "0.1"
-prosaic-grammar-es = "0.1"
-prosaic-vocab-code = "0.1"  # Optional — pre-built vocab with es.rs sibling
+prosaic-core = "0.2"
+prosaic-grammar-es = "0.2"
+prosaic-vocab-code = "0.2"  # Optional — pre-built vocab with es.rs sibling
 ```
 
 ```rust

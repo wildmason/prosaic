@@ -50,7 +50,7 @@
 //! Disable the `std` feature to compile under `no_std + alloc`:
 //!
 //! ```toml
-//! prosaic-core = { version = "0.1", default-features = false }
+//! prosaic-core = { version = "0.2", default-features = false }
 //! ```
 //!
 //! Without the `std` feature:
