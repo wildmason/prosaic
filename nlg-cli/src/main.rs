@@ -63,6 +63,8 @@ enum Strategy {
 struct Config {
     vocab_code: bool,
     vocab_git: bool,
+    vocab_release: bool,
+    vocab_pr: bool,
     strategy: Strategy,
     smart_quotes: bool,
     max_length: Option<usize>,
@@ -75,6 +77,8 @@ impl Default for Config {
         Self {
             vocab_code: true,
             vocab_git: true,
+            vocab_release: false,
+            vocab_pr: false,
             strategy: Strategy::Sequential,
             smart_quotes: false,
             max_length: None,
@@ -101,7 +105,19 @@ fn main() {
 
 fn parse_args() -> Result<Config, String> {
     let mut cfg = Config::default();
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    // Expand `--flag=value` into `["--flag", "value"]` so the rest of the
+    // parser can use uniform space-separated matching.
+    let args: Vec<String> = std::env::args()
+        .skip(1)
+        .flat_map(|a| {
+            if let Some(stripped) = a.strip_prefix("--")
+                && let Some((key, val)) = stripped.split_once('=')
+            {
+                return vec![format!("--{key}"), val.to_string()];
+            }
+            vec![a]
+        })
+        .collect();
     let mut i = 0;
     while i < args.len() {
         let arg = &args[i];
@@ -118,25 +134,32 @@ fn parse_args() -> Result<Config, String> {
             "--vocab" => {
                 i += 1;
                 let list = args.get(i).ok_or("--vocab requires a value")?.clone();
-                let (mut want_code, mut want_git) = (false, false);
+                let (mut want_code, mut want_git, mut want_release, mut want_pr) =
+                    (false, false, false, false);
                 for v in list.split(',') {
                     match v.trim() {
                         "code" => want_code = true,
                         "git" => want_git = true,
+                        "release" => want_release = true,
+                        "pr" => want_pr = true,
                         "both" | "all" => {
                             want_code = true;
                             want_git = true;
+                            want_release = true;
+                            want_pr = true;
                         }
                         "none" => {}
                         other => {
                             return Err(format!(
-                                "unknown vocab `{other}` — expected code, git, both, or none"
+                                "unknown vocab `{other}` — expected code, git, release, pr, all, or none"
                             ));
                         }
                     }
                 }
                 cfg.vocab_code = want_code;
                 cfg.vocab_git = want_git;
+                cfg.vocab_release = want_release;
+                cfg.vocab_pr = want_pr;
             }
             "--strategy" => {
                 i += 1;
@@ -160,6 +183,37 @@ fn parse_args() -> Result<Config, String> {
                         .map_err(|_| format!("--max-length: `{v}` is not a valid number"))?,
                 );
             }
+            "--preset" => {
+                i += 1;
+                let v = args.get(i).ok_or("--preset requires a value")?.clone();
+                match v.as_str() {
+                    "changelog" => {
+                        cfg.vocab_code = true;
+                        cfg.vocab_git = true;
+                        cfg.vocab_release = true;
+                        cfg.strategy = Strategy::ByAction;
+                        cfg.max_length = Some(120);
+                    }
+                    "release-notes" => {
+                        cfg.vocab_release = true;
+                        cfg.strategy = Strategy::ByAction;
+                        cfg.smart_quotes = true;
+                    }
+                    "digest" => {
+                        cfg.vocab_code = true;
+                        cfg.vocab_git = true;
+                        cfg.vocab_release = true;
+                        cfg.vocab_pr = true;
+                        cfg.strategy = Strategy::ByEntity;
+                        cfg.max_length = Some(100);
+                    }
+                    other => {
+                        return Err(format!(
+                            "unknown preset `{other}` — expected changelog, release-notes, or digest"
+                        ));
+                    }
+                }
+            }
             other => return Err(format!("unknown argument `{other}` (try --help)")),
         }
         i += 1;
@@ -174,7 +228,12 @@ USAGE:
     nlg [OPTIONS] < events.jsonl
 
 OPTIONS:
-    --vocab <list>         Vocab modules: code, git, both, none (default: code,git)
+    --preset <name>        Apply a named preset (changelog, release-notes, digest).
+                           Sets vocab, strategy, and other defaults; explicit flags override.
+                             changelog     — vocab: code,git,release  strategy: by-action  max-length: 120
+                             release-notes — vocab: release           strategy: by-action  smart-quotes: on
+                             digest        — vocab: code,git,release,pr  strategy: by-entity  max-length: 100
+    --vocab <list>         Vocab modules: code, git, release, pr, all, none (default: code,git)
     --strategy <mode>      Batch mode: sequential, by-entity, by-action (default: sequential)
     --smart-quotes         Enable typographic quote substitution
     --max-length <N>       Cap each sentence at N characters
@@ -198,6 +257,12 @@ fn run(cfg: Config) -> Result<(), String> {
     }
     if cfg.vocab_git {
         nlg_vocab_git::register(&mut engine).map_err(|e| format!("vocab-git: {e}"))?;
+    }
+    if cfg.vocab_release {
+        nlg_vocab_release::register(&mut engine).map_err(|e| format!("vocab-release: {e}"))?;
+    }
+    if cfg.vocab_pr {
+        nlg_vocab_pr::register(&mut engine).map_err(|e| format!("vocab-pr: {e}"))?;
     }
 
     let stdin = io::stdin();
