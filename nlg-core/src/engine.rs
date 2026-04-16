@@ -1411,6 +1411,28 @@ impl Engine {
         Ok(())
     }
 
+    /// Check whether a template is registered under the given key.
+    ///
+    /// Pure read, no mutation. Useful for callers that want to skip
+    /// rendering when no template matches (e.g. tracing bridges where
+    /// not every event type has a registered template).
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use nlg_core::Engine;
+    /// use nlg_grammar_en::English;
+    ///
+    /// let mut engine = Engine::new(English::new());
+    /// engine.register_template("greet", "Hello {name}").unwrap();
+    ///
+    /// assert!(engine.has_template("greet"));
+    /// assert!(!engine.has_template("farewell"));
+    /// ```
+    pub fn has_template(&self, key: &str) -> bool {
+        self.templates.contains_key(key)
+    }
+
     /// Compute the salience for a context using this engine's thresholds.
     pub fn context_salience(&self, ctx: &Context) -> Salience {
         Salience::from_context(ctx, self.salience_thresholds)
@@ -2782,6 +2804,16 @@ mod tests {
 
     fn test_session() -> Session {
         Session::new()
+    }
+
+    // ── Template existence ──────────────────────────────────────────────────
+
+    #[test]
+    fn has_template_returns_true_for_registered() {
+        let mut engine = test_engine();
+        engine.register_template("t", "hello").unwrap();
+        assert!(engine.has_template("t"));
+        assert!(!engine.has_template("nope"));
     }
 
     // ── Basic rendering (backward compatibility) ─────────────────────────

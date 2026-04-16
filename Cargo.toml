@@ -9,6 +9,7 @@ members = [
     "nlg-vocab-pr",
     "nlg-vocab-release",
     "nlg-cli",
+    "nlg-tracing",
 ]
 
 [workspace.package]
