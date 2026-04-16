@@ -1,21 +1,42 @@
 use ahash::AHashMap;
 
+use crate::agreement::AgreementFeatures;
+
 /// A value that can be inserted into a rendering context.
+///
+/// The [`Value::Entity`] variant carries a named entity with optional
+/// grammatical agreement features for multilingual rendering. In English
+/// it renders identically to [`Value::String`] (just the name); non-English
+/// grammars can inspect the `features` field for gender, number, case, etc.
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Value {
     String(String),
     Number(i64),
     List(Vec<String>),
+    /// A named entity carrying agreement features for multilingual rendering.
+    ///
+    /// In English rendering this behaves identically to `Value::String(name)`.
+    /// Non-English grammars consult `features` to produce correctly-agreeing
+    /// articles, adjectives, pronouns, and verb forms.
+    Entity {
+        name: String,
+        #[cfg_attr(feature = "serde", serde(default))]
+        features: AgreementFeatures,
+    },
 }
 
 impl Value {
     /// Render this value as a display string.
+    ///
+    /// For [`Value::Entity`] this returns the entity's name — identical
+    /// to the behaviour of [`Value::String`].
     pub fn as_display(&self) -> String {
         match self {
             Value::String(s) => s.clone(),
             Value::Number(n) => n.to_string(),
             Value::List(items) => items.join(", "),
+            Value::Entity { name, .. } => name.clone(),
         }
     }
 
@@ -28,6 +49,8 @@ impl Value {
     }
 
     /// Try to interpret this value as a list of strings.
+    ///
+    /// Returns `None` for [`Value::Entity`] — entities are not lists.
     pub fn as_list(&self) -> Option<&[String]> {
         match self {
             Value::List(items) => Some(items),
@@ -322,5 +345,67 @@ mod ctx_macro_tests {
     fn value_literal_passes_through() {
         let c = ctx! { x: Value::Number(7) };
         assert_eq!(c.get("x"), Some(&Value::Number(7)));
+    }
+}
+
+#[cfg(test)]
+mod entity_value_tests {
+    use super::*;
+    use crate::agreement::{AgreementFeatures, Gender, Number};
+
+    #[test]
+    fn entity_display_is_name() {
+        let v = Value::Entity {
+            name: "UserService".into(),
+            features: AgreementFeatures::default(),
+        };
+        assert_eq!(v.as_display(), "UserService");
+    }
+
+    #[test]
+    fn entity_as_list_is_none() {
+        let v = Value::Entity {
+            name: "X".into(),
+            features: AgreementFeatures::default(),
+        };
+        assert!(v.as_list().is_none());
+    }
+
+    #[test]
+    fn entity_as_number_is_none() {
+        let v = Value::Entity {
+            name: "Service".into(),
+            features: AgreementFeatures::default(),
+        };
+        assert!(v.as_number().is_none());
+    }
+
+    #[test]
+    fn entity_with_features_round_trips_via_equality() {
+        let features = AgreementFeatures::new()
+            .with_gender(Gender::Fem)
+            .with_number(Number::Singular);
+        let v1 = Value::Entity {
+            name: "Alice".into(),
+            features,
+        };
+        let v2 = v1.clone();
+        assert_eq!(v1, v2);
+    }
+
+    #[test]
+    fn entity_display_ignores_features() {
+        // The name is all that as_display returns — features are invisible.
+        let v_plain = Value::Entity {
+            name: "Alice".into(),
+            features: AgreementFeatures::default(),
+        };
+        let v_with_features = Value::Entity {
+            name: "Alice".into(),
+            features: AgreementFeatures::new()
+                .with_gender(Gender::Fem)
+                .with_number(Number::Singular),
+        };
+        assert_eq!(v_plain.as_display(), v_with_features.as_display());
     }
 }

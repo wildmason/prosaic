@@ -2640,6 +2640,8 @@ fn is_truthy(value: Option<&Value>) -> bool {
         Some(Value::Number(n)) => *n != 0,
         Some(Value::String(s)) => !s.is_empty(),
         Some(Value::List(items)) => !items.is_empty(),
+        // An entity is truthy if its name is non-empty.
+        Some(Value::Entity { name, .. }) => !name.is_empty(),
     }
 }
 

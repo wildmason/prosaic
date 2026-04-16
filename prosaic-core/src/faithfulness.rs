@@ -249,6 +249,8 @@ fn tokens_from_context(ctx: &Context) -> Vec<String> {
                     out.extend(tokenize(item));
                 }
             }
+            // Entity renders as its name — same token contribution as String.
+            Value::Entity { name, .. } => out.extend(tokenize(name)),
         }
     }
     out
