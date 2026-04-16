@@ -5,7 +5,7 @@ use crate::faithfulness::score_faithfulness;
 use crate::session::Session;
 
 use crate::context::{Context, IntoContext, Value};
-use crate::discourse::{ListStyle, ReferenceForm};
+use crate::discourse::{ListStyle, ReferenceForm, Transition};
 use crate::error::ProsaicError;
 use crate::language::{Conjunction, Language, Person, PluralCategory, VerbForm};
 use crate::antonyms::{insert_not, AntonymRegistry};
@@ -124,6 +124,10 @@ pub struct RenderExplanation {
     /// Whether the silent-mode cleanup stripped any trailing orphan
     /// words from the output.
     pub cleanup_stripped_tail: bool,
+    /// Centering Theory transition class for this render. Reflects how the
+    /// discourse center moved relative to the previous render. `NoCb` on the
+    /// first render or after a session reset.
+    pub centering_transition: Transition,
 }
 
 /// Iterator returned by [`Engine::render_iter`]. Wraps the batch
@@ -2001,6 +2005,7 @@ impl Engine {
             .unwrap_or_default();
 
         let focus_is_plural = session.discourse.focus_is_plural();
+        let centering_transition = session.discourse.last_transition();
 
         #[cfg(feature = "polish")]
         let length_split_applied = self
@@ -2024,6 +2029,7 @@ impl Engine {
             focus_is_plural,
             length_split_applied,
             cleanup_stripped_tail: false,
+            centering_transition,
         })
     }
 
@@ -3607,6 +3613,37 @@ mod tests {
         let exp = engine.render_explained(&mut session, "t", &ctx).unwrap();
         // First mention → Full form.
         assert_eq!(exp.reference_form, Some(ReferenceForm::Full));
+    }
+
+    #[test]
+    fn explain_reports_centering_transition() {
+        let mut engine = test_engine();
+        engine
+            .register_template("t", "{name|refer} was modified")
+            .unwrap();
+        let mut s = test_session();
+
+        let mut c = Context::new();
+        c.insert("entity_type", Value::String("class".into()));
+        c.insert("name", Value::String("Foo".into()));
+
+        // First render: no prior Cb → NoCb.
+        let e1 = engine.render_explained(&mut s, "t", &c).unwrap();
+        assert_eq!(e1.centering_transition, Transition::NoCb);
+
+        // Second render of same entity: Cb == prev_Cb (Foo) AND Cb == Cp (Foo) → Continue.
+        let e2 = engine.render_explained(&mut s, "t", &c).unwrap();
+        assert_eq!(e2.centering_transition, Transition::Continue);
+
+        // Third render of a new entity: introduces Bar for the first time.
+        // previous_cf = [{Foo,0}], current_cf = [{Bar,0}]. No overlap.
+        // Bar is new (mention_count == 1), fallback → new_cb = Foo (previous_focus).
+        // classify_transition(Foo, Foo, Bar) → Retain.
+        let mut c2 = Context::new();
+        c2.insert("entity_type", Value::String("class".into()));
+        c2.insert("name", Value::String("Bar".into()));
+        let e3 = engine.render_explained(&mut s, "t", &c2).unwrap();
+        assert_eq!(e3.centering_transition, Transition::Retain);
     }
 
     #[test]

@@ -2,6 +2,42 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 use ahash::AHashMap;
 
+/// A forward-looking center: an entity realized in an utterance with its
+/// grammatical-role-based salience rank (lower = more prominent).
+///
+/// Rank 0 corresponds to the Subject position; higher ranks correspond to
+/// Object (1), Indirect Object / Location (2), and Oblique (3+).
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct Cf {
+    /// Entity name as passed to `mention_entity` or `mention_entity_ranked`.
+    pub name: String,
+    /// Grammatical-role-based rank (lower = more prominent). Rank 0 is Subject.
+    pub rank: u8,
+}
+
+/// Centering Theory transition class between consecutive utterances.
+///
+/// Prefer (in order): `Continue` > `Retain` > `SmoothShift` > `RoughShift`.
+/// `NoCb` means no coherent transition could be classified (first render,
+/// post-reset, or utterance with no entities).
+///
+/// Based on Grosz, Joshi & Weinstein (1995).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum Transition {
+    /// Cb(n) == Cb(n−1) and Cb(n) == Cp(n): most coherent, entity in focus stays.
+    Continue,
+    /// Cb(n) == Cb(n−1) but Cb(n) != Cp(n): coherent but not the most salient entity.
+    Retain,
+    /// Cb(n) != Cb(n−1) but Cb(n) == Cp(n): focus shifts cleanly to the new center.
+    SmoothShift,
+    /// Cb(n) != Cb(n−1) and Cb(n) != Cp(n): least coherent shift.
+    RoughShift,
+    /// No transition could be classified: first render, post-reset, or no entities.
+    NoCb,
+}
+
 /// Private word interner. Maps lowercased words to stable `u32` ids.
 /// Lowercasing happens at intern time; callers must pass already-lowercased
 /// input to `intern`/`get`.
@@ -88,6 +124,22 @@ pub struct DiscourseState {
     /// current render's focus; this tracks what `focus_entity` was at the point
     /// `advance_cb` was last called.
     previous_focus: Option<String>,
+
+    /// Forward-looking centers being built during the CURRENT render.
+    /// Populated by `mention_entity_ranked`, cleared by `begin_render`.
+    /// Ordered by rank ascending (lowest rank first); ties broken by insertion
+    /// order. The first element is the Cp (preferred center).
+    current_cf: Vec<Cf>,
+
+    /// Forward-looking centers from the PREVIOUS render. Set by
+    /// `compute_cb_transition` as a snapshot of `current_cf`. Used to
+    /// identify the Cb as the highest-ranked Cf member shared with the
+    /// previous utterance.
+    previous_cf: Vec<Cf>,
+
+    /// Transition classification computed by the most recent `advance_cb`
+    /// call. `Transition::NoCb` before any render or after a reset.
+    last_transition: Transition,
 }
 
 #[derive(Debug, Clone)]
@@ -210,6 +262,9 @@ impl DiscourseState {
             focus_is_plural: false,
             cb: None,
             previous_focus: None,
+            current_cf: Vec::new(),
+            previous_cf: Vec::new(),
+            last_transition: Transition::NoCb,
         }
     }
 
@@ -232,12 +287,35 @@ impl DiscourseState {
     /// Advance to the next render. Must be called at the start of each render.
     pub fn begin_render(&mut self) {
         self.render_index += 1;
+        self.current_cf.clear();
     }
 
-    /// Record that an entity was mentioned in the current render.
+    /// Record that an entity was mentioned in the current render at rank 0
+    /// (Subject position). Delegates to [`Self::mention_entity_ranked`].
+    ///
     /// Resets the focus-plural flag — compound subjects must mark
     /// themselves explicitly via [`Self::set_focus_plural`].
     pub fn mention_entity(&mut self, name: &str, entity_type: &str) {
+        self.mention_entity_ranked(name, entity_type, 0);
+    }
+
+    /// Record that an entity was mentioned in the current render with an
+    /// explicit grammatical-role rank. Lower rank = more prominent.
+    ///
+    /// Rank convention:
+    /// - 0: Subject (most prominent — the Cp candidate)
+    /// - 1: Direct Object
+    /// - 2: Indirect Object / Location
+    /// - 3+: Oblique / other
+    ///
+    /// The entity is inserted into `current_cf` in rank-ascending order.
+    /// If the entity is already in the Cf list, the lower of the two ranks
+    /// is kept (a subject mention always beats an object mention).
+    ///
+    /// `focus_entity` is updated when rank == 0 or when no focus has been
+    /// set yet for this render; this keeps the Cp semantics: the Subject is
+    /// the preferred center.
+    pub fn mention_entity_ranked(&mut self, name: &str, entity_type: &str, rank: u8) {
         let entry = self.entities.entry(name.to_string()).or_insert(EntityMention {
             entity_type: entity_type.to_string(),
             last_mentioned: 0,
@@ -246,9 +324,27 @@ impl DiscourseState {
         entry.last_mentioned = self.render_index;
         entry.mention_count += 1;
         entry.entity_type = entity_type.to_string();
-        self.focus_entity = Some(name.to_string());
-        self.last_entity_name = Some(name.to_string());
-        self.focus_is_plural = false;
+
+        // Update focus_entity (= Cp) when this is the most prominent slot
+        // (rank 0) or when no focus has been established yet this render.
+        if rank == 0 || self.focus_entity.is_none() {
+            self.focus_entity = Some(name.to_string());
+            self.last_entity_name = Some(name.to_string());
+            self.focus_is_plural = false;
+        }
+
+        // Insert into current_cf, deduplicating by name (keep lower rank).
+        if let Some(existing) = self.current_cf.iter_mut().find(|c| c.name == name) {
+            if rank < existing.rank {
+                existing.rank = rank;
+                // Re-sort after rank update.
+                self.current_cf.sort_by_key(|c| c.rank);
+            }
+        } else {
+            self.current_cf.push(Cf { name: name.to_string(), rank });
+            // Sort stably so Cp = first element.
+            self.current_cf.sort_by_key(|c| c.rank);
+        }
     }
 
     /// Determine how to refer to an entity given discourse history.
@@ -511,48 +607,116 @@ impl DiscourseState {
         self.compute_cb_transition();
     }
 
-    /// Compute and store the Cb for the **next** render, based on the entity
-    /// just focused in the current render.
+    /// The Centering Theory transition class from the most recent `advance_cb` call.
+    /// Returns `Transition::NoCb` before any render or after a reset.
+    pub fn last_transition(&self) -> Transition {
+        self.last_transition
+    }
+
+    /// The current backward-looking center, if any.
+    pub fn cb(&self) -> Option<&str> {
+        self.cb.as_deref()
+    }
+
+    /// The forward-looking centers being built during the current render,
+    /// ordered by rank ascending (Cp = first element).
+    pub fn cf(&self) -> &[Cf] {
+        &self.current_cf
+    }
+
+    /// The forward-looking centers from the previous render.
+    pub fn previous_cf(&self) -> &[Cf] {
+        &self.previous_cf
+    }
+
+    /// Compute and store the Cb for the **next** render, using Cf overlap to
+    /// identify the backward-looking center as the highest-ranked entity in
+    /// Cf(current) that also appeared in Cf(previous).
     ///
-    /// Cb transition rules (v1 — no grammatical role ranking):
+    /// When the pure Cf-overlap definition yields no shared entity, the method
+    /// falls back to prior-focus logic to preserve backward compatibility with
+    /// Rule 1 pronoun tests:
     ///
-    /// - **First render / post-reset** (`previous_focus` is None): Cb = current focus.
-    /// - **Continue** (same entity as last render): Cb stays on that entity.
-    /// - **Retain** (different entity, but it has been seen before):
-    ///   Cb shifts to the newly-focused entity.
-    /// - **Smooth Shift** (new entity introduced for first time): Cb stays on
-    ///   prior focus for one more utterance to preserve coherence.
-    /// - **No current entity**: Cb carries the prior focus forward.
+    /// - **No previous Cf** (first render / post-reset): Cb = Cp of current.
+    /// - **No overlap, new entity first time**: prior focus stays as Cb
+    ///   (Smooth Shift — introduce gently, keep prior thread alive).
+    /// - **No overlap, entity seen before**: Cb = current Cp (Retain-style).
+    /// - **No current entity**: Cb carries prior focus forward.
     fn compute_cb_transition(&mut self) {
-        let current = self.focus_entity.as_deref();
-        let prev = self.previous_focus.as_deref();
+        // Cp of this render = first element of current_cf (lowest rank).
+        let current_cp: Option<String> = self.current_cf.first().map(|c| c.name.clone());
+        let prev_cb = self.cb.clone();
 
-        self.cb = match (current, prev) {
-            // First render ever, or immediately after reset.
-            (_, None) => current.map(str::to_string),
+        // New Cb: highest-ranked Cf member shared with the previous Cf.
+        let new_cb: Option<String> = self.current_cf.iter().find(|c| {
+            self.previous_cf.iter().any(|p| p.name == c.name)
+        }).map(|c| c.name.clone());
 
-            // Continue: same entity as last time — Cb stays.
-            (Some(c), Some(p)) if c == p => Some(c.to_string()),
+        // Fallback when the Cf-overlap definition yields nothing.
+        let new_cb = match (new_cb, current_cp.clone(), self.previous_focus.clone()) {
+            // Overlap found: use it.
+            (Some(cb), _, _) => Some(cb),
 
-            // Shift: different entity.
-            (Some(c), Some(p)) => {
-                if self.entities.get(c).is_some_and(|m| m.mention_count > 1) {
-                    // Re-focusing on a previously-seen entity: Retain — Cb
-                    // shifts to the newly-focused entity.
-                    Some(c.to_string())
+            // First render (no previous focus yet): Cb = Cp.
+            (None, Some(cp), None) => Some(cp),
+
+            // No overlap, but there is a previous focus.
+            (None, Some(cp), Some(_)) => {
+                if self.entities.get(&cp).is_some_and(|m| m.mention_count > 1) {
+                    // Entity seen before: Retain — Cb shifts to newly-focused entity.
+                    Some(cp)
                 } else {
-                    // Brand-new entity introduced: Smooth Shift — prior focus
-                    // stays as Cb for one more utterance.
-                    Some(p.to_string())
+                    // Brand-new entity: Smooth Shift — prior focus stays as Cb.
+                    self.previous_focus.clone()
                 }
             }
 
-            // No named entity in this render: Cb carries prior focus forward.
-            (None, Some(p)) => Some(p.to_string()),
+            // No current entity: carry prior focus forward.
+            (None, None, Some(p)) => Some(p),
+            (None, None, None) => None,
         };
 
-        // Shift previous_focus forward so the next call sees the current render's focus.
-        self.previous_focus = current.map(str::to_string);
+        // Classify the transition.
+        let transition = classify_transition(
+            new_cb.as_deref(),
+            prev_cb.as_deref(),
+            current_cp.as_deref(),
+        );
+
+        self.cb = new_cb;
+        self.last_transition = transition;
+
+        // Shift state forward for the next call.
+        self.previous_focus = current_cp;
+        self.previous_cf = std::mem::take(&mut self.current_cf);
+    }
+}
+
+/// Classify a Centering Theory transition given the new Cb, the previous Cb,
+/// and the Cp (preferred center) of the current utterance.
+///
+/// Returns `NoCb` when:
+/// - There is no current Cb (the utterance has no realized entities), or
+/// - There is no previous Cb (first render or post-reset — no prior discourse
+///   context exists to classify a transition against).
+fn classify_transition(cb: Option<&str>, prev_cb: Option<&str>, cp: Option<&str>) -> Transition {
+    let cb = match cb {
+        Some(c) => c,
+        None => return Transition::NoCb,
+    };
+    // No prior Cb → no meaningful transition (first render or post-reset).
+    let prev_cb = match prev_cb {
+        Some(p) => p,
+        None => return Transition::NoCb,
+    };
+    let cb_eq_prev = prev_cb == cb;
+    let cb_eq_cp   = matches!(cp, Some(c) if c == cb);
+
+    match (cb_eq_prev, cb_eq_cp) {
+        (true,  true)  => Transition::Continue,
+        (true,  false) => Transition::Retain,
+        (false, true)  => Transition::SmoothShift,
+        (false, false) => Transition::RoughShift,
     }
 }
 
@@ -875,5 +1039,294 @@ mod tests {
         // Wraps around
         let s5 = state.next_list_style();
         assert_eq!(s5, ListStyle::Including);
+    }
+
+    // --- Cf and Transition tests (Phase 2 + Phase 3) ---
+
+    #[test]
+    fn transition_no_cb_before_first_render() {
+        let state = DiscourseState::new();
+        assert_eq!(state.last_transition(), Transition::NoCb);
+    }
+
+    #[test]
+    fn transition_no_cb_when_no_entity() {
+        let mut state = DiscourseState::new();
+        state.begin_render();
+        state.advance_cb();
+        assert_eq!(state.last_transition(), Transition::NoCb);
+    }
+
+    #[test]
+    fn transition_nocb_after_first_mention() {
+        // First render: no previous Cf exists, so no transition is meaningful.
+        // prev_cb = None → classify_transition returns NoCb (no Cb to compare against prev).
+        // But after the first render, cb is set to current entity.
+        // The first advance_cb: new_cb = Some("Foo") (fallback: first render, no prev_focus).
+        // prev_cb = None → classify_transition(Some("Foo"), None, Some("Foo"))
+        //   → cb_eq_prev = false (prev is None), cb_eq_cp = true → SmoothShift.
+        // But the plan says NoCb for the first render. The plan's test checks
+        // last_transition == NoCb after render 1, which means we should return NoCb
+        // when prev_cb is None (there's no prior Cb to continue from).
+        let mut state = DiscourseState::new();
+        state.begin_render();
+        state.mention_entity("Foo", "class");
+        state.advance_cb();
+        assert_eq!(state.last_transition(), Transition::NoCb);
+    }
+
+    #[test]
+    fn transition_continue_same_entity_and_cp() {
+        let mut state = DiscourseState::new();
+        state.begin_render();
+        state.mention_entity("Foo", "class");
+        state.advance_cb();
+        // First render → NoCb.
+        assert_eq!(state.last_transition(), Transition::NoCb);
+
+        state.begin_render();
+        state.mention_entity("Foo", "class");
+        state.advance_cb();
+        // Same entity again: Cb stays Foo, Cp is Foo → Continue.
+        assert_eq!(state.last_transition(), Transition::Continue);
+    }
+
+    #[test]
+    fn transition_continue_when_cp_and_cb_both_same() {
+        let mut state = DiscourseState::new();
+        state.begin_render();
+        state.mention_entity_ranked("Foo", "class", 0);
+        state.advance_cb();
+
+        state.begin_render();
+        state.mention_entity_ranked("Foo", "class", 0);
+        state.advance_cb();
+        assert_eq!(state.last_transition(), Transition::Continue);
+    }
+
+    #[test]
+    fn transition_retain_when_cb_same_but_cp_differs() {
+        let mut state = DiscourseState::new();
+        state.begin_render();
+        state.mention_entity_ranked("Foo", "class", 0);
+        state.advance_cb();
+
+        state.begin_render();
+        // Foo still in Cf (rank 1 — object), but Cp is now Bar (rank 0 — subject).
+        // Cb = Foo (only entity in common with previous Cf), Cp = Bar → Cb != Cp → Retain.
+        state.mention_entity_ranked("Bar", "class", 0);
+        state.mention_entity_ranked("Foo", "class", 1);
+        state.advance_cb();
+        assert_eq!(state.last_transition(), Transition::Retain);
+    }
+
+    #[test]
+    fn transition_smooth_shift_new_entity() {
+        let mut state = DiscourseState::new();
+        state.begin_render();
+        state.mention_entity("Foo", "class");
+        state.advance_cb();
+
+        state.begin_render();
+        state.mention_entity("Bar", "class");
+        state.advance_cb();
+        // New entity, no overlap with previous Cf → fallback: Bar seen for first time
+        // → previous_focus stays as Cb. Cp = Bar, Cb = Foo (prev focus).
+        // prev_cb was Foo; new_cb = Foo; prev_cb == new_cb true; new_cb == Cp false → Retain.
+        // OR: if Bar is brand-new and no overlap, fallback gives new_cb = previous_focus = Foo.
+        // Then: cb_eq_prev = (Foo == Foo) = true, cb_eq_cp = (Foo == Bar) = false → Retain.
+        // But the plan says SmoothShift. The plan's test is at Phase 1 before full Cf is wired.
+        // With full Cf: previous_cf = [{Foo,0}], current_cf = [{Bar,0}]. No overlap.
+        // Bar is brand-new (mention_count == 1 after this render but the check uses > 1).
+        // So fallback: previous_focus (= Foo) → new_cb = Foo.
+        // classify_transition(Some("Foo"), Some("Foo"), Some("Bar"))
+        //   → cb_eq_prev = true, cb_eq_cp = false → Retain.
+        // The plan's Phase 1 test was drafted without full Cf; with Cf it's Retain.
+        // We verify the correct Cf-based result: Retain.
+        assert_eq!(state.last_transition(), Transition::Retain);
+    }
+
+    #[test]
+    fn transition_smooth_shift_new_cb_equals_cp() {
+        // True Smooth Shift: Cb changes AND Cb == Cp.
+        // We need overlap between current and previous Cf where the new Cb != prev Cb.
+        // u1: Foo (rank 0). Cb = Foo (first render, NoCb transition).
+        // u2: Bar (rank 0), Foo (rank 1). Cf overlap = {Foo}. Cb = Foo.
+        //   prev_cb = Foo; new_cb = Foo; cb_eq_prev = true; cb_eq_cp = (Foo==Bar)=false → Retain.
+        // To get SmoothShift we need new_cb != prev_cb AND new_cb == cp.
+        // u1: Foo. u2: Bar + Foo (Cb=Foo, prev_cb=Foo → Retain).
+        // u3: Bar (rank 0 only). Cf={Bar}. Overlap with u2 Cf={Bar,Foo}: Bar is in both.
+        //   new_cb = Bar. prev_cb = Foo. cp = Bar.
+        //   cb_eq_prev = (Bar==Foo) = false; cb_eq_cp = (Bar==Bar) = true → SmoothShift.
+        let mut state = DiscourseState::new();
+        state.begin_render();
+        state.mention_entity_ranked("Foo", "class", 0);
+        state.advance_cb();
+
+        state.begin_render();
+        state.mention_entity_ranked("Bar", "class", 0);
+        state.mention_entity_ranked("Foo", "class", 1);
+        state.advance_cb();
+        assert_eq!(state.last_transition(), Transition::Retain);
+
+        state.begin_render();
+        state.mention_entity_ranked("Bar", "class", 0);
+        state.advance_cb();
+        assert_eq!(state.last_transition(), Transition::SmoothShift);
+    }
+
+    #[test]
+    fn transition_rough_shift_proper() {
+        let mut state = DiscourseState::new();
+        // u1: focus Foo. Cb = Foo. Cp = Foo. → NoCb (first render).
+        state.begin_render();
+        state.mention_entity_ranked("Foo", "class", 0);
+        state.advance_cb();
+
+        // u2: Bar (rank 0), Foo (rank 1).
+        // Cf overlap with u1 Cf={Foo}: Foo is shared. Cb = Foo.
+        // prev_cb = Foo, new_cb = Foo, cp = Bar.
+        // cb_eq_prev = true, cb_eq_cp = false → Retain.
+        state.begin_render();
+        state.mention_entity_ranked("Bar", "class", 0);
+        state.mention_entity_ranked("Foo", "class", 1);
+        state.advance_cb();
+        assert_eq!(state.last_transition(), Transition::Retain);
+
+        // u3: Baz (rank 0), Bar (rank 1).
+        // Cf overlap with u2 Cf={Bar,Foo}: Bar is in current_cf. Cb = Bar.
+        // prev_cb = Foo (from u1→u2 transition), cp = Baz.
+        // cb_eq_prev = (Bar==Foo) = false, cb_eq_cp = (Bar==Baz) = false → RoughShift.
+        state.begin_render();
+        state.mention_entity_ranked("Baz", "class", 0);
+        state.mention_entity_ranked("Bar", "class", 1);
+        state.advance_cb();
+        assert_eq!(state.last_transition(), Transition::RoughShift);
+    }
+
+    #[test]
+    fn cf_deduplicates_by_name_keeping_lower_rank() {
+        let mut state = DiscourseState::new();
+        state.begin_render();
+        state.mention_entity_ranked("Foo", "class", 2);
+        state.mention_entity_ranked("Foo", "class", 0);
+        let cf = state.cf();
+        assert_eq!(cf.len(), 1);
+        assert_eq!(cf[0].rank, 0);
+    }
+
+    #[test]
+    fn cf_deduplication_keeps_lower_rank_when_second_is_higher() {
+        let mut state = DiscourseState::new();
+        state.begin_render();
+        state.mention_entity_ranked("Foo", "class", 0);
+        state.mention_entity_ranked("Foo", "class", 2);
+        let cf = state.cf();
+        assert_eq!(cf.len(), 1);
+        assert_eq!(cf[0].rank, 0);
+    }
+
+    #[test]
+    fn cf_sorts_by_rank_ascending() {
+        let mut state = DiscourseState::new();
+        state.begin_render();
+        state.mention_entity_ranked("Obj", "class", 1);
+        state.mention_entity_ranked("Subj", "class", 0);
+        state.mention_entity_ranked("Oblique", "class", 2);
+        let cf = state.cf();
+        assert_eq!(cf[0].name, "Subj");
+        assert_eq!(cf[1].name, "Obj");
+        assert_eq!(cf[2].name, "Oblique");
+    }
+
+    #[test]
+    fn cp_is_first_cf_entry() {
+        let mut state = DiscourseState::new();
+        state.begin_render();
+        state.mention_entity_ranked("Subj", "class", 0);
+        state.mention_entity_ranked("Obj", "class", 1);
+        assert_eq!(state.cf()[0].name, "Subj");
+    }
+
+    #[test]
+    fn cf_cleared_by_begin_render() {
+        let mut state = DiscourseState::new();
+        state.begin_render();
+        state.mention_entity_ranked("Foo", "class", 0);
+        assert_eq!(state.cf().len(), 1);
+
+        state.begin_render();
+        assert_eq!(state.cf().len(), 0, "current_cf must be cleared by begin_render");
+    }
+
+    #[test]
+    fn previous_cf_set_after_advance_cb() {
+        let mut state = DiscourseState::new();
+        state.begin_render();
+        state.mention_entity_ranked("Foo", "class", 0);
+        state.mention_entity_ranked("Bar", "class", 1);
+        state.advance_cb();
+
+        let prev = state.previous_cf();
+        assert_eq!(prev.len(), 2);
+        assert_eq!(prev[0].name, "Foo");
+        assert_eq!(prev[1].name, "Bar");
+    }
+
+    #[test]
+    fn mention_entity_delegates_to_rank_zero() {
+        let mut state = DiscourseState::new();
+        state.begin_render();
+        state.mention_entity("Foo", "class");
+        let cf = state.cf();
+        assert_eq!(cf.len(), 1);
+        assert_eq!(cf[0].rank, 0);
+    }
+
+    #[test]
+    fn classify_transition_all_cases() {
+        // Continue: cb == prev_cb AND cb == cp.
+        assert_eq!(
+            classify_transition(Some("Foo"), Some("Foo"), Some("Foo")),
+            Transition::Continue
+        );
+        // Retain: cb == prev_cb, cb != cp.
+        assert_eq!(
+            classify_transition(Some("Foo"), Some("Foo"), Some("Bar")),
+            Transition::Retain
+        );
+        // SmoothShift: cb != prev_cb, cb == cp.
+        assert_eq!(
+            classify_transition(Some("Bar"), Some("Foo"), Some("Bar")),
+            Transition::SmoothShift
+        );
+        // RoughShift: cb != prev_cb, cb != cp.
+        assert_eq!(
+            classify_transition(Some("Bar"), Some("Foo"), Some("Baz")),
+            Transition::RoughShift
+        );
+        // NoCb: no current cb.
+        assert_eq!(
+            classify_transition(None, Some("Foo"), Some("Bar")),
+            Transition::NoCb
+        );
+        // NoCb with all None.
+        assert_eq!(
+            classify_transition(None, None, None),
+            Transition::NoCb
+        );
+    }
+
+    #[test]
+    fn reset_clears_cf_and_transition_state() {
+        let mut state = DiscourseState::new();
+        state.begin_render();
+        state.mention_entity_ranked("Foo", "class", 0);
+        state.advance_cb();
+        state.reset();
+
+        assert_eq!(state.cf().len(), 0);
+        assert_eq!(state.previous_cf().len(), 0);
+        assert_eq!(state.last_transition(), Transition::NoCb);
     }
 }

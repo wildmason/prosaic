@@ -59,6 +59,20 @@ impl Session {
     pub fn reset_temporal(&mut self) {
         self.last_temporal_anchor = None;
     }
+
+    /// Mutable access to the underlying discourse state. Use this to call
+    /// [`DiscourseState::mention_entity_ranked`] for templates where
+    /// grammatical role matters, or to read centering diagnostics such as
+    /// [`DiscourseState::cb`], [`DiscourseState::cf`], and
+    /// [`DiscourseState::last_transition`].
+    pub fn discourse_mut(&mut self) -> &mut DiscourseState {
+        &mut self.discourse
+    }
+
+    /// Read-only access to the underlying discourse state.
+    pub fn discourse(&self) -> &DiscourseState {
+        &self.discourse
+    }
 }
 
 impl Default for Session {

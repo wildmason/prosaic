@@ -75,7 +75,7 @@ pub use engine::RegAlgorithm;
 pub use session::Session;
 pub use builder::{Sentence, Clause, Subject, subject, named};
 pub use context::IntoContext;
-pub use discourse::{ListStyle, ReferenceForm};
+pub use discourse::{Cf, DiscourseState, ListStyle, ReferenceForm, Transition};
 pub use salience::{Salience, SalienceThresholds};
 pub use document::{
     default_classifier, DocumentPlan, GroupingStrategy, Paragraph, RhetoricalCategory,
