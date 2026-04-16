@@ -108,6 +108,40 @@ impl Template {
         collect_pipe_names(&self.segments, &mut out);
         out
     }
+
+    /// Decompose this template into bare segments (literal text and bare slot
+    /// references with no pipes), returning `None` if the template contains
+    /// any pipes, conditional sections, or partial inclusions.
+    ///
+    /// Used by the `prosaic_template_compiled!` proc macro for compile-time
+    /// code generation. Not intended for general use.
+    pub fn as_bare_slots(&self) -> Option<Vec<BareSegment<'_>>> {
+        let mut out = Vec::new();
+        for seg in &self.segments {
+            match seg {
+                Segment::Literal(s) => out.push(BareSegment::Text(s.as_str())),
+                Segment::Slot { pipes, key } if pipes.is_empty() => {
+                    out.push(BareSegment::Slot(key.as_str()));
+                }
+                // Pipes, conditionals, or partials → not a bare-slot template.
+                _ => return None,
+            }
+        }
+        Some(out)
+    }
+}
+
+/// A segment from a bare-slot-only template decomposition.
+///
+/// Produced by [`Template::as_bare_slots`]. Used by the
+/// `prosaic_template_compiled!` proc macro for compile-time code generation.
+/// Not intended for general use outside the macro crate.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BareSegment<'a> {
+    /// A literal text run.
+    Text(&'a str),
+    /// A bare slot reference (no pipes).
+    Slot(&'a str),
 }
 
 /// Recursively collect literal text from a segment list into `out`.
@@ -708,5 +742,62 @@ mod tests {
         let names = t.pipe_names();
         assert_eq!(names, vec!["truncate"]);
         assert!(!names.iter().any(|n| n.contains(':')));
+    }
+
+    // ── as_bare_slots tests ──────────────────────────────────────────────
+
+    #[test]
+    fn as_bare_slots_accepts_bare_template() {
+        let t = Template::parse("Hello {name} world").unwrap();
+        let segs = t.as_bare_slots().unwrap();
+        // 3 segments: "Hello ", slot name, " world"
+        assert_eq!(segs.len(), 3);
+        assert_eq!(segs[0], BareSegment::Text("Hello "));
+        assert_eq!(segs[1], BareSegment::Slot("name"));
+        assert_eq!(segs[2], BareSegment::Text(" world"));
+    }
+
+    #[test]
+    fn as_bare_slots_accepts_literal_only_template() {
+        let t = Template::parse("no slots here").unwrap();
+        let segs = t.as_bare_slots().unwrap();
+        assert_eq!(segs.len(), 1);
+        assert_eq!(segs[0], BareSegment::Text("no slots here"));
+    }
+
+    #[test]
+    fn as_bare_slots_accepts_multiple_bare_slots() {
+        let t = Template::parse("{greeting}, {name}!").unwrap();
+        let segs = t.as_bare_slots().unwrap();
+        // 4 segments: slot "greeting", ", ", slot "name", "!"
+        assert_eq!(segs.len(), 4);
+        assert_eq!(segs[0], BareSegment::Slot("greeting"));
+        assert_eq!(segs[1], BareSegment::Text(", "));
+        assert_eq!(segs[2], BareSegment::Slot("name"));
+        assert_eq!(segs[3], BareSegment::Text("!"));
+    }
+
+    #[test]
+    fn as_bare_slots_rejects_piped_template() {
+        let t = Template::parse("Hello {name|capitalize}").unwrap();
+        assert!(t.as_bare_slots().is_none());
+    }
+
+    #[test]
+    fn as_bare_slots_rejects_conditional_template() {
+        let t = Template::parse("Hello{?greet} friend{/?}").unwrap();
+        assert!(t.as_bare_slots().is_none());
+    }
+
+    #[test]
+    fn as_bare_slots_rejects_partial_template() {
+        let t = Template::parse("prefix {>partial_name} suffix").unwrap();
+        assert!(t.as_bare_slots().is_none());
+    }
+
+    #[test]
+    fn as_bare_slots_rejects_chained_pipes() {
+        let t = Template::parse("{items|truncate:3|join}").unwrap();
+        assert!(t.as_bare_slots().is_none());
     }
 }

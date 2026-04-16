@@ -370,6 +370,65 @@ impl DocumentPlan {
         plan
     }
 
+    /// Render paragraphs in parallel using rayon.
+    ///
+    /// Each paragraph gets its own freshly-reset clone of `initial_session`.
+    /// Paragraphs render concurrently and the results are joined with `"\n\n"`
+    /// in the original paragraph order.
+    ///
+    /// **Trade-off:** temporal-anchor threading across paragraphs is lost —
+    /// each paragraph anchors independently. For temporally coherent narratives
+    /// (e.g. when you rely on `{ts|since_last}` spanning paragraph boundaries)
+    /// use [`render`][DocumentPlan::render] instead.
+    ///
+    /// For temporally independent paragraphs this produces byte-identical output
+    /// to the sequential `render`.
+    ///
+    /// Requires the `parallel` feature.
+    #[cfg(feature = "parallel")]
+    pub fn render_parallel(
+        &self,
+        engine: &Engine,
+        initial_session: &Session,
+    ) -> Result<String, ProsaicError>
+    where
+        Engine: Sync,
+        Session: Send,
+    {
+        use rayon::prelude::*;
+
+        let rendered: Result<Vec<String>, ProsaicError> = self
+            .paragraphs
+            .par_iter()
+            .map(|p| {
+                let mut session = initial_session.clone();
+                // Reset discourse state so each paragraph starts fresh,
+                // mirroring the sequential render's session.reset() call.
+                session.reset();
+
+                if p.relations.iter().any(|r| r.is_some()) {
+                    let triples: Vec<(&str, Context, Option<RstRelation>)> = p
+                        .events
+                        .iter()
+                        .zip(p.relations.iter())
+                        .map(|((k, c), r)| (k.as_str(), c.clone(), *r))
+                        .collect();
+                    engine.render_batch_with_relations(&mut session, &triples)
+                } else {
+                    let events: Vec<(&str, Context)> = p
+                        .events
+                        .iter()
+                        .map(|(k, c)| (k.as_str(), c.clone()))
+                        .collect();
+                    engine.render_batch(&mut session, &events)
+                }
+            })
+            .filter(|r| !matches!(r, Ok(s) if s.is_empty()))
+            .collect();
+
+        Ok(rendered?.join("\n\n"))
+    }
+
     /// Render the document plan into a narrative.
     ///
     /// Paragraphs are separated by a double newline. Between paragraphs the
@@ -420,6 +479,14 @@ fn entity_key(ctx: &Context) -> Option<String> {
     ctx.get("name")
         .or_else(|| ctx.get("old_name"))
         .map(|v| v.as_display())
+}
+
+// Verify Engine and Session are Send + Sync at compile time.
+// This is a zero-cost assertion; the const fn is never called.
+const fn _assert_engine_session_send_sync() {
+    const fn check<T: Send + Sync>() {}
+    check::<Engine>();
+    check::<Session>();
 }
 
 impl Default for DocumentPlan {
@@ -817,5 +884,67 @@ mod tests {
         let mut s = Session::new();
         let rendered = plan.render(&engine, &mut s).unwrap();
         assert!(rendered.contains("However, "), "got: {rendered}");
+    }
+
+    // ── Phase 3: parallel rendering ─────────────────────────────────────────
+
+    #[test]
+    fn engine_and_session_are_send_sync() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<Engine>();
+        assert_send_sync::<Session>();
+    }
+
+    #[cfg(feature = "parallel")]
+    #[test]
+    fn render_parallel_produces_same_output_for_independent_paragraphs() {
+        // When paragraphs don't need temporal threading, parallel and sequential
+        // must produce byte-identical output.
+        let mut engine = Engine::new(TestLang)
+            .strictness(Strictness::Strict)
+            .variation(Variation::Fixed);
+        engine
+            .register_template("t", "{name} changed")
+            .unwrap();
+
+        let events: Vec<(&str, Context)> = vec![
+            ("t", ctx_with_entity("Alpha", 1)),
+            ("t", ctx_with_entity("Beta", 1)),
+        ];
+        let plan = DocumentPlan::from_events(&events, &engine);
+
+        let mut s1 = Session::new();
+        let seq = plan.render(&engine, &mut s1).unwrap();
+
+        let s2 = Session::new();
+        let par = plan.render_parallel(&engine, &s2).unwrap();
+
+        assert_eq!(seq, par);
+    }
+
+    #[cfg(feature = "parallel")]
+    #[test]
+    fn render_parallel_empty_plan_returns_empty_string() {
+        let engine = test_engine();
+        let plan = DocumentPlan::new();
+        let s = Session::new();
+        let out = plan.render_parallel(&engine, &s).unwrap();
+        assert_eq!(out, "");
+    }
+
+    #[cfg(feature = "parallel")]
+    #[test]
+    fn render_parallel_single_paragraph_matches_sequential() {
+        let engine = test_engine();
+        let events: Vec<(&str, Context)> = vec![("t", ctx_with_entity("Foo", 5))];
+        let plan = DocumentPlan::from_events(&events, &engine);
+
+        let mut s1 = Session::new();
+        let seq = plan.render(&engine, &mut s1).unwrap();
+
+        let s2 = Session::new();
+        let par = plan.render_parallel(&engine, &s2).unwrap();
+
+        assert_eq!(seq, par);
     }
 }

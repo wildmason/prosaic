@@ -88,7 +88,7 @@ pub use context::{Context, EntityValue, IntoValue, Value, entity};
 pub use faithfulness::{score_faithfulness, FaithfulnessScore, PolarityDrift};
 // assert_faithful! is exported via #[macro_export] in faithfulness.rs
 pub use error::ProsaicError;
-pub use template::{Template, Pipe, PipeArg};
+pub use template::{BareSegment, Template, Pipe, PipeArg};
 pub use engine::{Engine, RenderExplanation, RenderIter, Strictness, VariantScore, Variation};
 #[cfg(feature = "reg")]
 pub use engine::RegAlgorithm;

@@ -391,3 +391,100 @@ fn nearest_pipe(unknown: &str) -> Option<&'static str> {
         .find(|&&v| v.starts_with(prefix.as_str()))
         .copied()
 }
+
+// ── prosaic_template_compiled! ─────────────────────────────────────────────────
+
+/// Compile-time compiled template rendering function.
+///
+/// Parses the template at compile time and emits a specialized render function
+/// that avoids the runtime parsing pipeline. Suitable for tight loops with
+/// known, simple templates.
+///
+/// Returns a `fn(&prosaic_core::Context) -> String` as a block expression.
+///
+/// # Supported syntax
+///
+/// Only bare slot references are supported: `{key}` and literal text.
+/// The following will produce a **compile error**:
+/// - Pipes: `{key|capitalize}`
+/// - Conditional sections: `{?key}...{/?}`
+/// - Partial inclusions: `{>name}`
+///
+/// For templates requiring any of the above, use the runtime engine directly.
+///
+/// # Example
+///
+/// ```
+/// use prosaic_derive::prosaic_template_compiled;
+/// use prosaic_core::{Context, Value};
+///
+/// let render = prosaic_template_compiled!("The class {name} was modified");
+/// let mut ctx = Context::new();
+/// ctx.insert("name", Value::String("Foo".into()));
+/// assert_eq!(render(&ctx), "The class Foo was modified");
+/// ```
+#[proc_macro]
+pub fn prosaic_template_compiled(input: TokenStream) -> TokenStream {
+    let template_lit = parse_macro_input!(input as LitStr);
+    let template_str = template_lit.value();
+    let span = template_lit.span();
+
+    // Parse the template using the core runtime parser.
+    let parsed = match prosaic_core::Template::parse(&template_str) {
+        Ok(t) => t,
+        Err(e) => {
+            return syn::Error::new(span, format!("invalid template: {e}"))
+                .to_compile_error()
+                .into();
+        }
+    };
+
+    // Validate: only bare slots are supported. as_bare_slots() returns None if
+    // the template contains pipes, conditionals, or partials.
+    let bare_segments = match parsed.as_bare_slots() {
+        Some(segs) => segs,
+        None => {
+            // Give a precise error: detect which unsupported feature is present.
+            let has_pipes = !parsed.pipe_names().is_empty();
+            let msg = if has_pipes {
+                "prosaic_template_compiled!: templates with pipes are not supported; use the runtime engine"
+            } else {
+                "prosaic_template_compiled!: conditional sections, partials, and advanced features are not supported; use the runtime engine"
+            };
+            return syn::Error::new(span, msg).to_compile_error().into();
+        }
+    };
+
+    // Estimate initial capacity as template length (reasonable lower bound).
+    let capacity = template_str.len();
+
+    // Generate the push_str calls for each segment.
+    let mut stmts = Vec::new();
+    for seg in &bare_segments {
+        match seg {
+            prosaic_core::BareSegment::Text(text) => {
+                stmts.push(quote! { out.push_str(#text); });
+            }
+            prosaic_core::BareSegment::Slot(key) => {
+                stmts.push(quote! {
+                    if let Some(__v) = __ctx.get(#key) {
+                        out.push_str(&__v.as_display());
+                    }
+                });
+            }
+        }
+    }
+
+    let expanded = quote! {
+        {
+            fn __prosaic_compiled_render(__ctx: &::prosaic_core::Context) -> ::std::string::String {
+                let mut out = ::std::string::String::with_capacity(#capacity);
+                #(#stmts)*
+                out
+            }
+            __prosaic_compiled_render
+        }
+    };
+
+    expanded.into()
+}
