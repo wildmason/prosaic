@@ -683,6 +683,10 @@ impl<'e, 's> RenderCtx<'e, 's> {
                     "it".to_string()
                 }
             }
+            // Reserved variants — not yet emitted by DiscourseState::reference_form.
+            // Phase 3 will delegate all three to Language::realize_reference.
+            ReferenceForm::Demonstrative => "this".to_string(),
+            ReferenceForm::Zero => String::new(),
         };
 
         Ok(Value::String(rendered))

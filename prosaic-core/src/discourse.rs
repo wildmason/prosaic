@@ -98,15 +98,25 @@ struct EntityMention {
 }
 
 /// How an entity should be referred to based on discourse context.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum ReferenceForm {
     /// Full form: "The class UserService"
     Full,
     /// Name only: "UserService"
     ShortName,
-    /// Pronoun: "It" / "it"
+    /// Pronoun: "it" / "they" / (lang-specific)
     Pronoun,
+    /// Demonstrative determiner + type: "this class" / (lang-specific).
+    /// Reserved slot for future discourse rules; not currently emitted by
+    /// [`DiscourseState::reference_form`].
+    Demonstrative,
+    /// Zero realization: surface is empty. Used by pro-drop languages
+    /// (Japanese, colloquial Spanish/Italian) where the pronoun is
+    /// recoverable from context and the slot emits nothing.
+    /// Not currently emitted by the default [`DiscourseState::reference_form`];
+    /// language-specific discourse extensions may choose this form.
+    Zero,
 }
 
 /// The relationship detected between consecutive renders.
@@ -839,6 +849,14 @@ mod tests {
         state.reset();
         assert_eq!(state.cb, None);
         assert_eq!(state.previous_focus, None);
+    }
+
+    #[test]
+    fn reference_form_all_variants_distinct() {
+        // Sanity: ensure the new variants are distinguishable.
+        assert_ne!(ReferenceForm::Full, ReferenceForm::Zero);
+        assert_ne!(ReferenceForm::Pronoun, ReferenceForm::Demonstrative);
+        assert_ne!(ReferenceForm::Zero, ReferenceForm::Demonstrative);
     }
 
     #[test]
