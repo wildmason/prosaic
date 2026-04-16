@@ -109,6 +109,17 @@ impl Template {
         out
     }
 
+    /// Every partial name referenced by this template via `{>name}`.
+    ///
+    /// Walks the segment tree recursively. Used by the engine at
+    /// `register_partial` time to detect direct and indirect cycles
+    /// before they can produce a stack overflow at render time.
+    pub fn partial_names(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        collect_partial_names(&self.segments, &mut out);
+        out
+    }
+
     /// Decompose this template into bare segments (literal text and bare slot
     /// references with no pipes), returning `None` if the template contains
     /// any pipes, conditional sections, or partial inclusions.
@@ -171,6 +182,18 @@ fn collect_slot_keys(segments: &[Segment], out: &mut Vec<String>) {
                 collect_slot_keys(inner, out);
             }
             Segment::Literal(_) | Segment::Partial { .. } => {}
+        }
+    }
+}
+
+/// Recursively collect partial names referenced by `{>name}` segments.
+/// Nested partial references (inside conditionals) are included.
+fn collect_partial_names(segments: &[Segment], out: &mut Vec<String>) {
+    for seg in segments {
+        match seg {
+            Segment::Partial { name } => out.push(name.clone()),
+            Segment::Conditional { inner, .. } => collect_partial_names(inner, out),
+            Segment::Literal(_) | Segment::Slot { .. } => {}
         }
     }
 }

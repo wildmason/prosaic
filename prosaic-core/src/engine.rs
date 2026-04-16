@@ -11,7 +11,7 @@ use alloc::vec;
 #[cfg(not(feature = "std"))]
 use alloc::vec::Vec;
 
-use crate::collections::{HashMap, new_map};
+use crate::collections::{HashMap, HashSet, new_map, new_set};
 
 use crate::faithfulness::score_faithfulness;
 use crate::session::Session;
@@ -1467,7 +1467,22 @@ impl Engine {
     /// ```
     pub fn register_partial(&mut self, name: &str, source: &str) -> Result<(), ProsaicError> {
         let template = Template::parse(source)?;
-        self.partials.insert(name.to_string(), template);
+
+        // Insert, then verify the resulting partial graph is acyclic starting
+        // from the new entry point. On any cycle, restore the prior entry (or
+        // remove the new one) and return a descriptive error.
+        let previous = self.partials.insert(name.to_string(), template);
+        if let Err(cycle) = detect_partial_cycle(&self.partials, name) {
+            match previous {
+                Some(prior) => {
+                    self.partials.insert(name.to_string(), prior);
+                }
+                None => {
+                    self.partials.remove(name);
+                }
+            }
+            return Err(ProsaicError::RecursivePartial { cycle });
+        }
         Ok(())
     }
 
@@ -2503,6 +2518,71 @@ const AUX_PREFIXES: &[&str] = &[
 /// when reduction would be lossy: mixed auxiliaries, embedded `which`
 /// clauses, connectives that anchor to a previous sentence, or anything
 /// the heuristic can't confidently parse.
+/// Detect a cycle in the partial graph reachable from `entry_name`.
+///
+/// Returns `Ok(())` if no cycle exists. Returns `Err(cycle)` on a cycle,
+/// where `cycle` is the traversal path from the first cycling node back
+/// to itself (e.g. `["a", "b", "a"]` for a `a → b → a` loop).
+///
+/// Unknown partial references (templates that reference a partial not yet
+/// registered) are ignored — they are validated separately at render time.
+fn detect_partial_cycle(
+    partials: &HashMap<String, Template>,
+    entry_name: &str,
+) -> Result<(), Vec<String>> {
+    // DFS with an on-stack path so we can return the offending cycle.
+    let mut path: Vec<String> = Vec::new();
+    let mut on_stack: HashSet<String> = new_set();
+    let mut fully_explored: HashSet<String> = new_set();
+
+    visit(
+        partials,
+        entry_name,
+        &mut path,
+        &mut on_stack,
+        &mut fully_explored,
+    )
+}
+
+fn visit(
+    partials: &HashMap<String, Template>,
+    name: &str,
+    path: &mut Vec<String>,
+    on_stack: &mut HashSet<String>,
+    fully_explored: &mut HashSet<String>,
+) -> Result<(), Vec<String>> {
+    if fully_explored.contains(name) {
+        return Ok(());
+    }
+    if on_stack.contains(name) {
+        // Build the cycle slice: from first occurrence of `name` in path
+        // through the tail, plus `name` again to close the loop visibly.
+        let start = path.iter().position(|n| n == name).unwrap_or(0);
+        let mut cycle: Vec<String> = path[start..].to_vec();
+        cycle.push(name.to_string());
+        return Err(cycle);
+    }
+    let template = match partials.get(name) {
+        Some(t) => t,
+        // Unknown partial — render-time concern, not a cycle. Skip silently
+        // here so that registering a partial that points at a not-yet-declared
+        // partial stays valid.
+        None => return Ok(()),
+    };
+
+    path.push(name.to_string());
+    on_stack.insert(name.to_string());
+
+    for child in template.partial_names() {
+        visit(partials, &child, path, on_stack, fully_explored)?;
+    }
+
+    on_stack.remove(name);
+    path.pop();
+    fully_explored.insert(name.to_string());
+    Ok(())
+}
+
 fn reduce_same_entity_clauses(sentences: &[String]) -> Option<String> {
     if sentences.len() < 2 {
         return None;
@@ -4223,6 +4303,82 @@ mod tests {
             result,
             Err(ProsaicError::TemplateParseError { .. })
         ));
+    }
+
+    #[test]
+    fn direct_recursive_partial_is_rejected() {
+        let mut engine = test_engine();
+        let result = engine.register_partial("a", "{>a}");
+        match result {
+            Err(ProsaicError::RecursivePartial { cycle }) => {
+                assert_eq!(cycle, vec!["a".to_string(), "a".to_string()]);
+            }
+            other => panic!("expected RecursivePartial, got {other:?}"),
+        }
+        // The partial must NOT be stored (otherwise future lookups reach
+        // a cyclic definition).
+        assert!(!engine.partials.contains_key("a"));
+    }
+
+    #[test]
+    fn indirect_recursive_partial_is_rejected() {
+        let mut engine = test_engine();
+        // Register `a` referring to a not-yet-existing `b` — that's fine.
+        engine.register_partial("a", "{>b}").unwrap();
+        // Now registering `b` that refers back to `a` must fail with the
+        // a -> b -> a cycle reported, and `b` must NOT be stored.
+        let result = engine.register_partial("b", "{>a}");
+        match result {
+            Err(ProsaicError::RecursivePartial { cycle }) => {
+                assert!(
+                    cycle.contains(&"a".to_string()) && cycle.contains(&"b".to_string()),
+                    "cycle should include both partials; got {cycle:?}"
+                );
+                // First and last entries should match (cycle closes).
+                assert_eq!(cycle.first(), cycle.last());
+            }
+            other => panic!("expected RecursivePartial, got {other:?}"),
+        }
+        assert!(!engine.partials.contains_key("b"));
+        // Partial `a` is still present (registered successfully earlier).
+        assert!(engine.partials.contains_key("a"));
+    }
+
+    #[test]
+    fn non_cyclic_partial_chain_is_accepted() {
+        let mut engine = test_engine();
+        engine.register_partial("inner", "-inner-").unwrap();
+        engine.register_partial("middle", "[{>inner}]").unwrap();
+        engine.register_partial("outer", "<{>middle}>").unwrap();
+        engine
+            .register_template("t", "prefix {>outer} suffix")
+            .unwrap();
+
+        let mut session = test_session();
+        let out = engine.render(&mut session, "t", Context::new()).unwrap();
+        assert!(out.contains("<[-inner-]>"), "got: {out}");
+    }
+
+    #[test]
+    fn updating_partial_to_introduce_cycle_rolls_back() {
+        let mut engine = test_engine();
+        engine.register_partial("a", "literal-a").unwrap();
+        engine.register_partial("b", "{>a}").unwrap();
+
+        // Attempt to overwrite `a` with a reference to `b` — would form
+        // a -> b -> a cycle and must be rejected. The previous body must
+        // remain intact.
+        let result = engine.register_partial("a", "{>b}");
+        assert!(matches!(result, Err(ProsaicError::RecursivePartial { .. })));
+
+        // Render via `a` — should still produce the prior literal body.
+        engine.register_template("t", "see {>a} here").unwrap();
+        let mut session = test_session();
+        let out = engine.render(&mut session, "t", Context::new()).unwrap();
+        assert!(
+            out.contains("literal-a"),
+            "expected prior partial body to be restored; got: {out}"
+        );
     }
 
     // ── Sentence-length budget ───────────────────────────────────────────

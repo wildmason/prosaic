@@ -32,4 +32,12 @@ pub enum ProsaicError {
         precision: f32,
         polarity_match: bool,
     },
+
+    /// Returned by `register_partial` when registering the partial would
+    /// introduce a direct or indirect `{>name}` cycle. The `cycle` field
+    /// carries the names involved in the offending chain in traversal order,
+    /// repeating the entry partial at the tail so the cycle reads
+    /// `a -> b -> a`.
+    #[error("recursive partial cycle detected: {}", cycle.join(" -> "))]
+    RecursivePartial { cycle: Vec<String> },
 }
