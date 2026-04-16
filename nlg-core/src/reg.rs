@@ -1,8 +1,16 @@
 //! Referring Expression Generation (REG).
 //!
-//! Implements the **Dale & Reiter Incremental Algorithm** (1995): given a
-//! target entity and a distractor set, select the shortest set of attributes
-//! that uniquely identifies the target.
+//! Implements two algorithms:
+//!
+//! - **Dale & Reiter Incremental Algorithm** (1995): given a target entity and
+//!   a distractor set, select the shortest set of unary attributes that
+//!   uniquely identifies the target.
+//!
+//! - **Krahmer et al. Graph-Based Greedy Algorithm** (2003): extends D&R by
+//!   also considering labeled directed relations between entities. When
+//!   attributes alone do not disambiguate, the algorithm appends one
+//!   relation clause (e.g. "that calls AuthService") to the referring
+//!   expression.
 //!
 //! In an `nlg` engine, this powers the `{name|refer}` pipe's *Full form*
 //! path. When multiple entities of the same type are known to the engine,
@@ -15,12 +23,24 @@ use std::collections::HashMap;
 
 /// A described entity. Attributes are intentionally ordered so the default
 /// preference ordering respects registration order.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct EntityDescriptor {
     pub name: String,
     pub entity_type: String,
     pub attributes: Vec<(String, String)>,
+    /// Labeled directed edges from this entity to other named entities.
+    ///
+    /// Each `(relation_label, target_name)` pair. The label is the
+    /// surface-form fragment that will be inserted verbatim after the head
+    /// noun in the referring expression — e.g. `("that calls", "AuthService")`
+    /// renders as `"that calls AuthService"`. Labels are chosen by the caller
+    /// to read naturally in context.
+    ///
+    /// `#[serde(default)]` ensures existing serialized `EntityDescriptor`
+    /// payloads that lack this field still deserialize cleanly.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub relations: Vec<(String, String)>,
 }
 
 impl EntityDescriptor {
@@ -29,6 +49,7 @@ impl EntityDescriptor {
             name: name.into(),
             entity_type: entity_type.into(),
             attributes: Vec::new(),
+            relations: Vec::new(),
         }
     }
 
@@ -42,12 +63,39 @@ impl EntityDescriptor {
         self
     }
 
+    /// Append a labeled directed relation to another entity. Chainable.
+    ///
+    /// `label` is the surface-form fragment inserted verbatim after the head
+    /// noun when this relation is selected by the graph-based algorithm
+    /// (e.g. `"that calls"`). `target` is the name of the target entity.
+    ///
+    /// Relations are considered in insertion order during REG.
+    pub fn with_relation(
+        mut self,
+        label: impl Into<String>,
+        target: impl Into<String>,
+    ) -> Self {
+        self.relations.push((label.into(), target.into()));
+        self
+    }
+
     /// Look up an attribute by key.
     pub fn attribute(&self, key: &str) -> Option<&str> {
         self.attributes
             .iter()
             .find(|(k, _)| k == key)
             .map(|(_, v)| v.as_str())
+    }
+
+    /// Look up a relation's target by label.
+    ///
+    /// Returns the target name of the first relation whose label matches, or
+    /// `None` if no such relation exists.
+    pub fn relation(&self, label: &str) -> Option<&str> {
+        self.relations
+            .iter()
+            .find(|(l, _)| l == label)
+            .map(|(_, t)| t.as_str())
     }
 }
 
@@ -366,5 +414,33 @@ mod tests {
             r.get("trait", "UserService").unwrap().attribute("a"),
             Some("2")
         );
+    }
+
+    // ── Relations on EntityDescriptor ────────────────────────────────────────
+
+    #[test]
+    fn with_relation_adds_edge() {
+        let e = EntityDescriptor::new("Handler", "function")
+            .with_relation("calls", "AuthService");
+        assert_eq!(
+            e.relations,
+            vec![("calls".to_string(), "AuthService".to_string())]
+        );
+    }
+
+    #[test]
+    fn relation_lookup_by_label() {
+        let e = EntityDescriptor::new("Handler", "function")
+            .with_relation("calls", "AuthService")
+            .with_relation("tests", "HandlerTests");
+        assert_eq!(e.relation("calls"), Some("AuthService"));
+        assert_eq!(e.relation("tests"), Some("HandlerTests"));
+        assert_eq!(e.relation("unknown"), None);
+    }
+
+    #[test]
+    fn default_has_empty_relations() {
+        let e = EntityDescriptor::default();
+        assert!(e.relations.is_empty());
     }
 }
