@@ -158,6 +158,32 @@ impl From<Tense> for VerbForm {
     }
 }
 
+/// CLDR plural categories. A language's [`Language::plural_category`]
+/// implementation maps an integer count into one of these six buckets.
+/// The subset a language actually uses depends on its grammar:
+///
+/// - English: `One` | `Other`
+/// - Spanish: `One` | `Other`
+/// - Polish:  `One` | `Few` | `Many` | `Other`
+/// - Arabic:  `Zero` | `One` | `Two` | `Few` | `Many` | `Other`
+///
+/// Non-English grammars must override [`Language::plural_category`] and
+/// [`Language::pluralize_with_category`] to return the correct category and
+/// the correct word form for their language.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum PluralCategory {
+    Zero,
+    One,
+    Two,
+    Few,
+    Many,
+    /// The catch-all category; used by languages that do not distinguish a
+    /// more specific bucket for a given count.
+    #[default]
+    Other,
+}
+
 /// Trait abstracting over a natural language's grammar rules.
 ///
 /// Implement this trait for each language you want to support.
@@ -243,6 +269,38 @@ pub trait Language: Send + Sync {
         person: Person,
     ) -> String {
         english_verb_phrase(self, verb, form, voice, person)
+    }
+
+    /// Classify an integer count into a CLDR plural category.
+    ///
+    /// Default implementation uses English rules: `n == 1` → [`PluralCategory::One`],
+    /// anything else → [`PluralCategory::Other`]. Non-English grammars must
+    /// override this method to return the correct categories for their
+    /// language (e.g., Polish distinguishes `One / Few / Many / Other`;
+    /// Arabic uses all six categories).
+    fn plural_category(&self, n: i64) -> PluralCategory {
+        match n {
+            1 => PluralCategory::One,
+            _ => PluralCategory::Other,
+        }
+    }
+
+    /// Produce the form of `word` appropriate for the given plural category.
+    ///
+    /// Default implementation uses English rules: [`PluralCategory::One`]
+    /// returns the singular form (the word unchanged); any other category
+    /// returns the plural form via [`Language::pluralize`] with count 2,
+    /// which picks the plural branch in the legacy API without triggering
+    /// irregular-specific overrides that count on the exact integer.
+    ///
+    /// Non-English grammars must override this method when they support
+    /// richer category sets (e.g., Polish `One / Few / Many / Other`) or
+    /// when gender / case agreement affects the choice of form.
+    fn pluralize_with_category(&self, word: &str, category: PluralCategory) -> String {
+        match category {
+            PluralCategory::One => word.to_string(),
+            _ => self.pluralize(word, 2),
+        }
     }
 }
 
@@ -351,6 +409,7 @@ pub fn english_verb_phrase<L: Language + ?Sized>(
 mod tests {
     use super::*;
     use crate::agreement::AgreementFeatures;
+    use super::PluralCategory;
 
     /// Minimal Language implementation used only in unit tests for this module.
     struct MiniLang;
@@ -445,5 +504,93 @@ mod tests {
         let without = l.plural_description("class", 3, &AgreementFeatures::default());
         assert_eq!(with_features, without);
         assert_eq!(with_features, "the 3 classes");
+    }
+
+    // ── PluralCategory + default trait methods ───────────────────────────────
+
+    #[test]
+    fn default_plural_category_one() {
+        let lang = MiniLang;
+        assert_eq!(lang.plural_category(1), PluralCategory::One);
+    }
+
+    #[test]
+    fn default_plural_category_other_for_zero() {
+        let lang = MiniLang;
+        assert_eq!(lang.plural_category(0), PluralCategory::Other);
+    }
+
+    #[test]
+    fn default_plural_category_other_for_plurals() {
+        let lang = MiniLang;
+        assert_eq!(lang.plural_category(2), PluralCategory::Other);
+        assert_eq!(lang.plural_category(17), PluralCategory::Other);
+    }
+
+    #[test]
+    fn default_plural_category_other_for_negatives() {
+        let lang = MiniLang;
+        assert_eq!(lang.plural_category(-5), PluralCategory::Other);
+    }
+
+    #[test]
+    fn default_pluralize_with_category_one_is_singular() {
+        let lang = MiniLang;
+        assert_eq!(
+            lang.pluralize_with_category("service", PluralCategory::One),
+            "service"
+        );
+    }
+
+    #[test]
+    fn default_pluralize_with_category_other_is_plural() {
+        let lang = MiniLang;
+        assert_eq!(
+            lang.pluralize_with_category("service", PluralCategory::Other),
+            "services"
+        );
+    }
+
+    #[test]
+    fn default_pluralize_with_category_few_falls_to_plural() {
+        // English collapses Few/Many/Zero/Two to Other; the default impl
+        // routes all non-One categories to the plural form.
+        let lang = MiniLang;
+        assert_eq!(
+            lang.pluralize_with_category("service", PluralCategory::Few),
+            "services"
+        );
+    }
+
+    #[test]
+    fn default_pluralize_with_category_many_falls_to_plural() {
+        let lang = MiniLang;
+        assert_eq!(
+            lang.pluralize_with_category("service", PluralCategory::Many),
+            "services"
+        );
+    }
+
+    #[test]
+    fn default_pluralize_with_category_zero_falls_to_plural() {
+        let lang = MiniLang;
+        assert_eq!(
+            lang.pluralize_with_category("service", PluralCategory::Zero),
+            "services"
+        );
+    }
+
+    #[test]
+    fn default_pluralize_with_category_two_falls_to_plural() {
+        let lang = MiniLang;
+        assert_eq!(
+            lang.pluralize_with_category("service", PluralCategory::Two),
+            "services"
+        );
+    }
+
+    #[test]
+    fn plural_category_default_variant_is_other() {
+        assert_eq!(PluralCategory::default(), PluralCategory::Other);
     }
 }

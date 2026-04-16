@@ -57,7 +57,8 @@ mod length;
 mod punctuation;
 
 pub use language::{
-    english_verb_phrase, Aspect, Conjunction, Language, Mood, Person, Tense, VerbForm, Voice,
+    english_verb_phrase, Aspect, Conjunction, Language, Mood, Person, PluralCategory, Tense,
+    VerbForm, Voice,
 };
 pub use agreement::{
     AgreementFeatures, AgreementPerson, Animacy, Case, Definiteness, Gender, Number as GrammaticalNumber,
