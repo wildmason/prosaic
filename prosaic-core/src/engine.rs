@@ -162,6 +162,24 @@ impl<'a> Iterator for RenderIter<'a> {
             return Some(Ok(sentence));
         }
 
+        // Gapping: same template key, different subjects, incompatible
+        // non-subject context (different objects/complements).
+        let gap_end = self.engine.find_gapping_run(self.events, self.i);
+        if gap_end > self.i + 1 {
+            let mut rendered: Vec<String> = Vec::with_capacity(gap_end - self.i);
+            for (key, ctx) in &self.events[self.i..gap_end] {
+                match self.engine.render(self.session, key, ctx) {
+                    Ok(s) => rendered.push(s),
+                    Err(e) => return Some(Err(e)),
+                }
+            }
+            self.i = gap_end;
+            if let Some(gapped) = reduce_gapping(&rendered) {
+                return Some(Ok(gapped));
+            }
+            return Some(Ok(rendered.join(" ")));
+        }
+
         let entity_end = self.engine.find_same_entity_run(self.events, self.i);
         if entity_end > self.i + 1 {
             let mut run_rendered: Vec<String> = Vec::with_capacity(entity_end - self.i);
@@ -1794,6 +1812,25 @@ impl Engine {
                 continue;
             }
 
+            // Look for a gapping opportunity: same template key, different
+            // subjects, AND incompatible non-subject context (different objects
+            // or complements). Produces "Foo was moved to core, Bar to util,
+            // and Baz to api." from three separate events.
+            let gap_end = self.find_gapping_run(events, i);
+            if gap_end > i + 1 {
+                let mut rendered: Vec<String> = Vec::with_capacity(gap_end - i);
+                for (key, ctx) in &events[i..gap_end] {
+                    rendered.push(self.render(session, key, ctx)?);
+                }
+                if let Some(gapped) = reduce_gapping(&rendered) {
+                    sentences.push(gapped);
+                } else {
+                    sentences.extend(rendered);
+                }
+                i = gap_end;
+                continue;
+            }
+
             // Look for same-entity-different-action aggregation opportunity.
             // "The class X was renamed. It was modified. It was moved." reduces
             // to "The class X was renamed, modified, and moved" when the voice
@@ -2106,6 +2143,56 @@ impl Engine {
                 break;
             }
             seen_names.insert(name);
+            end += 1;
+        }
+
+        end
+    }
+
+    /// Find the end index (exclusive) of a run of consecutive events that
+    /// are candidates for gapping reduction:
+    /// - Same template key as `events[start]`.
+    /// - Each event has a distinct, extractable entity name.
+    /// - Each event's context is **incompatible** with the first event's
+    ///   context (if it were compatible, `find_same_action_run` would have
+    ///   already grabbed it for subject-aggregation).
+    ///
+    /// Returns `start + 1` when no gapping opportunity exists.
+    fn find_gapping_run(
+        &self,
+        events: &[(&str, Context)],
+        start: usize,
+    ) -> usize {
+        if start >= events.len() {
+            return start;
+        }
+
+        let (first_key, first_ctx) = (events[start].0, &events[start].1);
+        let Some(first_name) = entity_name_from_context(first_ctx) else {
+            return start + 1;
+        };
+
+        let mut end = start + 1;
+        let mut seen: std::collections::HashSet<String> =
+            std::iter::once(first_name).collect();
+
+        while end < events.len() {
+            let (k, ctx) = (events[end].0, &events[end].1);
+            if k != first_key {
+                break;
+            }
+            let Some(name) = entity_name_from_context(ctx) else {
+                break;
+            };
+            if seen.contains(&name) {
+                break;
+            }
+            // Bail if the contexts are compatible — the aggregated-subjects
+            // path must win in that case. We only gap incompatible contexts.
+            if contexts_compatible_for_aggregation(first_ctx, ctx) {
+                break;
+            }
+            seen.insert(name);
             end += 1;
         }
 
@@ -2459,6 +2546,191 @@ fn reduce_same_entity_clauses(sentences: &[String]) -> Option<String> {
     };
 
     Some(format!("{head_subject_aux} {joined}."))
+}
+
+// ── Gapping (ELLEIPO) ──────────────────────────────────────────────────────
+
+/// Split a rendered sentence into its subject word and the remaining tokens.
+///
+/// The "subject" is the first word that precedes a known auxiliary verb.
+/// The returned `rest_tokens` **include** the auxiliary and everything
+/// after it, so the longest-common-prefix search operates on the full
+/// post-subject span.
+///
+/// Returns `None` when no auxiliary is found (can't gap safely).
+fn split_subject_and_rest(s: &str) -> Option<(&str, Vec<&str>)> {
+    for aux in AUX_PREFIXES {
+        let marker = format!(" {aux} ");
+        if let Some(pos) = s.find(&marker) {
+            let subject = &s[..pos];
+            // Skip leading space so rest starts at the aux word.
+            let rest_str = &s[pos + 1..];
+            let rest_tokens: Vec<&str> = rest_str.split_whitespace().collect();
+            return Some((subject, rest_tokens));
+        }
+    }
+    None
+}
+
+/// Longest common prefix length across the `rest_tokens` vectors in
+/// `parsed`.  Returns 0 when `parsed` is empty.
+fn longest_common_prefix_len(parsed: &[(&str, Vec<&str>)]) -> usize {
+    if parsed.is_empty() {
+        return 0;
+    }
+    let min_len = parsed.iter().map(|(_, t)| t.len()).min().unwrap_or(0);
+    for i in 0..min_len {
+        let candidate = parsed[0].1[i];
+        if !parsed.iter().all(|(_, t)| t[i] == candidate) {
+            return i;
+        }
+    }
+    min_len
+}
+
+/// Attempt gapping reduction across a run of same-template renders where
+/// every event shares the same verb anchor but differs in object/complement.
+///
+/// Example input sentences:
+/// ```text
+/// ["Foo was moved to core", "Bar was moved to util", "Baz was moved to api"]
+/// ```
+/// Produces:
+/// ```text
+/// "Foo was moved to core, Bar to util, and Baz to api."
+/// ```
+///
+/// Returns `None` and leaves the caller to emit the sentences separately
+/// when any guard fires: anchor too short, duplicate subjects, empty
+/// divergent suffix, or embedded subordinate clause.
+fn reduce_gapping(sentences: &[String]) -> Option<String> {
+    if sentences.len() < 2 {
+        return None;
+    }
+
+    // No embedded clauses in any sentence.
+    if sentences.iter().any(|s| predicate_has_embedded_clause(s)) {
+        return None;
+    }
+
+    // Strip trailing punctuation and leading connectives, then split each
+    // sentence into (subject_word, rest_tokens).
+    let parsed: Vec<(&str, Vec<&str>)> = sentences
+        .iter()
+        .map(|s| {
+            let trimmed = s.trim_end();
+            let stripped = strip_leading_connective(trimmed.trim_end_matches(['.', '!', '?']));
+            // SAFETY: the Cow borrows from `trimmed` which lives as long as
+            // this closure scope — but we need to return `&str` referencing
+            // the original `s`. We compute the byte offset instead.
+            let _ = stripped; // keep for borrow-checker
+            // Re-derive without Cow: strip connective from trimmed-punctuation slice.
+            let body = trimmed.trim_end_matches(['.', '!', '?']);
+            let body_stripped: &str = {
+                const CONNECTIVES: &[&str] = &[
+                    "Additionally,",
+                    "Furthermore,",
+                    "Similarly,",
+                    "Likewise,",
+                    "Meanwhile,",
+                    "However,",
+                    "On the other hand,",
+                ];
+                let mut result = body;
+                for conn in CONNECTIVES {
+                    if let Some(rest) = body.strip_prefix(conn) {
+                        result = rest.trim_start();
+                        break;
+                    }
+                }
+                // "It also was …" → "It was …" can't be represented as a
+                // plain &str rewrite without allocation; treat as no-strip.
+                result
+            };
+            split_subject_and_rest(body_stripped)
+        })
+        .collect::<Option<Vec<_>>>()?;
+
+    // Subjects must all be distinct.
+    {
+        let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        for (subj, _) in &parsed {
+            if !seen.insert(*subj) {
+                return None;
+            }
+        }
+    }
+
+    // Longest common prefix across all rest_tokens vectors = the raw anchor.
+    let raw_anchor_len = longest_common_prefix_len(&parsed);
+
+    // Trim trailing prepositions from the anchor so that "was moved to"
+    // becomes "was moved" — we want to gap the verbal complex only, keeping
+    // any preposition together with the divergent complement.
+    // E.g. "Foo was moved to core" + "Bar was moved to util"
+    //   → anchor = "was moved", suffixes = "to core" / "to util"
+    //   → "Foo was moved to core, and Bar to util."
+    const PREPOSITIONS: &[&str] = &[
+        "to", "from", "at", "in", "on", "by", "for", "with", "into", "onto",
+        "out", "off", "over", "under", "above", "below", "through", "across",
+        "against", "along", "around", "behind", "beside", "between", "during",
+        "inside", "outside", "toward", "towards", "upon", "within", "without",
+    ];
+    let anchor_len = {
+        let mut len = raw_anchor_len;
+        while len > 0 && PREPOSITIONS.contains(&parsed[0].1[len - 1]) {
+            len -= 1;
+        }
+        len
+    };
+
+    // Anchor must be at least 2 tokens (e.g. "was moved") to be meaningful.
+    if anchor_len < 2 {
+        return None;
+    }
+
+    // Every divergent suffix must be non-empty (something to gap into).
+    if parsed.iter().any(|(_, toks)| toks.len() <= anchor_len) {
+        return None;
+    }
+
+    let anchor = parsed[0].1[..anchor_len].join(" ");
+
+    // Divergent suffixes (the "objects").
+    let suffixes: Vec<String> = parsed
+        .iter()
+        .map(|(_, toks)| toks[anchor_len..].join(" "))
+        .collect();
+
+    // Helper to capitalize the first letter of a subject that the discourse
+    // system may have lowercased when prepending a connective.
+    let capitalize = |s: &str| -> String {
+        let mut cs = s.chars();
+        match cs.next() {
+            None => String::new(),
+            Some(c) => c.to_uppercase().collect::<String>() + cs.as_str(),
+        }
+    };
+
+    // First full sentence: "Foo was moved to core"
+    let first = format!("{} {} {}", capitalize(parsed[0].0), anchor, suffixes[0]);
+    // Follower fragments: "Bar to util", "Baz to api"
+    let tail: Vec<String> = parsed
+        .iter()
+        .skip(1)
+        .zip(suffixes.iter().skip(1))
+        .map(|((subj, _), suf)| format!("{} {suf}", capitalize(subj)))
+        .collect();
+
+    let joined = match tail.len() {
+        1 => format!("{first}, and {}", tail[0]),
+        _ => {
+            let (last, rest) = tail.split_last().unwrap();
+            format!("{first}, {}, and {last}", rest.join(", "))
+        }
+    };
+
+    Some(format!("{joined}."))
 }
 
 /// Detect whether a predicate string would be clumsy to reduce because
@@ -4534,6 +4806,167 @@ mod tests {
             "The class Foo was modified, which affects 6 consumers.".to_string(),
         ]);
         assert_eq!(reduced, None);
+    }
+
+    // ── Gapping (ELLEIPO) unit tests ─────────────────────────────────────
+
+    #[test]
+    fn reduce_gapping_two_events() {
+        let ss = vec![
+            "Foo was moved to core".to_string(),
+            "Bar was moved to util".to_string(),
+        ];
+        let out = reduce_gapping(&ss).unwrap();
+        assert_eq!(out, "Foo was moved to core, and Bar to util.");
+    }
+
+    #[test]
+    fn reduce_gapping_three_events() {
+        let ss = vec![
+            "Foo was moved to core".to_string(),
+            "Bar was moved to util".to_string(),
+            "Baz was moved to api".to_string(),
+        ];
+        let out = reduce_gapping(&ss).unwrap();
+        assert_eq!(out, "Foo was moved to core, Bar to util, and Baz to api.");
+    }
+
+    #[test]
+    fn reduce_gapping_rejects_single() {
+        let ss = vec!["Foo was moved to core".to_string()];
+        assert!(reduce_gapping(&ss).is_none());
+    }
+
+    #[test]
+    fn reduce_gapping_rejects_short_anchor() {
+        // Anchor = ["was"] — length 1, below the 2-token threshold.
+        let ss = vec![
+            "Foo was moved".to_string(),
+            "Bar was modified".to_string(),
+        ];
+        assert!(reduce_gapping(&ss).is_none());
+    }
+
+    #[test]
+    fn reduce_gapping_rejects_embedded_clause() {
+        let ss = vec![
+            "Foo was moved, affecting 3 consumers, to core".to_string(),
+            "Bar was moved to util".to_string(),
+        ];
+        assert!(reduce_gapping(&ss).is_none());
+    }
+
+    #[test]
+    fn reduce_gapping_rejects_identical_subjects() {
+        // Identical subjects → no gapping opportunity.
+        let ss = vec![
+            "Foo was moved to core".to_string(),
+            "Foo was moved to core".to_string(),
+        ];
+        assert!(reduce_gapping(&ss).is_none());
+    }
+
+    #[test]
+    fn reduce_gapping_rejects_empty_suffix() {
+        // Anchor consumes everything; no divergent tail.
+        let ss = vec![
+            "Foo was moved".to_string(),
+            "Bar was moved".to_string(),
+        ];
+        assert!(reduce_gapping(&ss).is_none());
+    }
+
+    // ── Gapping integration tests (render_batch / render_iter) ──────────
+
+    #[test]
+    fn render_batch_applies_gapping_when_objects_differ() {
+        let mut engine = test_engine();
+        engine
+            .register_template("code.moved", "{name} was moved to {new_location}")
+            .unwrap();
+
+        let make = |name: &str, loc: &str| {
+            let mut c = Context::new();
+            c.insert("entity_type", Value::String("class".into()));
+            c.insert("name", Value::String(name.into()));
+            c.insert("new_location", Value::String(loc.into()));
+            c
+        };
+
+        let events = vec![
+            ("code.moved", make("Foo", "core")),
+            ("code.moved", make("Bar", "util")),
+            ("code.moved", make("Baz", "api")),
+        ];
+
+        let mut s = Session::new();
+        let out = engine.render_batch(&mut s, &events).unwrap();
+        assert_eq!(out, "Foo was moved to core, Bar to util, and Baz to api.");
+    }
+
+    #[test]
+    fn render_batch_gapping_does_not_apply_when_objects_match() {
+        // Same template + same non-subject slots → subject aggregation wins,
+        // not gapping. Verifies the aggregated-subjects path is not regressed.
+        let mut engine = test_engine();
+        engine
+            .register_template("code.moved", "{name} was moved to {new_location}")
+            .unwrap();
+
+        let make = |name: &str| {
+            let mut c = Context::new();
+            c.insert("entity_type", Value::String("class".into()));
+            c.insert("name", Value::String(name.into()));
+            c.insert("new_location", Value::String("core".into()));
+            c
+        };
+
+        let events = vec![
+            ("code.moved", make("Foo")),
+            ("code.moved", make("Bar")),
+        ];
+
+        let mut s = Session::new();
+        let out = engine.render_batch(&mut s, &events).unwrap();
+        // Subject aggregation path: "Foo and Bar were moved to core".
+        assert!(
+            out.contains("Foo and Bar") && out.contains("core"),
+            "got: {out}"
+        );
+        // NOT gapping-style output.
+        assert!(!out.contains(", and Bar to "), "got: {out}");
+    }
+
+    #[test]
+    fn render_iter_applies_gapping() {
+        let mut engine = test_engine();
+        engine
+            .register_template("code.moved", "{name} was moved to {new_location}")
+            .unwrap();
+
+        let make = |name: &str, loc: &str| {
+            let mut c = Context::new();
+            c.insert("entity_type", Value::String("class".into()));
+            c.insert("name", Value::String(name.into()));
+            c.insert("new_location", Value::String(loc.into()));
+            c
+        };
+
+        let events = vec![
+            ("code.moved", make("Foo", "core")),
+            ("code.moved", make("Bar", "util")),
+            ("code.moved", make("Baz", "api")),
+        ];
+
+        let mut s = Session::new();
+        let collected: Result<Vec<_>, _> = engine.render_iter(&mut s, &events).collect();
+        let collected = collected.unwrap();
+        // One sentence emitted for the gapped run.
+        assert_eq!(collected.len(), 1);
+        assert_eq!(
+            collected[0],
+            "Foo was moved to core, Bar to util, and Baz to api."
+        );
     }
 
     // ── Silent-mode cleanup ─────────────────────────────────────────────
