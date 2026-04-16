@@ -1,25 +1,14 @@
 //! General-purpose natural language generation from structured data.
 //!
-//! # `no_std` support
+//! Takes structured events and produces **natural-sounding** prose, not
+//! just grammatically correct output. The engine tracks discourse state
+//! across calls, so multiple renders flow together like human-written
+//! prose — using pronouns, varying phrasing, matching verbosity to
+//! impact, and structuring multi-paragraph narratives.
 //!
-//! Disable the `std` feature to compile under `no_std + alloc`:
-//!
-//! ```toml
-//! prosaic-core = { version = "0.1", default-features = false }
-//! ```
-//!
-//! Without the `std` feature:
-//! - `Variation::Random` falls back to `Variation::Fixed` (variant 0).
-//! - `{timestamp|relative}` and `{timestamp|since_last}` require
-//!   `engine.reference_time()` to be set.
-//! - `ProsaicError` does not implement `std::error::Error` (only `Debug + Display`).
-//!
-//!
-//! Takes structured events and produces **natural-sounding** English
-//! text, not just grammatically correct output. The engine tracks
-//! discourse state across calls, so multiple renders flow together like
-//! human-written prose — using pronouns, varying phrasing, matching
-//! verbosity to impact, and structuring multi-paragraph narratives.
+//! English, Spanish, and German grammars ship out of the box via the
+//! `prosaic-grammar-en`, `-es`, and `-de` sibling crates. Add more
+//! languages by implementing the [`Language`] trait.
 //!
 //! # Quick start
 //!
@@ -45,6 +34,29 @@
 //! let sentence = engine.render(&mut session, "entity.renamed", &ctx).unwrap();
 //! assert_eq!(sentence, "The class Foo was renamed to Foobar.");
 //! ```
+//!
+//! # Feature flags
+//!
+//! - `std` (default): `std::error::Error` on `ProsaicError`, `SystemTime::now()`
+//!   fallbacks. Disable for `no_std + alloc` targets.
+//! - `time` (default): `{ts|relative}` and `{ts|since_last}` pipes.
+//! - `polish` (default): sentence-length budgeting and smart quotes.
+//! - `reg` (default): referring expression generation (Dale-Reiter + graph-based).
+//! - `serde` (off): `Serialize`/`Deserialize` on public types.
+//! - `parallel` (off): `DocumentPlan::render_parallel` via rayon.
+//!
+//! # `no_std` support
+//!
+//! Disable the `std` feature to compile under `no_std + alloc`:
+//!
+//! ```toml
+//! prosaic-core = { version = "0.1", default-features = false }
+//! ```
+//!
+//! Without the `std` feature:
+//! - `Variation::Random` falls back to `Variation::Fixed` (variant 0).
+//! - `{ts|relative}` and `{ts|since_last}` require `engine.reference_time()`.
+//! - `ProsaicError` does not implement `std::error::Error`.
 
 #![cfg_attr(not(feature = "std"), no_std)]
 

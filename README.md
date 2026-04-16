@@ -53,12 +53,18 @@ let sentence = engine.render(&mut session, "entity.renamed", &ctx)?;
 
 | Crate | Purpose |
 |---|---|
-| `prosaic-core` | Engine, templates, discourse, salience, document planning, builder API, referring expression generation, `Language` trait |
+| `prosaic-core` | Engine, templates, discourse, salience, document planning, builder API, referring expression generation, `Language` trait. `no_std + alloc`-compatible via `default-features = false`. |
 | `prosaic-grammar-en` | English grammar: pluralization, articles, conjugation, list formatting, ordinals, number-to-words, past participles |
-| `prosaic-derive` | `#[derive(IntoContext)]` for automatic struct-to-context conversion |
-| `prosaic-vocab-code` | Code-analysis vocabulary templates (renamed, deleted, added, modified, moved, signature changed) at all three salience levels |
-| `prosaic-vocab-git` | Git/VCS activity templates (commits, PRs, issues, reviews, releases) |
-| `prosaic-cli` | `prosaic` binary: reads JSON-lines events on stdin, writes rendered prose on stdout |
+| `prosaic-grammar-es` | Spanish grammar: gender-aware articles, pluralization, regular + common irregular conjugation, gendered pronouns, number-to-words, ordinals, RST markers |
+| `prosaic-grammar-de` | German grammar: case declension (Nom/Acc/Dat/Gen × Masc/Fem/Neut × Sg/Pl) articles, regular weak + ~10 strong irregular verbs, plural inflection, German-compound number-to-words, RST markers |
+| `prosaic-derive` | `#[derive(IntoContext)]`, `prosaic_template!` (compile-time slot + pipe validator), `prosaic_template_compiled!` (monomorphized render function for bare-slot templates) |
+| `prosaic-vocab-code` | Code-analysis vocabulary templates (renamed, deleted, added, modified, moved, signature changed). `en::register` + `es::register_es` siblings. |
+| `prosaic-vocab-git` | Git/VCS activity templates (commits, PRs, issues, reviews, releases). `en` + `es` siblings. |
+| `prosaic-vocab-release` | Release and deployment event templates. `en` + `es` siblings. |
+| `prosaic-vocab-pr` | Pull-request lifecycle templates. `en` + `es` siblings. |
+| `prosaic-tracing` | `tracing_subscriber::Layer` that converts structured tracing events into prose narrative. |
+| `prosaic-wasm` | WebAssembly bindings via `wasm-bindgen` — exposes `ProsaicEngine` and `ProsaicSession` to JS/TS. |
+| `prosaic-cli` | `prosaic` binary: reads JSON-lines events on stdin, writes rendered prose on stdout. `--preset=changelog\|release-notes\|digest` bundles. |
 
 ## Core Concepts
 
@@ -81,10 +87,12 @@ Templates use `{slot}` for substitution and `{slot|pipe}` for transforms. Pipes 
 | `verb:form` | `{rename\|verb:present_perfect}` | "has been renamed" — full tense/aspect phrase (see below) |
 | `syn` | `{class\|syn}` | Pick a registered synonym, least recently used (see *Elegant Variation*) |
 | `relative` | `{ts\|relative}` | Unix timestamp → "yesterday" / "3 weeks ago" / "in 2 months" |
+| `since_last` | `{ts\|since_last}` | Inter-event delta → "moments later" / "the next day" / "3 months later". Anchored against the previous event's timestamp; falls back to `relative` on the first event. |
 | `quantify` | `{n\|quantify}` | 0 → "no", 1 → "a single", 47 → "47", 300 → "hundreds of"; `:exact` / `:hedged` flavours available |
 | `hedge` | `{conf\|hedge}` | 0..=100 confidence → "certainly" / "likely" / "probably" / "possibly" / "perhaps"; `:modal` / `:prefix` flavours |
 | `negated` | `{phrase\|negated}` | Emit a negated verb phrase — registered positive antonym if available, else inserts "not" after the aux |
 | `demonstrative` | `{change\|demonstrative}` | "this change" (continuation) / "the change" (fresh discourse) |
+| `choose` | `{level\|choose:low=terse,high=detailed,default=normal}` | Key-to-value lookup; picks `default` when no branch matches |
 
 ### Conditional Sections
 
@@ -277,6 +285,78 @@ The `{count|quantify}` pipe replaces awkward raw numbers with natural phrasing �
 
 Use `{n|quantify:exact}` when you want precise numbers unconditionally, or `{n|quantify:hedged}` when counts come from noisy sources and even small numbers should be hedged.
 
+### Centering Theory (Cb / Cf / Cp with transition classification)
+
+`Session` tracks a Cf list (forward-looking centers — every entity realized in an utterance, ranked by grammatical role) and a Cb (backward-looking center). On each render the engine classifies the transition between consecutive utterances:
+
+| Transition | Meaning |
+|---|---|
+| `Continue` | Same Cb, same Cp — ideal coherence |
+| `Retain` | Same Cb, different Cp |
+| `SmoothShift` | New Cb, but Cb == Cp |
+| `RoughShift` | New Cb, different Cp — coherence warning |
+| `NoCb` | First render or no classifiable transition |
+
+The transition is exposed via `RenderExplanation.centering_transition` so callers can score document coherence. Centering Rule 1 (pronouns require Cb) is enforced by the default reference-form policy. See `docs/plans/full-centering-theory.md`.
+
+### RST-labeled Discourse Markers
+
+Attach an `RstRelation` to each event in a `DocumentPlan` and the engine inserts an appropriate discourse marker:
+
+| Relation | English marker | Spanish | German |
+|---|---|---|---|
+| `Elaboration` | "Furthermore, …" | "Además, …" | "Außerdem …" |
+| `Contrast` | "However, …" | "Sin embargo, …" | "Allerdings …" |
+| `Cause` | "Because of this, …" | "Debido a esto, …" | "Deshalb …" |
+| `Result` | "As a result, …" | "Como resultado, …" | "Folglich …" |
+| `Concession` | "Nevertheless, …" | "No obstante, …" | "Dennoch …" |
+| `Sequence` | "Then, …" | "Luego, …" | "Dann …" |
+| `Condition` | "If this happens, …" | "Si esto ocurre, …" | "Wenn dies geschieht, …" |
+| `Background` | "Meanwhile, …" | "Mientras tanto, …" | "Inzwischen …" |
+| `Summary` | "In summary, …" | "En resumen, …" | "Zusammenfassend …" |
+
+```rust
+use prosaic_core::{DocumentPlan, RstRelation};
+
+let events = vec![
+    ("code.deleted", ctx_a, None),
+    ("code.added",   ctx_b, Some(RstRelation::Contrast)),
+];
+let plan = DocumentPlan::from_events_with_relations(&events, &engine);
+let prose = plan.render(&engine, &mut session)?;
+// "Foo was deleted. However, a new class Bar was introduced..."
+```
+
+### Temporal Anchoring Across Paragraphs
+
+The `{ts|since_last}` pipe computes the delta between this event's timestamp and the last rendered event's timestamp. The anchor persists across `session.reset()` and paragraph breaks in a `DocumentPlan`, so narratives can span sections:
+
+```rust
+engine.register_template("change", "{name|refer} changed {ts|since_last}")?;
+
+// First render: falls back to format_relative ("3 days ago")
+// Subsequent renders: inter-event delta ("the next day", "moments later")
+```
+
+Call `session.reset_temporal()` to clear the anchor when starting a temporally-disjoint narrative.
+
+### Faithfulness Scoring (PARENT)
+
+Prosaic ships a reference-free faithfulness scorer that measures whether a rendered sentence stays faithful to its source context:
+
+```rust
+use prosaic_core::{score_faithfulness, assert_faithful};
+
+let score = score_faithfulness(&output, &ctx);
+assert!(score.precision >= 0.9);
+assert!(score.polarity_drift.is_preserved());
+
+// Or in tests:
+assert_faithful!(&output, &ctx, precision >= 0.9);
+```
+
+`Engine::with_faithfulness_gate(min)` wraps render calls with an automatic gate — outputs below the threshold return `Err(ProsaicError::FaithfulnessFailed)`.
+
 ### Clause Aggregation (Conjunction Reduction)
 
 When a batch or document plan renders a run of same-entity events whose voice and tense match, `render_batch` fuses their predicates into one sentence:
@@ -297,6 +377,34 @@ The reducer declines when the result would be lossy:
 - sentences where the entity is reintroduced by full form (not via "it") stay separate
 
 Discourse connectives ("Additionally,", "Similarly,", …) that the discourse system would otherwise prepend to continuation sentences are stripped first — the final conjunction ("and") takes over the linking role.
+
+### Gapping (ELLEIPO)
+
+When a batch renders a run of same-template-key events with **different objects**, the engine applies gapping — eliding the shared verb from follower sentences:
+
+```text
+individual renders:
+  "Foo was moved to core"
+  "Bar was moved to util"
+  "Baz was moved to api"
+
+gapped:
+  "Foo was moved to core, Bar to util, and Baz to api."
+```
+
+Requires a shared verb anchor of at least two tokens, distinct subjects, and non-empty divergent suffixes. Same-template-key events with identical objects still go through subject aggregation instead ("Foo, Bar, and Baz were moved to core").
+
+### Parallel DocumentPlan Rendering
+
+Enable the `parallel` feature for rayon-backed paragraph-level parallelism:
+
+```rust
+let plan = DocumentPlan::from_events(&events, &engine);
+let initial = Session::new();
+let prose = plan.render_parallel(&engine, &initial)?;
+```
+
+Each paragraph gets its own cloned Session. Trade-off: cross-paragraph temporal-anchor threading is lost — each paragraph anchors independently. Use sequential `render` when temporal coherence across paragraphs matters.
 
 ### Natural List Formatting
 
@@ -570,6 +678,24 @@ Cross-render naturalness (pronouns, connectives, list-style cycling, sentence te
 | `Strictness::Lenient` | Renders as `[missing: slot_name]` |
 | `Strictness::Silent` | Renders as empty string, plus cleanup: dangling prepositions and conjunctions left by omitted slots (`"was modified by "`) get stripped so output reads naturally. |
 
+## Available Languages
+
+| Language | Crate | Constructor | Specialties |
+|---|---|---|---|
+| English | `prosaic-grammar-en` | `English::new()` | Regular + 30+ irregular verbs, full REG, Centering, ELLEIPO |
+| Spanish | `prosaic-grammar-es` | `Spanish::new()` | Gender-aware articles, regular + 10 irregular verbs, gendered pronouns (él/ella/ellos/ellas), Spanish number-words |
+| German | `prosaic-grammar-de` | `German::new()` | 4-case article declension, regular weak + strong irregulars, German compound number-words |
+
+Switch languages by passing a different grammar to `Engine::new(...)`:
+
+```rust
+use prosaic_core::Engine;
+use prosaic_grammar_es::Spanish;
+
+let mut engine = Engine::new(Spanish::new());
+prosaic_vocab_release::register_es(&mut engine)?;
+```
+
 ## Adding a Language
 
 Implement the `Language` trait from `prosaic-core`:
@@ -586,12 +712,15 @@ pub trait Language: Send + Sync {
     fn ordinal(&self, n: usize) -> String;
     fn number_to_words(&self, n: usize) -> String;
 
-    // Default impl composes `conjugate` + participles into a full verb
-    // phrase covering tense × aspect × voice × mood. Override only if
-    // the language's auxiliary structure differs from English's.
-    fn verb_phrase(
-        &self, verb: &str, form: VerbForm, voice: Voice, person: Person,
-    ) -> String { english_verb_phrase(self, verb, form, voice, person) }
+    // Default impls covered by `prosaic-core`:
+    fn plural_category(&self, n: i64) -> PluralCategory { /* CLDR one/other */ }
+    fn plural_description(&self, entity_type: &str, count: usize, features: &AgreementFeatures) -> String { /* "the 3 foos" */ }
+    fn realize_reference(&self, form: ReferenceForm, features: &AgreementFeatures) -> Option<String> { /* pronouns / demonstratives */ }
+    fn discourse_marker(&self, relation: RstRelation) -> Option<&'static str> { /* "However, " / "Furthermore, " */ }
+    fn since_last_marker(&self, diff_secs: i64) -> String { /* "the next day" / "moments later" */ }
+    fn verb_phrase(&self, verb: &str, form: VerbForm, voice: Voice, person: Person) -> String {
+        english_verb_phrase(self, verb, form, voice, person)
+    }
 }
 ```
 
@@ -659,29 +788,38 @@ let engine = Engine::new(English::new()).smart_quotes(true);
 
 ## Cargo Features
 
-All three feature flags are enabled by default. Disable for leaner builds (embedded, WASM, stripped-down services).
-
 | Feature | Default | What it gates |
 |---|---|---|
-| `time` | on | `{ts\|relative}` pipe, `engine.reference_time()`, `SystemTime::now()` fallback. Disable for WASM targets where system time panics. |
-| `polish` | on | `engine.smart_quotes()`, `engine.max_sentence_length()` and their post-processing passes. |
-| `reg` | on | Dale & Reiter REG algorithm, `EntityDescriptor`, `EntityRegistry`, `engine.register_entity()`, `engine.attribute_preference()`. `{name\|refer}` still produces Full/Short/Pronoun forms from discourse state without this feature. |
-| `serde` | off | `Serialize`/`Deserialize` on `Context`, `Value`, `EntityDescriptor`, `RenderExplanation`, `VariantScore`, and all configuration enums. |
+| `std` | on | `std::error::Error` impl on `ProsaicError`, `SystemTime::now()` fallbacks, `thiserror/std`. Disable for `no_std + alloc` targets. |
+| `time` | on | `{ts\|relative}` and `{ts\|since_last}` pipes, `engine.reference_time()`. Depends on `std`. |
+| `polish` | on | `engine.smart_quotes()`, `engine.max_sentence_length()` post-processing. |
+| `reg` | on | Dale & Reiter + graph-based REG, `EntityDescriptor`, `EntityRegistry`. `{name\|refer}` still produces Full/Short/Pronoun forms without this feature. |
+| `serde` | off | `Serialize`/`Deserialize` on `Context`, `Value`, `RenderExplanation`, `VariantScore`, `AgreementFeatures`, `RstRelation`, `Transition`, and all configuration enums. |
+| `parallel` | off | `DocumentPlan::render_parallel` via rayon. |
 
 Build examples:
 
 ```bash
-# Minimal build (no optional pipes, no post-processing)
+# Full-feature default build
+cargo build --package prosaic-core
+
+# no_std + alloc (embedded / WASM / stripped-down services)
 cargo build --package prosaic-core --no-default-features
 
-# WASM-safe build (time feature off so SystemTime::now is never referenced)
+# WASM-compatible with REG + polish (no time pipe since SystemTime is off)
 cargo build --package prosaic-core --target wasm32-unknown-unknown --no-default-features --features "reg,polish"
+
+# Browser bindings crate
+cargo build --package prosaic-wasm --target wasm32-unknown-unknown --release
 
 # With serde for JSON payloads
 cargo build --package prosaic-core --features serde
+
+# With rayon-backed paragraph parallelism
+cargo build --package prosaic-core --features parallel
 ```
 
-Even with the `time` feature enabled, the crate compiles for `wasm32-unknown-unknown`. The runtime fallback to `SystemTime::now()` is guarded with `cfg(target_arch)` — on wasm32 the engine returns a clear error if you use the `relative` pipe without calling `engine.reference_time()` first.
+The crate compiles for `wasm32-unknown-unknown` even without disabling `time` — `SystemTime::now()` calls are `#[cfg(feature = "std")]`-gated. On `no_std` + WASM, the `relative` and `since_last` pipes return a clear error if you use them without calling `engine.reference_time()` first.
 
 ## Command-Line Usage
 
