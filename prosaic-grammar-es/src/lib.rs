@@ -8,10 +8,11 @@
 //! Uses only pure Rust — no CLDR data. Expansion (subjunctive, imperfecto,
 //! full irregular tables, dialectal variation) is planned for follow-up crates.
 
-// TODO Phase 3+: full Language trait implementation
+// TODO Phase 4: wire Language trait
 pub mod gender;
 pub(crate) mod pluralize;
 pub(crate) mod articles;
+pub(crate) mod conjugate;
 
 /// Spanish language grammar implementation.
 #[derive(Debug, Clone, Default)]
