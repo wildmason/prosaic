@@ -95,6 +95,97 @@ impl ProsaicEngine {
             .map_err(|e| JsValue::from_str(&e.to_string()))
     }
 
+    /// Load a project from its bundled JSON manifest (produced by
+    /// `prosaic build --target=json`). Registers all partials and
+    /// template variants.
+    #[wasm_bindgen(js_name = loadManifest)]
+    pub fn load_manifest(&mut self, json: &str) -> Result<(), JsValue> {
+        self.inner
+            .load_manifest(json)
+            .map_err(|e| JsValue::from_str(&e.to_string()))
+    }
+
+    /// Render with explanation. Returns a JS object containing the rendered
+    /// text plus the engine's decision metadata (variant chosen, salience,
+    /// reference form, connective, transition, faithfulness).
+    #[wasm_bindgen(js_name = renderExplained)]
+    pub fn render_explained(
+        &self,
+        session: &mut ProsaicSession,
+        key: &str,
+        context: &JsValue,
+    ) -> Result<JsValue, JsValue> {
+        let ctx = js_object_to_context(context)?;
+        let exp = self
+            .inner
+            .render_explained(&mut session.inner, key, &ctx)
+            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        serde_wasm_bindgen::to_value(&exp)
+            .map_err(|e| JsValue::from_str(&format!("encode RenderExplanation: {e}")))
+    }
+
+    /// Score the variants that would be considered for a render.
+    /// Returns a JS array of `VariantScore` objects.
+    #[wasm_bindgen(js_name = scoreVariants)]
+    pub fn score_variants(
+        &self,
+        session: &mut ProsaicSession,
+        key: &str,
+        context: &JsValue,
+    ) -> Result<JsValue, JsValue> {
+        let ctx = js_object_to_context(context)?;
+        let scores = self
+            .inner
+            .score_variants(&mut session.inner, key, &ctx)
+            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        serde_wasm_bindgen::to_value(&scores)
+            .map_err(|e| JsValue::from_str(&format!("encode VariantScores: {e}")))
+    }
+
+    /// Score the faithfulness of a rendered output against a context.
+    /// Returns a `FaithfulnessScore` object.
+    #[wasm_bindgen(js_name = scoreFaithfulness)]
+    pub fn score_faithfulness(&self, output: &str, context: &JsValue) -> Result<JsValue, JsValue> {
+        let ctx = js_object_to_context(context)?;
+        let score =
+            prosaic_core::score_faithfulness(output, &ctx, &[], self.inner.language());
+        serde_wasm_bindgen::to_value(&score)
+            .map_err(|e| JsValue::from_str(&format!("encode FaithfulnessScore: {e}")))
+    }
+
+    /// Validate a template body. Returns `{ ok: bool, error: string|null }`.
+    #[wasm_bindgen(js_name = validateTemplate)]
+    pub fn validate_template(&self, body: &str) -> JsValue {
+        match prosaic_core::Template::parse(body) {
+            Ok(_) => serde_wasm_bindgen::to_value(&serde_json::json!({
+                "ok": true,
+                "error": JsonValue::Null,
+            }))
+            .unwrap_or(JsValue::NULL),
+            Err(e) => serde_wasm_bindgen::to_value(&serde_json::json!({
+                "ok": false,
+                "error": e.to_string(),
+            }))
+            .unwrap_or(JsValue::NULL),
+        }
+    }
+
+    /// Set the BCP-47 language preference for variant selection.
+    #[wasm_bindgen(js_name = setLanguagePreference)]
+    pub fn set_language_preference(&mut self, lang: &str) {
+        // Builder consumes self, so swap with a fresh engine
+        // configured the same way then with language preference.
+        // We rebuild the inner engine; templates are preserved on
+        // the existing engine, so this is a separate API: callers
+        // should set this BEFORE registering templates or loading a
+        // manifest.
+        let mut new_engine = Engine::new(English::new())
+            .strictness(Strictness::Strict)
+            .variation(Variation::Fixed)
+            .language_preference(lang);
+        std::mem::swap(&mut self.inner, &mut new_engine);
+    }
+
     /// Render a batch of events as a single aggregated paragraph.
     ///
     /// `events` is a JS array of `[key, context]` pairs, e.g.:

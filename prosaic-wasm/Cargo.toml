@@ -9,7 +9,7 @@ description = "WebAssembly bindings for the Prosaic NLG engine"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-prosaic-core = { path = "../prosaic-core", default-features = false, features = ["std", "polish", "reg"] }
+prosaic-core = { path = "../prosaic-core", default-features = false, features = ["std", "polish", "reg", "serde"] }
 prosaic-grammar-en = { path = "../prosaic-grammar-en" }
 wasm-bindgen = "0.2"
 serde = { version = "1", features = ["derive"] }
