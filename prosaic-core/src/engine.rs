@@ -97,8 +97,26 @@ pub enum RegAlgorithm {
     GraphBased,
 }
 
-/// A template registered under a key, with its salience level.
-type SalientTemplate = (Salience, Template);
+/// A template registered under a key, with its salience level and
+/// optional BCP-47 language tag. Variants without a language tag are
+/// language-agnostic fallbacks; variants with a tag are filtered to
+/// match the engine's configured language preference.
+#[derive(Debug, Clone)]
+pub struct SalientTemplate {
+    pub salience: Salience,
+    pub template: Template,
+    pub language: Option<String>,
+}
+
+impl SalientTemplate {
+    pub fn new(salience: Salience, template: Template, language: Option<String>) -> Self {
+        Self {
+            salience,
+            template,
+            language,
+        }
+    }
+}
 
 /// Per-render diagnostics — everything the engine decided along the
 /// way to produce the final output. Returned by
@@ -289,6 +307,10 @@ pub struct Engine {
     #[cfg(feature = "polish")]
     smart_quotes: bool,
     partials: HashMap<String, Template>,
+    /// BCP-47 language code that variant selection should prefer when
+    /// language-tagged variants are registered for a key. `None` means
+    /// no preference (engine picks among all alternatives).
+    language_preference: Option<String>,
     /// Optional faithfulness gate. When `Some(threshold)`, each rendered output
     /// is scored via PARENT precision + polarity check. If the score does not
     /// pass the threshold or polarity mismatches, the render returns
@@ -361,9 +383,14 @@ impl<'e, 's> RenderCtx<'e, 's> {
             self.session.discourse.select_connective(&relation)
         };
 
-        // Filter templates by salience level matching the context magnitude.
+        // Filter templates by salience level matching the context magnitude,
+        // honouring the engine's language preference.
         let target_salience = self.engine.context_salience(context);
-        let alternatives = filter_by_salience(all_alternatives, target_salience);
+        let alternatives = filter_alternatives(
+            all_alternatives,
+            target_salience,
+            self.engine.language_preference.as_deref(),
+        );
 
         // Select template with choosebest scoring and anti-repeat
         let (template, variant_index) =
@@ -1323,7 +1350,11 @@ impl<'e, 's> RenderCtx<'e, 's> {
         ctx: &Context,
     ) -> Result<Vec<VariantScore>, ProsaicError> {
         let target_salience = self.engine.context_salience(ctx);
-        let alternatives = filter_by_salience(all, target_salience);
+        let alternatives = filter_alternatives(
+            all,
+            target_salience,
+            self.engine.language_preference.as_deref(),
+        );
 
         // Snapshot so candidate renders leave no residue.
         let snapshot = self.session.clone();
@@ -1435,8 +1466,19 @@ impl Engine {
             #[cfg(feature = "polish")]
             smart_quotes: false,
             partials: new_map(),
+            language_preference: None,
             faithfulness_threshold: None,
         }
+    }
+
+    /// Set the BCP-47 language code that variant selection should prefer.
+    /// When templates are registered with [`Engine::register_template_with_language`],
+    /// the engine picks variants whose language matches this preference; if
+    /// none match, it falls back to language-untagged variants, then to any
+    /// registered variant.
+    pub fn language_preference(mut self, lang: impl Into<String>) -> Self {
+        self.language_preference = Some(lang.into());
+        self
     }
 
     /// Set the strictness mode for missing slot handling.
@@ -1752,13 +1794,35 @@ impl Engine {
         source: &str,
         salience: Salience,
     ) -> Result<(), ProsaicError> {
+        self.register_template_with_language_at(key, source, salience, None)
+    }
+
+    /// Register a template variant tagged with a BCP-47 language code.
+    /// Variants registered with `None` language are language-agnostic
+    /// fallbacks. The engine's [`Engine::language_preference`] biases
+    /// variant selection: when a preference is set and any variant
+    /// matches it, the engine picks among matching variants only.
+    pub fn register_template_with_language(
+        &mut self,
+        key: &str,
+        source: &str,
+        language: Option<&str>,
+    ) -> Result<(), ProsaicError> {
+        self.register_template_with_language_at(key, source, Salience::Medium, language)
+    }
+
+    /// Salience-aware companion to [`Engine::register_template_with_language`].
+    pub fn register_template_with_language_at(
+        &mut self,
+        key: &str,
+        source: &str,
+        salience: Salience,
+        language: Option<&str>,
+    ) -> Result<(), ProsaicError> {
         let template = Template::parse(source)?;
-        self.templates
-            .entry(key.to_string())
-            .or_default()
-            .push((salience, template));
-        // Track that this key exists so new Sessions can be pre-populated
-        // with the correct initial counter value.
+        self.templates.entry(key.to_string()).or_default().push(
+            SalientTemplate::new(salience, template, language.map(|s| s.to_string())),
+        );
         self.rr_initial.entry(key.to_string()).or_insert(0);
         Ok(())
     }
@@ -2175,7 +2239,11 @@ impl Engine {
 
         let context = context.into_context();
         let target_salience = self.context_salience(&context);
-        let alternatives = filter_by_salience(all_alternatives, target_salience);
+        let alternatives = filter_alternatives(
+            all_alternatives,
+            target_salience,
+            self.language_preference.as_deref(),
+        );
 
         // Pre-compute candidate scores for diagnostics when choose-best
         // would apply. Run in a snapshot/restore bubble so main session is
@@ -3415,29 +3483,71 @@ fn prepend_replacing_subject_in_place(
 /// 1. Templates registered at the exact target salience.
 /// 2. Templates registered at Medium salience (the default).
 /// 3. All registered templates (degrades gracefully).
+/// Pick the candidate alternatives for a render: first filter by the
+/// engine's language preference (matching tag → untagged → all), then
+/// by salience (exact tier → medium fallback → all).
 fn filter_by_salience<'a>(
     alternatives: &'a [SalientTemplate],
     target: Salience,
 ) -> Vec<&'a Template> {
-    let exact: Vec<&'a Template> = alternatives
+    filter_alternatives(alternatives, target, None)
+}
+
+/// Two-stage filter: language preference first, then salience.
+fn filter_alternatives<'a>(
+    alternatives: &'a [SalientTemplate],
+    target: Salience,
+    language_preference: Option<&str>,
+) -> Vec<&'a Template> {
+    let lang_filtered: Vec<&'a SalientTemplate> = if let Some(pref) = language_preference {
+        let matching: Vec<&'a SalientTemplate> = alternatives
+            .iter()
+            .filter(|s| s.language.as_deref() == Some(pref))
+            .collect();
+        if !matching.is_empty() {
+            matching
+        } else {
+            let untagged: Vec<&'a SalientTemplate> = alternatives
+                .iter()
+                .filter(|s| s.language.is_none())
+                .collect();
+            if !untagged.is_empty() {
+                untagged
+            } else {
+                alternatives.iter().collect()
+            }
+        }
+    } else {
+        let untagged: Vec<&'a SalientTemplate> = alternatives
+            .iter()
+            .filter(|s| s.language.is_none())
+            .collect();
+        if !untagged.is_empty() {
+            untagged
+        } else {
+            alternatives.iter().collect()
+        }
+    };
+
+    let exact: Vec<&'a Template> = lang_filtered
         .iter()
-        .filter(|(s, _)| *s == target)
-        .map(|(_, t)| t)
+        .filter(|s| s.salience == target)
+        .map(|s| &s.template)
         .collect();
     if !exact.is_empty() {
         return exact;
     }
 
-    let medium: Vec<&'a Template> = alternatives
+    let medium: Vec<&'a Template> = lang_filtered
         .iter()
-        .filter(|(s, _)| *s == Salience::Medium)
-        .map(|(_, t)| t)
+        .filter(|s| s.salience == Salience::Medium)
+        .map(|s| &s.template)
         .collect();
     if !medium.is_empty() {
         return medium;
     }
 
-    alternatives.iter().map(|(_, t)| t).collect()
+    lang_filtered.iter().map(|s| &s.template).collect()
 }
 
 /// Determine if a value is "truthy" for conditional rendering.
