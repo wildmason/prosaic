@@ -1811,6 +1811,49 @@ impl Engine {
         self.register_template_with_language_at(key, source, Salience::Medium, language)
     }
 
+    /// Load a project from its bundled JSON manifest (produced by
+    /// `prosaic build --target=json`). Registers all partials and
+    /// template variants, applies engine settings, and sets the
+    /// language preference.
+    ///
+    /// Available with the `serde` feature.
+    #[cfg(feature = "serde")]
+    pub fn load_manifest(&mut self, json: &str) -> Result<(), ProsaicError> {
+        let bundle: manifest_loader::ManifestBundle =
+            serde_json::from_str(json).map_err(|e| ProsaicError::TemplateParseError {
+                template: "(manifest)".to_string(),
+                position: 0,
+                reason: format!("manifest JSON parse error: {e}"),
+            })?;
+        if bundle.schema_version != 1 {
+            return Err(ProsaicError::TemplateParseError {
+                template: "(manifest)".to_string(),
+                position: 0,
+                reason: format!("unsupported manifest schema version {}", bundle.schema_version),
+            });
+        }
+        self.language_preference = Some(bundle.language);
+        for partial in bundle.partials {
+            self.register_partial(&partial.name, &partial.body)?;
+        }
+        for template in bundle.templates {
+            for variant in template.variants {
+                let salience = match variant.salience.as_str() {
+                    "low" => Salience::Low,
+                    "high" => Salience::High,
+                    _ => Salience::Medium,
+                };
+                self.register_template_with_language_at(
+                    &template.key,
+                    &variant.body,
+                    salience,
+                    variant.language.as_deref(),
+                )?;
+            }
+        }
+        Ok(())
+    }
+
     /// Salience-aware companion to [`Engine::register_template_with_language`].
     pub fn register_template_with_language_at(
         &mut self,
@@ -6790,4 +6833,67 @@ mod engine_thread_safety {
         fn assert_send_sync<T: Send + Sync>() {}
         assert_send_sync::<Engine>();
     };
+}
+
+
+#[cfg(feature = "serde")]
+mod manifest_loader {
+    use serde::Deserialize;
+
+    #[derive(Deserialize)]
+    pub struct ManifestBundle {
+        pub schema_version: u32,
+        #[allow(dead_code)]
+        pub name: String,
+        #[allow(dead_code)]
+        pub version: String,
+        pub language: String,
+        #[allow(dead_code)]
+        #[serde(default)]
+        pub engine: ManifestEngineSettings,
+        pub templates: Vec<ManifestTemplate>,
+        pub partials: Vec<ManifestPartial>,
+    }
+
+    #[derive(Deserialize, Default)]
+    pub struct ManifestEngineSettings {
+        #[serde(default)]
+        pub strictness: String,
+        #[serde(default)]
+        pub variation: String,
+        #[serde(default)]
+        pub smart_quotes: bool,
+        #[serde(default)]
+        pub max_sentence_length: usize,
+        #[serde(default)]
+        pub faithfulness_min: f64,
+    }
+
+    #[derive(Deserialize)]
+    pub struct ManifestTemplate {
+        pub key: String,
+        #[serde(default)]
+        #[allow(dead_code)]
+        pub description: String,
+        pub variants: Vec<ManifestVariant>,
+    }
+
+    #[derive(Deserialize)]
+    pub struct ManifestVariant {
+        #[serde(default = "default_salience")]
+        pub salience: String,
+        #[serde(default)]
+        pub language: Option<String>,
+        pub body: String,
+    }
+
+    fn default_salience() -> String {
+        "medium".to_string()
+    }
+
+    #[derive(Deserialize)]
+    pub struct ManifestPartial {
+        pub name: String,
+        pub body: String,
+    }
 }

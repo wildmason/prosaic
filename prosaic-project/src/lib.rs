@@ -16,6 +16,7 @@ mod scaffold;
 mod scenario;
 mod template;
 
+pub use bundle::{BuildOutput, BuildTarget, build_bundle};
 pub use error::ProjectError;
 pub use fixture::parse_fixture;
 pub use manifest::{EngineSettings, Manifest, SalienceThresholdsConfig, VocabDependency};

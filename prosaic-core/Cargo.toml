@@ -11,6 +11,7 @@ hashbrown = { version = "0.15", default-features = false, features = ["default-h
 thiserror = { version = "2", default-features = false }
 itoa = { version = "1", default-features = false }
 serde = { version = "1", default-features = false, features = ["derive", "alloc"], optional = true }
+serde_json = { version = "1", default-features = false, features = ["alloc"], optional = true }
 rayon = { version = "1", optional = true }
 
 [features]
@@ -25,7 +26,7 @@ std = ["ahash/std", "thiserror/std", "serde?/std"]
 # Optional serde Serialize/Deserialize on Context, Value, EntityDescriptor,
 # RenderExplanation, VariantScore, and all configuration enums — enables
 # sending engine artefacts across JSON/MessagePack/etc. boundaries.
-serde = ["dep:serde", "ahash/serde", "hashbrown/serde"]
+serde = ["dep:serde", "dep:serde_json", "ahash/serde", "hashbrown/serde"]
 
 # Relative-time pipe (`{ts|relative}`) and `engine.reference_time()`.
 # When disabled, the `relative` pipe is not registered and attempting
