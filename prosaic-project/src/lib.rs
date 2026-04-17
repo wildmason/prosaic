@@ -16,4 +16,4 @@ mod scaffold;
 mod scenario;
 mod template;
 
-// pub use error::ProjectError; — uncommented in Task 1
+pub use error::ProjectError;
