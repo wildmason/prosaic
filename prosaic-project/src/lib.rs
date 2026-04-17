@@ -21,5 +21,6 @@ pub use fixture::parse_fixture;
 pub use manifest::{EngineSettings, Manifest, SalienceThresholdsConfig, VocabDependency};
 pub use partial::PartialFile;
 pub use project::{Project, ValidationIssue, ValidationLevel};
+pub use runner::{ScenarioOutcome, ScenarioRunner, ScenarioVerdict};
 pub use scenario::{Expected, ExpectedDiscourse, Scenario, ScenarioEngineOverride, ScenarioEvent};
 pub use template::{TemplateFile, Variant};

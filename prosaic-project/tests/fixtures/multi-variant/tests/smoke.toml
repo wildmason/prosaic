@@ -5,4 +5,4 @@ template = "code.modified"
 context = { name = "UserService", consumer_count = 6 }
 
 [expected]
-output = "UserService was modified, affecting 6"
+output = "UserService was modified, affecting 6."

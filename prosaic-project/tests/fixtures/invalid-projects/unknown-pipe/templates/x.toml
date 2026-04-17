@@ -1,0 +1,4 @@
+key = "x"
+[[variants]]
+salience = "medium"
+body = "{name|nonexistent_pipe}"

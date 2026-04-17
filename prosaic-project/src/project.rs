@@ -109,6 +109,158 @@ where
 use prosaic_core::{Engine, Salience, SalienceThresholds, Strictness, Variation};
 use prosaic_grammar_en::English;
 
+const KNOWN_PIPES: &[&str] = &[
+    "plural",
+    "pluralize",
+    "article",
+    "join",
+    "ordinal",
+    "words",
+    "truncate",
+    "capitalize",
+    "refer",
+    "verb",
+    "syn",
+    "relative",
+    "since_last",
+    "quantify",
+    "proportion",
+    "hedge",
+    "negated",
+    "choose",
+    "demonstrative",
+];
+
+impl Project {
+    /// Walk every template; report unknown pipes and unknown partial
+    /// references as validation issues. Does not error.
+    pub fn validate(&self) -> Vec<ValidationIssue> {
+        let mut issues = Vec::new();
+        let known_partials: std::collections::HashSet<_> =
+            self.partials.keys().cloned().collect();
+
+        for (key, template) in &self.templates {
+            for (vi, variant) in template.variants.iter().enumerate() {
+                let parsed = match prosaic_core::Template::parse(&variant.body) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        issues.push(ValidationIssue {
+                            level: ValidationLevel::Error,
+                            location: format!("templates/{key}.toml#variant[{vi}]"),
+                            message: format!("template parse error: {e}"),
+                        });
+                        continue;
+                    }
+                };
+                for pipe_name in parsed.pipe_names() {
+                    if !KNOWN_PIPES.contains(&pipe_name.as_str()) {
+                        issues.push(ValidationIssue {
+                            level: ValidationLevel::Error,
+                            location: format!("templates/{key}.toml#variant[{vi}]"),
+                            message: format!("unknown pipe `{pipe_name}`"),
+                        });
+                    }
+                }
+                for partial_name in parsed.partial_names() {
+                    if !known_partials.contains(&partial_name) {
+                        issues.push(ValidationIssue {
+                            level: ValidationLevel::Error,
+                            location: format!("templates/{key}.toml#variant[{vi}]"),
+                            message: format!("unknown partial `{partial_name}`"),
+                        });
+                    }
+                }
+            }
+        }
+
+        issues
+    }
+
+    /// Write the named template back to disk as TOML.
+    pub fn save_template(&self, key: &str) -> Result<(), ProjectError> {
+        let template = self
+            .templates
+            .get(key)
+            .ok_or_else(|| ProjectError::TemplateValidation {
+                key: key.to_string(),
+                reason: "template not present in project".to_string(),
+            })?;
+        let dir = self.root.join("templates");
+        if !dir.exists() {
+            fs::create_dir_all(&dir).map_err(|e| ProjectError::Io {
+                path: dir.display().to_string(),
+                cause: e.to_string(),
+            })?;
+        }
+        let serialized =
+            toml::to_string_pretty(template).map_err(|e| ProjectError::TomlParse {
+                file: format!("{key}.toml"),
+                cause: e.to_string(),
+            })?;
+        let path = dir.join(format!("{key}.toml"));
+        fs::write(&path, serialized).map_err(|e| ProjectError::Io {
+            path: path.display().to_string(),
+            cause: e.to_string(),
+        })
+    }
+
+    /// Write the named partial back to disk as TOML.
+    pub fn save_partial(&self, name: &str) -> Result<(), ProjectError> {
+        let partial = self
+            .partials
+            .get(name)
+            .ok_or_else(|| ProjectError::PartialValidation {
+                name: name.to_string(),
+                reason: "partial not present in project".to_string(),
+            })?;
+        let dir = self.root.join("partials");
+        if !dir.exists() {
+            fs::create_dir_all(&dir).map_err(|e| ProjectError::Io {
+                path: dir.display().to_string(),
+                cause: e.to_string(),
+            })?;
+        }
+        let serialized =
+            toml::to_string_pretty(partial).map_err(|e| ProjectError::TomlParse {
+                file: format!("{name}.toml"),
+                cause: e.to_string(),
+            })?;
+        let path = dir.join(format!("{name}.toml"));
+        fs::write(&path, serialized).map_err(|e| ProjectError::Io {
+            path: path.display().to_string(),
+            cause: e.to_string(),
+        })
+    }
+
+    /// Write the named scenario back to disk as TOML.
+    pub fn save_scenario(&self, name: &str) -> Result<(), ProjectError> {
+        let scenario = self
+            .scenarios
+            .get(name)
+            .ok_or_else(|| ProjectError::ScenarioValidation {
+                name: name.to_string(),
+                reason: "scenario not present in project".to_string(),
+            })?;
+        let dir = self.root.join("tests");
+        if !dir.exists() {
+            fs::create_dir_all(&dir).map_err(|e| ProjectError::Io {
+                path: dir.display().to_string(),
+                cause: e.to_string(),
+            })?;
+        }
+        let serialized =
+            toml::to_string_pretty(scenario).map_err(|e| ProjectError::TomlParse {
+                file: format!("{name}.toml"),
+                cause: e.to_string(),
+            })?;
+        let path = dir.join(format!("{name}.toml"));
+        fs::write(&path, serialized).map_err(|e| ProjectError::Io {
+            path: path.display().to_string(),
+            cause: e.to_string(),
+        })
+    }
+}
+
 impl Project {
     /// Materialize a configured Engine from this project.
     /// v1: English only; multi-grammar selection by manifest is plumbed
