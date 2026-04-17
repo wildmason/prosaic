@@ -106,6 +106,93 @@ where
     Ok(out)
 }
 
+use prosaic_core::{Engine, Salience, SalienceThresholds, Strictness, Variation};
+use prosaic_grammar_en::English;
+
+impl Project {
+    /// Materialize a configured Engine from this project.
+    /// v1: English only; multi-grammar selection by manifest is plumbed
+    /// at the variant level (per-variant `language` field) but the
+    /// engine itself is single-grammar in v1.
+    pub fn into_engine(&self) -> Result<Engine, ProjectError> {
+        let mut engine = Engine::new(English::new());
+
+        let s = &self.manifest.engine;
+        engine = match s.strictness.as_str() {
+            "strict" => engine.strictness(Strictness::Strict),
+            "lenient" => engine.strictness(Strictness::Lenient),
+            "silent" => engine.strictness(Strictness::Silent),
+            other => {
+                return Err(ProjectError::TemplateValidation {
+                    key: "(manifest)".to_string(),
+                    reason: format!("unknown strictness `{other}`"),
+                });
+            }
+        };
+        engine = match s.variation.as_str() {
+            "fixed" => engine.variation(Variation::Fixed),
+            "round_robin" => engine.variation(Variation::RoundRobin),
+            "random" => engine.variation(Variation::Random),
+            other => {
+                return Err(ProjectError::TemplateValidation {
+                    key: "(manifest)".to_string(),
+                    reason: format!("unknown variation `{other}`"),
+                });
+            }
+        };
+        if s.smart_quotes {
+            engine = engine.smart_quotes(true);
+        }
+        if s.max_sentence_length > 0 {
+            engine = engine.max_sentence_length(s.max_sentence_length);
+        }
+        if s.faithfulness_min > 0.0 {
+            engine = engine.with_faithfulness_gate(s.faithfulness_min as f32);
+        }
+        if let Some(thr) = &s.salience_thresholds {
+            engine = engine.salience_thresholds(SalienceThresholds {
+                low_max: thr.low_max,
+                high_min: thr.high_min,
+            });
+        }
+        engine = engine.language_preference(&self.manifest.language);
+
+        for (name, partial) in &self.partials {
+            engine
+                .register_partial(name, &partial.body)
+                .map_err(|e| ProjectError::PartialValidation {
+                    name: name.clone(),
+                    reason: e.to_string(),
+                })?;
+        }
+
+        for (key, template) in &self.templates {
+            for variant in &template.variants {
+                let salience = match variant.salience.as_str() {
+                    "low" => Salience::Low,
+                    "medium" => Salience::Medium,
+                    "high" => Salience::High,
+                    other => {
+                        return Err(ProjectError::TemplateValidation {
+                            key: key.clone(),
+                            reason: format!("unknown salience `{other}`"),
+                        });
+                    }
+                };
+                let language = variant.language.as_deref();
+                engine
+                    .register_template_with_language_at(key, &variant.body, salience, language)
+                    .map_err(|e| ProjectError::TemplateValidation {
+                        key: key.clone(),
+                        reason: e.to_string(),
+                    })?;
+            }
+        }
+
+        Ok(engine)
+    }
+}
+
 fn load_fixtures_dir(dir: &Path) -> Result<HashMap<String, Context>, ProjectError> {
     let mut out = HashMap::new();
     if !dir.exists() {
