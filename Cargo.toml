@@ -6,6 +6,7 @@ members = [
     "prosaic-grammar-en",
     "prosaic-grammar-es",
     "prosaic-derive",
+    "prosaic-project",
     "prosaic-vocab-code",
     "prosaic-vocab-git",
     "prosaic-vocab-pr",
