@@ -62,6 +62,7 @@ let sentence = engine.render(&mut session, "entity.renamed", &ctx)?;
 | `prosaic-vocab-git` | Git/VCS activity templates (commits, PRs, issues, reviews, releases). `en` + `es` siblings. |
 | `prosaic-vocab-release` | Release and deployment event templates. `en` + `es` siblings. |
 | `prosaic-vocab-pr` | Pull-request lifecycle templates. `en` + `es` siblings. |
+| `prosaic-project` | Folder-of-files project format (`prosaic.toml` + `templates/` + `partials/` + `fixtures/` + `tests/`); load, validate, materialize an `Engine`, run scenarios, bundle to JSON or generated Rust. Powers `prosaic-cli new/build/test` and Prosaic Studio. |
 | `prosaic-tracing` | `tracing_subscriber::Layer` that converts structured tracing events into prose narrative. |
 | `prosaic-wasm` | WebAssembly bindings via `wasm-bindgen` — exposes `ProsaicEngine` and `ProsaicSession` to JS/TS. |
 | `prosaic-cli` | `prosaic` binary: reads JSON-lines events on stdin, writes rendered prose on stdout. `--preset=changelog\|release-notes\|digest` bundles. |
@@ -872,6 +873,36 @@ The class Foo was renamed to Bar, which impacts 3 direct consumers.
 ```
 
 Flags: `--vocab code|git|both|none`, `--strategy sequential|by-entity|by-action`, `--smart-quotes`, `--max-length <N>`, `--explain` (emit JSON `RenderExplanation` per event), `--strict|--lenient|--silent`.
+
+### Project subcommands
+
+For folder-based projects (`prosaic.toml` + `templates/` + `partials/` + `fixtures/` + `tests/`):
+
+```bash
+# Scaffold a new project (starters: blank, changelog, vocab-pack)
+prosaic new my-changelog --starter=changelog
+
+# Build a portable bundle (target: json | rust | both)
+prosaic build my-changelog --target=both --out=./dist
+
+# Run all scenarios in tests/, with TAP-style PASS/FAIL output
+prosaic test my-changelog
+```
+
+Bundles produced by `prosaic build --target=json` can be loaded at runtime by any host language via `Engine::load_manifest(json)` (Rust) or `engine.loadManifest(json)` (JavaScript via `prosaic-wasm`).
+
+### Multi-language template variants
+
+Templates can carry a per-variant `language` tag (`en`, `es`, `de`, etc.). The engine's `language_preference` setting biases variant selection:
+
+```rust
+let mut engine = Engine::new(English::new()).language_preference("es");
+engine.register_template_with_language("greet", "Hello {name}", Some("en"))?;
+engine.register_template_with_language("greet", "Hola {name}", Some("es"))?;
+// Renders "Hola world" — Spanish variant matches preference.
+```
+
+Falls back gracefully: if no language-matching variant exists, untagged variants are picked; if neither exists, any registered variant.
 
 ## Design Philosophy
 
