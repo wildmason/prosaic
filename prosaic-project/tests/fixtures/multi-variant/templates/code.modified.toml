@@ -1,0 +1,14 @@
+key = "code.modified"
+description = "test fixture"
+
+[[variants]]
+salience = "low"
+body = "{name} was modified"
+
+[[variants]]
+salience = "medium"
+body = "{name} was modified, affecting {consumer_count}"
+
+[[variants]]
+salience = "high"
+body = "{name} has been substantially modified"
