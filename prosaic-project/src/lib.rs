@@ -17,3 +17,4 @@ mod scenario;
 mod template;
 
 pub use error::ProjectError;
+pub use manifest::{EngineSettings, Manifest, SalienceThresholdsConfig, VocabDependency};
