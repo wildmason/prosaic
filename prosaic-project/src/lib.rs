@@ -23,5 +23,6 @@ pub use manifest::{EngineSettings, Manifest, SalienceThresholdsConfig, VocabDepe
 pub use partial::PartialFile;
 pub use project::{Project, ValidationIssue, ValidationLevel};
 pub use runner::{ScenarioOutcome, ScenarioRunner, ScenarioVerdict};
+pub use scaffold::{Starter, scaffold_project};
 pub use scenario::{Expected, ExpectedDiscourse, Scenario, ScenarioEngineOverride, ScenarioEvent};
 pub use template::{TemplateFile, Variant};

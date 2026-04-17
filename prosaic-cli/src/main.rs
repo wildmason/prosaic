@@ -89,6 +89,25 @@ impl Default for Config {
 }
 
 fn main() {
+    let args: Vec<String> = std::env::args().collect();
+    if args.len() >= 2 {
+        match args[1].as_str() {
+            "new" => {
+                run_new(&args[2..]);
+                return;
+            }
+            "build" => {
+                run_build(&args[2..]);
+                return;
+            }
+            "test" => {
+                run_test(&args[2..]);
+                return;
+            }
+            _ => {}
+        }
+    }
+
     let cfg = match parse_args() {
         Ok(c) => c,
         Err(e) => {
@@ -99,6 +118,175 @@ fn main() {
 
     if let Err(e) = run(cfg) {
         eprintln!("prosaic: {e}");
+        std::process::exit(1);
+    }
+}
+
+fn run_new(args: &[String]) {
+    let mut name: Option<String> = None;
+    let mut starter = "blank".to_string();
+    let mut at: Option<String> = None;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--starter" if i + 1 < args.len() => {
+                starter = args[i + 1].clone();
+                i += 2;
+            }
+            s if s.starts_with("--starter=") => {
+                starter = s.trim_start_matches("--starter=").to_string();
+                i += 1;
+            }
+            "--at" if i + 1 < args.len() => {
+                at = Some(args[i + 1].clone());
+                i += 2;
+            }
+            other if name.is_none() => {
+                name = Some(other.to_string());
+                i += 1;
+            }
+            other => {
+                eprintln!("unknown argument: {other}");
+                std::process::exit(2);
+            }
+        }
+    }
+    let name = match name {
+        Some(n) => n,
+        None => {
+            eprintln!(
+                "usage: prosaic new <name> [--starter=blank|changelog|vocab-pack] [--at <dir>]"
+            );
+            std::process::exit(2);
+        }
+    };
+    let starter_kind = match prosaic_project::Starter::from_str(&starter) {
+        Some(s) => s,
+        None => {
+            eprintln!("unknown starter `{starter}`; expected: blank | changelog | vocab-pack");
+            std::process::exit(2);
+        }
+    };
+    let dir = std::path::PathBuf::from(at.unwrap_or_else(|| name.clone()));
+    match prosaic_project::scaffold_project(&name, &dir, starter_kind) {
+        Ok(()) => println!("created project `{name}` at {}", dir.display()),
+        Err(e) => {
+            eprintln!("error: {e}");
+            std::process::exit(1);
+        }
+    }
+}
+
+fn run_build(args: &[String]) {
+    let mut target = "json".to_string();
+    let mut out_dir: Option<String> = None;
+    let mut project_dir = ".".to_string();
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            s if s.starts_with("--target=") => {
+                target = s.trim_start_matches("--target=").to_string();
+                i += 1;
+            }
+            "--target" if i + 1 < args.len() => {
+                target = args[i + 1].clone();
+                i += 2;
+            }
+            s if s.starts_with("--out=") => {
+                out_dir = Some(s.trim_start_matches("--out=").to_string());
+                i += 1;
+            }
+            "--out" if i + 1 < args.len() => {
+                out_dir = Some(args[i + 1].clone());
+                i += 2;
+            }
+            other => {
+                project_dir = other.to_string();
+                i += 1;
+            }
+        }
+    }
+    let target_kind = match target.as_str() {
+        "json" => prosaic_project::BuildTarget::JsonManifest,
+        "rust" => prosaic_project::BuildTarget::RustModule,
+        "both" => prosaic_project::BuildTarget::Both,
+        other => {
+            eprintln!("unknown target `{other}`; expected: json | rust | both");
+            std::process::exit(2);
+        }
+    };
+    let project = match prosaic_project::Project::load_from_dir(&project_dir) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("error loading project: {e}");
+            std::process::exit(1);
+        }
+    };
+    let bundle = match prosaic_project::build_bundle(&project, target_kind) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("error building bundle: {e}");
+            std::process::exit(1);
+        }
+    };
+    let out_root =
+        std::path::PathBuf::from(out_dir.unwrap_or_else(|| ".prosaic/build".to_string()));
+    std::fs::create_dir_all(&out_root).ok();
+    if let Some(json) = bundle.json {
+        let path = out_root.join("prosaic.bundle.json");
+        std::fs::write(&path, json).expect("write json bundle");
+        println!("wrote {}", path.display());
+    }
+    if let Some(rust) = bundle.rust {
+        let path = out_root.join("prosaic_bundle.rs");
+        std::fs::write(&path, rust).expect("write rust bundle");
+        println!("wrote {}", path.display());
+    }
+}
+
+fn run_test(args: &[String]) {
+    let project_dir = args.first().cloned().unwrap_or_else(|| ".".to_string());
+    let project = match prosaic_project::Project::load_from_dir(&project_dir) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("error loading project: {e}");
+            std::process::exit(1);
+        }
+    };
+    let engine = match project.into_engine() {
+        Ok(e) => e,
+        Err(e) => {
+            eprintln!("error materializing engine: {e}");
+            std::process::exit(1);
+        }
+    };
+    let runner = prosaic_project::ScenarioRunner::new(&engine);
+    let total = project.scenarios.len();
+    let mut passed = 0usize;
+    let mut failed = 0usize;
+    for (name, scenario) in &project.scenarios {
+        match runner.run(scenario) {
+            Ok(outcome) => {
+                if outcome.verdict == prosaic_project::ScenarioVerdict::Pass {
+                    println!("PASS  {name}");
+                    passed += 1;
+                } else {
+                    println!("FAIL  {name}");
+                    for f in &outcome.failures {
+                        println!("      {f}");
+                    }
+                    failed += 1;
+                }
+            }
+            Err(e) => {
+                println!("ERROR {name}: {e}");
+                failed += 1;
+            }
+        }
+    }
+    println!();
+    println!("{passed}/{total} passed");
+    if failed > 0 {
         std::process::exit(1);
     }
 }

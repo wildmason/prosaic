@@ -1,1 +1,189 @@
-// stub — populated by Task 15
+//! Starter project templates for `prosaic new`.
+
+use std::fs;
+use std::path::Path;
+
+use crate::error::ProjectError;
+
+#[derive(Debug, Clone, Copy)]
+pub enum Starter {
+    Blank,
+    Changelog,
+    VocabPack,
+}
+
+impl Starter {
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s {
+            "blank" => Some(Self::Blank),
+            "changelog" => Some(Self::Changelog),
+            "vocab-pack" => Some(Self::VocabPack),
+            _ => None,
+        }
+    }
+}
+
+pub fn scaffold_project(name: &str, dir: &Path, starter: Starter) -> Result<(), ProjectError> {
+    if dir.exists() && fs::read_dir(dir).map(|d| d.count() > 0).unwrap_or(false) {
+        return Err(ProjectError::Io {
+            path: dir.display().to_string(),
+            cause: "directory exists and is not empty".to_string(),
+        });
+    }
+    fs::create_dir_all(dir).map_err(|e| ProjectError::Io {
+        path: dir.display().to_string(),
+        cause: e.to_string(),
+    })?;
+
+    let manifest = format!(
+        r#"name = "{name}"
+version = "0.1.0"
+language = "en"
+
+[engine]
+strictness = "strict"
+variation = "fixed"
+"#
+    );
+    write(&dir.join("prosaic.toml"), &manifest)?;
+
+    match starter {
+        Starter::Blank => {
+            fs::create_dir_all(dir.join("templates")).ok();
+            fs::create_dir_all(dir.join("partials")).ok();
+            fs::create_dir_all(dir.join("fixtures")).ok();
+            fs::create_dir_all(dir.join("tests")).ok();
+        }
+        Starter::Changelog => {
+            fs::create_dir_all(dir.join("templates")).ok();
+            fs::create_dir_all(dir.join("fixtures")).ok();
+            fs::create_dir_all(dir.join("tests")).ok();
+            write(
+                &dir.join("templates/code.added.toml"),
+                r#"key = "code.added"
+
+[[variants]]
+salience = "medium"
+body = "{name|refer} was added"
+"#,
+            )?;
+            write(
+                &dir.join("templates/code.modified.toml"),
+                r#"key = "code.modified"
+
+[[variants]]
+salience = "low"
+body = "{name|refer} was modified"
+
+[[variants]]
+salience = "medium"
+body = "{name|refer} was modified, affecting {consumer_count} {consumer_count|pluralize:consumer}"
+"#,
+            )?;
+            write(
+                &dir.join("fixtures/userservice-modified.json"),
+                r#"{"name": "UserService", "entity_type": "class", "consumer_count": 6}"#,
+            )?;
+            write(
+                &dir.join("tests/sample-changeset.toml"),
+                r#"name = "sample-changeset"
+
+[[events]]
+template = "code.added"
+context = { name = "AuthGuard", entity_type = "class" }
+
+[[events]]
+template = "code.modified"
+context = { name = "UserService", entity_type = "class", consumer_count = 6 }
+"#,
+            )?;
+        }
+        Starter::VocabPack => {
+            fs::create_dir_all(dir.join("templates")).ok();
+            fs::create_dir_all(dir.join("partials")).ok();
+            fs::create_dir_all(dir.join("tests")).ok();
+            write(
+                &dir.join("partials/impact_tail.toml"),
+                r#"name = "impact_tail"
+description = "Trailing 'affecting N consumers' clause."
+body = "{?consumer_count}, affecting {consumer_count} {consumer_count|pluralize:consumer}{/?}"
+"#,
+            )?;
+            write(
+                &dir.join("templates/code.modified.toml"),
+                r#"key = "code.modified"
+slots_required = ["name"]
+slots_optional = ["consumer_count"]
+
+[[variants]]
+salience = "low"
+body = "{name|refer} was modified"
+
+[[variants]]
+salience = "medium"
+body = "{name|refer} was modified{>impact_tail}"
+
+[[variants]]
+salience = "high"
+body = "{name|refer} has been substantially modified{>impact_tail}. Thorough review is recommended."
+"#,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn write(path: &Path, content: &str) -> Result<(), ProjectError> {
+    fs::write(path, content).map_err(|e| ProjectError::Io {
+        path: path.display().to_string(),
+        cause: e.to_string(),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn scaffold_blank_creates_layout() {
+        let tmp = tempdir().unwrap();
+        let dir = tmp.path().join("blank-proj");
+        scaffold_project("blank-proj", &dir, Starter::Blank).unwrap();
+        assert!(dir.join("prosaic.toml").exists());
+        assert!(dir.join("templates").is_dir());
+        assert!(dir.join("partials").is_dir());
+        assert!(dir.join("fixtures").is_dir());
+        assert!(dir.join("tests").is_dir());
+    }
+
+    #[test]
+    fn scaffold_changelog_creates_starter_templates() {
+        let tmp = tempdir().unwrap();
+        let dir = tmp.path().join("cl");
+        scaffold_project("cl", &dir, Starter::Changelog).unwrap();
+        assert!(dir.join("templates/code.added.toml").exists());
+        assert!(dir.join("templates/code.modified.toml").exists());
+        assert!(dir.join("fixtures/userservice-modified.json").exists());
+        assert!(dir.join("tests/sample-changeset.toml").exists());
+    }
+
+    #[test]
+    fn scaffold_vocab_pack_creates_partial() {
+        let tmp = tempdir().unwrap();
+        let dir = tmp.path().join("vp");
+        scaffold_project("vp", &dir, Starter::VocabPack).unwrap();
+        assert!(dir.join("partials/impact_tail.toml").exists());
+        assert!(dir.join("templates/code.modified.toml").exists());
+    }
+
+    #[test]
+    fn scaffold_into_nonempty_dir_errors() {
+        let tmp = tempdir().unwrap();
+        let dir = tmp.path().join("occupied");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("README.md"), "x").unwrap();
+        let res = scaffold_project("occ", &dir, Starter::Blank);
+        assert!(res.is_err());
+    }
+}
