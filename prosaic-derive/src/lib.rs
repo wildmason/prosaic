@@ -242,6 +242,7 @@ const VALID_PIPES: &[&str] = &[
     "relative",
     "since_last",
     "quantify",
+    "proportion",
     "hedge",
     "negated",
     "choose",

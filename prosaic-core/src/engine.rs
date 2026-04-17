@@ -26,6 +26,7 @@ use crate::language::{Conjunction, Language, Person, PluralCategory, VerbForm};
 use crate::length::split_long_in_place;
 #[cfg(feature = "polish")]
 use crate::punctuation::smart_quotes_in_place;
+use crate::agreement::AgreementFeatures;
 use crate::quantify::{QuantifyMode, parse_mode as parse_quantify_mode, quantify as quantify_fn};
 #[cfg(feature = "reg")]
 use crate::reg::{
@@ -677,6 +678,7 @@ impl<'e, 's> RenderCtx<'e, 's> {
             #[cfg(feature = "time")]
             "since_last" => self.pipe_since_last(value),
             "quantify" => self.pipe_quantify(pipe, value),
+            "proportion" => self.pipe_proportion(pipe, value, context),
             "demonstrative" => self.pipe_demonstrative(value),
             "hedge" => self.pipe_hedge(pipe, value),
             "negated" => self.pipe_negated(value),
@@ -1129,6 +1131,69 @@ impl<'e, 's> RenderCtx<'e, 's> {
         };
 
         Ok(Value::String(hedge_fn(score, mode).to_string()))
+    }
+
+    fn pipe_proportion(
+        &self,
+        pipe: &Pipe,
+        value: &Value,
+        context: &Context,
+    ) -> Result<Value, ProsaicError> {
+        let arg_str = match &pipe.arg {
+            Some(PipeArg::String(s)) => s.as_str(),
+            Some(PipeArg::Number(_)) | None => {
+                return Err(ProsaicError::InvalidPipe {
+                    pipe: "proportion".to_string(),
+                    reason: "requires an argument of the form \
+                             `proportion:total_key[:singular_noun]`"
+                        .to_string(),
+                });
+            }
+        };
+
+        // Split into total_key and optional noun. The noun may itself contain
+        // spaces (e.g. "modified file"), so we only split on the first colon.
+        let (total_key, noun) = match arg_str.split_once(':') {
+            Some((k, n)) => {
+                let n = n.trim();
+                (k.trim(), if n.is_empty() { None } else { Some(n) })
+            }
+            None => (arg_str.trim(), None),
+        };
+
+        if total_key.is_empty() {
+            return Err(ProsaicError::InvalidPipe {
+                pipe: "proportion".to_string(),
+                reason: "missing total context key — use `proportion:total_key[:noun]`"
+                    .to_string(),
+            });
+        }
+
+        let matching = value.as_number().ok_or_else(|| ProsaicError::InvalidPipe {
+            pipe: "proportion".to_string(),
+            reason: "value must be a number".to_string(),
+        })?;
+
+        let total_value = context
+            .get(total_key)
+            .ok_or_else(|| ProsaicError::InvalidPipe {
+                pipe: "proportion".to_string(),
+                reason: format!("total context key `{total_key}` not found"),
+            })?;
+
+        let total = total_value
+            .as_number()
+            .ok_or_else(|| ProsaicError::InvalidPipe {
+                pipe: "proportion".to_string(),
+                reason: format!("total context key `{total_key}` is not a number"),
+            })?;
+
+        let features = AgreementFeatures::default();
+        let phrase =
+            self.engine
+                .language
+                .proportion_phrase(matching, total, noun, &features);
+        Ok(Value::String(phrase))
     }
 
     fn pipe_quantify(&self, pipe: &Pipe, value: &Value) -> Result<Value, ProsaicError> {

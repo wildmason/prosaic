@@ -142,6 +142,16 @@ impl Language for German {
         }
     }
 
+    fn proportion_phrase(
+        &self,
+        matching: i64,
+        total: i64,
+        noun_singular: Option<&str>,
+        features: &AgreementFeatures,
+    ) -> String {
+        german_proportion(matching, total, noun_singular, features)
+    }
+
     fn discourse_marker(&self, relation: RstRelation) -> Option<&'static str> {
         use RstRelation::*;
         Some(match relation {
@@ -247,6 +257,85 @@ fn german_demonstrative(features: &AgreementFeatures) -> String {
         Gender::Fem => "diese".into(),
         Gender::Neut => "dieses".into(),
         _ => "dieser".into(),
+    }
+}
+
+/// Resolve gender for proportion phrasing: explicit features take precedence,
+/// then suffix inference on the noun (single-word; multi-word phrases use
+/// the first token), then a masculine fallback.
+fn resolve_proportion_gender(noun: Option<&str>, features: &AgreementFeatures) -> Gender {
+    match features.gender {
+        Gender::Unknown => noun
+            .and_then(|n| n.split_whitespace().next())
+            .map(gender::infer_gender)
+            .unwrap_or(Gender::Masc),
+        g => g,
+    }
+}
+
+/// German proportion phrasing.
+///
+/// Limitations: attributive-adjective declension is out of scope for v1
+/// (see crate docs). Pass single-word nouns (`"Datei"`, `"Buch"`,
+/// `"Tisch"`) for correct output. Multi-word noun phrases like
+/// `"geänderte Datei"` will pluralize the head noun but leave preceding
+/// adjectives undeclined — readable but not perfectly correct German.
+fn german_proportion(
+    matching: i64,
+    total: i64,
+    noun_singular: Option<&str>,
+    features: &AgreementFeatures,
+) -> String {
+    let n = matching.max(0);
+    let t = total.max(0);
+    let gender = resolve_proportion_gender(noun_singular, features);
+
+    if t == 0 {
+        return match (noun_singular, n, gender) {
+            (Some(noun), 0, Gender::Fem) => format!("keine {noun}"),
+            (Some(noun), 0, _) => format!("kein {noun}"),
+            (None, 0, Gender::Fem) => "keine".to_string(),
+            (None, 0, Gender::Neut) => "keines".to_string(),
+            (None, 0, _) => "keiner".to_string(),
+            // n > 0, t == 0: self-inconsistent; literal fall-through.
+            (Some(noun), _, _) => format!("{n} von 0 {}", pluralize_de(noun)),
+            (None, _, _) => format!("{n} von 0"),
+        };
+    }
+
+    if n == 0 {
+        let none_word = match gender {
+            Gender::Fem => "keine",
+            Gender::Neut => "keines",
+            _ => "keiner",
+        };
+        // Genitive plural article "der" is gender-neutral in plural.
+        return match noun_singular {
+            Some(noun) => format!("{none_word} der {t} {}", pluralize_de(noun)),
+            None => format!("{none_word} der {t}"),
+        };
+    }
+
+    if n >= t {
+        return match (noun_singular, t, gender) {
+            (Some(noun), 1, Gender::Fem) => format!("die einzige {noun}"),
+            (Some(noun), 1, Gender::Neut) => format!("das einzige {noun}"),
+            (Some(noun), 1, _) => format!("der einzige {noun}"),
+            (None, 1, Gender::Fem) => "die einzige".to_string(),
+            (None, 1, Gender::Neut) => "das einzige".to_string(),
+            (None, 1, _) => "der einzige".to_string(),
+            // "beide" doesn't decline by gender in nominative.
+            (Some(noun), 2, _) => format!("beide {}", pluralize_de(noun)),
+            (None, 2, _) => "beide".to_string(),
+            // "alle N" works across genders in nominative.
+            (Some(noun), _, _) => format!("alle {t} {}", pluralize_de(noun)),
+            (None, _, _) => format!("alle {t}"),
+        };
+    }
+
+    match noun_singular {
+        Some(noun) => format!("{n} von {t} {}", pluralize_de(noun)),
+        None => format!("{n} von {t}"),
     }
 }
 
@@ -366,6 +455,201 @@ mod tests {
     }
 
     // ── join_list ─────────────────────────────────────────────────────────────
+
+    // ── proportion_phrase ─────────────────────────────────────────────────────
+
+    fn no_features() -> AgreementFeatures {
+        AgreementFeatures::default()
+    }
+
+    #[test]
+    fn proportion_two_of_two_fem_noun_reads_beide_plural() {
+        let de = German::new();
+        assert_eq!(
+            de.proportion_phrase(2, 2, Some("Datei"), &no_features()),
+            "beide Dateien"
+        );
+    }
+
+    #[test]
+    fn proportion_all_n_with_noun_reads_alle_n_plural() {
+        let de = German::new();
+        assert_eq!(
+            de.proportion_phrase(13, 13, Some("Datei"), &no_features()),
+            "alle 13 Dateien"
+        );
+    }
+
+    #[test]
+    fn proportion_one_of_one_masc_reads_der_einzige() {
+        let de = German::new();
+        assert_eq!(
+            de.proportion_phrase(1, 1, Some("Tisch"), &no_features()),
+            "der einzige Tisch"
+        );
+    }
+
+    #[test]
+    fn proportion_one_of_one_fem_reads_die_einzige() {
+        let de = German::new();
+        assert_eq!(
+            de.proportion_phrase(1, 1, Some("Datei"), &no_features()),
+            "die einzige Datei"
+        );
+    }
+
+    #[test]
+    fn proportion_one_of_one_neut_reads_das_einzige() {
+        let de = German::new();
+        assert_eq!(
+            de.proportion_phrase(1, 1, Some("Buch"), &no_features()),
+            "das einzige Buch"
+        );
+    }
+
+    #[test]
+    fn proportion_zero_of_n_masc_reads_keiner() {
+        let de = German::new();
+        assert_eq!(
+            de.proportion_phrase(0, 5, Some("Tisch"), &no_features()),
+            "keiner der 5 Tische"
+        );
+    }
+
+    #[test]
+    fn proportion_zero_of_n_fem_reads_keine() {
+        let de = German::new();
+        assert_eq!(
+            de.proportion_phrase(0, 5, Some("Datei"), &no_features()),
+            "keine der 5 Dateien"
+        );
+    }
+
+    #[test]
+    fn proportion_zero_of_n_neut_reads_keines() {
+        let de = German::new();
+        assert_eq!(
+            de.proportion_phrase(0, 5, Some("Buch"), &no_features()),
+            "keines der 5 Bücher"
+        );
+    }
+
+    #[test]
+    fn proportion_zero_zero_masc_reads_kein() {
+        let de = German::new();
+        assert_eq!(
+            de.proportion_phrase(0, 0, Some("Tisch"), &no_features()),
+            "kein Tisch"
+        );
+    }
+
+    #[test]
+    fn proportion_zero_zero_fem_reads_keine() {
+        let de = German::new();
+        assert_eq!(
+            de.proportion_phrase(0, 0, Some("Datei"), &no_features()),
+            "keine Datei"
+        );
+    }
+
+    #[test]
+    fn proportion_zero_zero_neut_reads_kein() {
+        let de = German::new();
+        assert_eq!(
+            de.proportion_phrase(0, 0, Some("Buch"), &no_features()),
+            "kein Buch"
+        );
+    }
+
+    #[test]
+    fn proportion_partial_with_noun() {
+        let de = German::new();
+        assert_eq!(
+            de.proportion_phrase(3, 13, Some("Datei"), &no_features()),
+            "3 von 13 Dateien"
+        );
+    }
+
+    #[test]
+    fn proportion_no_noun_two_two_default_masc() {
+        let de = German::new();
+        assert_eq!(de.proportion_phrase(2, 2, None, &no_features()), "beide");
+    }
+
+    #[test]
+    fn proportion_no_noun_all_n() {
+        let de = German::new();
+        assert_eq!(de.proportion_phrase(7, 7, None, &no_features()), "alle 7");
+    }
+
+    #[test]
+    fn proportion_no_noun_partial() {
+        let de = German::new();
+        assert_eq!(de.proportion_phrase(3, 7, None, &no_features()), "3 von 7");
+    }
+
+    #[test]
+    fn proportion_no_noun_one_of_one_default_masc() {
+        let de = German::new();
+        assert_eq!(
+            de.proportion_phrase(1, 1, None, &no_features()),
+            "der einzige"
+        );
+    }
+
+    #[test]
+    fn proportion_no_noun_one_of_one_fem_explicit() {
+        let de = German::new();
+        let f = AgreementFeatures::default().with_gender(Gender::Fem);
+        assert_eq!(de.proportion_phrase(1, 1, None, &f), "die einzige");
+    }
+
+    #[test]
+    fn proportion_no_noun_one_of_one_neut_explicit() {
+        let de = German::new();
+        let f = AgreementFeatures::default().with_gender(Gender::Neut);
+        assert_eq!(de.proportion_phrase(1, 1, None, &f), "das einzige");
+    }
+
+    #[test]
+    fn proportion_no_noun_zero_of_n_masc() {
+        let de = German::new();
+        assert_eq!(
+            de.proportion_phrase(0, 5, None, &no_features()),
+            "keiner der 5"
+        );
+    }
+
+    #[test]
+    fn proportion_no_noun_zero_of_n_fem() {
+        let de = German::new();
+        let f = AgreementFeatures::default().with_gender(Gender::Fem);
+        assert_eq!(de.proportion_phrase(0, 5, None, &f), "keine der 5");
+    }
+
+    #[test]
+    fn proportion_no_noun_zero_zero_default_masc() {
+        let de = German::new();
+        assert_eq!(de.proportion_phrase(0, 0, None, &no_features()), "keiner");
+    }
+
+    #[test]
+    fn proportion_no_noun_zero_zero_neut() {
+        let de = German::new();
+        let f = AgreementFeatures::default().with_gender(Gender::Neut);
+        assert_eq!(de.proportion_phrase(0, 0, None, &f), "keines");
+    }
+
+    #[test]
+    fn proportion_features_gender_overrides_inference() {
+        let de = German::new();
+        // Override fem despite "Tisch" inferring masc.
+        let f = AgreementFeatures::default().with_gender(Gender::Fem);
+        assert_eq!(
+            de.proportion_phrase(0, 0, Some("Tisch"), &f),
+            "keine Tisch"
+        );
+    }
 
     #[test]
     fn join_list_empty() {

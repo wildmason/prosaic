@@ -78,6 +78,7 @@ mod language;
 mod length;
 #[cfg(feature = "polish")]
 mod punctuation;
+mod proportion;
 mod quantify;
 #[cfg(feature = "reg")]
 mod reg;
@@ -116,6 +117,7 @@ pub use hedge::{HedgeMode, hedge};
 pub use length::split_long;
 #[cfg(feature = "polish")]
 pub use punctuation::{em_dash_nested_parentheticals, smart_quotes};
+pub use proportion::english_proportion;
 pub use quantify::{QuantifyMode, quantify};
 #[cfg(feature = "reg")]
 pub use reg::{

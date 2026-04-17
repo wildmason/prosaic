@@ -89,6 +89,7 @@ Templates use `{slot}` for substitution and `{slot|pipe}` for transforms. Pipes 
 | `relative` | `{ts\|relative}` | Unix timestamp → "yesterday" / "3 weeks ago" / "in 2 months" |
 | `since_last` | `{ts\|since_last}` | Inter-event delta → "moments later" / "the next day" / "3 months later". Anchored against the previous event's timestamp; falls back to `relative` on the first event. |
 | `quantify` | `{n\|quantify}` | 0 → "no", 1 → "a single", 47 → "47", 300 → "hundreds of"; `:exact` / `:hedged` flavours available |
+| `proportion` | `{n\|proportion:total[:noun]}` | "X of Y" phrasing that collapses saturated cases — 2/2 → "both", N/N → "all N", 1/1 → "the only", 0/N → "none of the N" (see *Proportional Quantification*) |
 | `hedge` | `{conf\|hedge}` | 0..=100 confidence → "certainly" / "likely" / "probably" / "possibly" / "perhaps"; `:modal` / `:prefix` flavours |
 | `negated` | `{phrase\|negated}` | Emit a negated verb phrase — registered positive antonym if available, else inserts "not" after the aux |
 | `demonstrative` | `{change\|demonstrative}` | "this change" (continuation) / "the change" (fresh discourse) |
@@ -284,6 +285,40 @@ The `{count|quantify}` pipe replaces awkward raw numbers with natural phrasing �
 | `5000` | thousands of | 5000 | thousands of |
 
 Use `{n|quantify:exact}` when you want precise numbers unconditionally, or `{n|quantify:hedged}` when counts come from noisy sources and even small numbers should be hedged.
+
+### Proportional Quantification
+
+Templates that hand-write `{x} of {y} noun` produce awkward output the moment `x` saturates `y`: *"2 of 2 modified files belong to that module"* reads like a robot. The `proportion` pipe owns the entire noun phrase so the surface form collapses to the natural human form whenever the numerator equals the denominator:
+
+```rust
+engine.register_template(
+    "summary",
+    "The bulk of this changeset lives in {module}, \
+     with {matching|proportion:total:modified file} belonging to that module.",
+)?;
+```
+
+The pipe takes a **context-key reference** as its second argument (the denominator) and an optional **singular noun** as its third. The noun is pluralized via the engine's language. With matching=2, total=2, the output reads:
+
+> The bulk of this changeset lives in src, with **both modified files** belonging to that module.
+
+Full collapse table (English; Spanish and German equivalents in their respective grammars):
+
+| n / t | With noun (`modified file`) | No noun |
+|---|---|---|
+| 0 / 0 | `no modified files` | `none` |
+| 0 / N | `none of the N modified files` | `none of the N` |
+| 1 / 1 | `the only modified file` | `the only one` |
+| 2 / 2 | `both modified files` | `both` |
+| N / N (N>2) | `all N modified files` | `all N` |
+| 1 / N (N>1) | `1 of N modified files` | `1 of N` |
+| n / t (n<t) | `n of t modified files` | `n of t` |
+
+**Spanish** (`prosaic-grammar-es`) infers gender from the noun head and produces the appropriate forms — `ambos/ambas`, `todos los N` / `todas las N`, `el único` / `la única`, `ninguno de los N` / `ninguna de las N`. Override gender explicitly via `AgreementFeatures` when noun-suffix inference is wrong.
+
+**German** (`prosaic-grammar-de`) produces `beide`, `alle N`, `der/die/das einzige`, `keiner/keine/keines der N`, `kein/keine` according to the noun's gender (inferred from suffix or set explicitly). Attributive adjective declension stays out of scope for v1 — pass single-word nouns (`Datei`, `Buch`, `Tisch`) for fully-correct output.
+
+The pipe argument is a **context key name**, not a literal number — this is the first Prosaic pipe whose argument resolves through the context at render time. It returns a `ProsaicError::InvalidPipe` if the denominator key is missing or non-numeric.
 
 ### Centering Theory (Cb / Cf / Cp with transition classification)
 

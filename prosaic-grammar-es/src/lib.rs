@@ -147,6 +147,16 @@ impl Language for Spanish {
         }
     }
 
+    fn proportion_phrase(
+        &self,
+        matching: i64,
+        total: i64,
+        noun_singular: Option<&str>,
+        features: &AgreementFeatures,
+    ) -> String {
+        spanish_proportion(matching, total, noun_singular, features)
+    }
+
     fn discourse_marker(&self, relation: RstRelation) -> Option<&'static str> {
         use RstRelation::*;
         Some(match relation {
@@ -255,6 +265,92 @@ fn plural_article(features: &AgreementFeatures) -> &'static str {
         .with_gender(features.gender)
         .with_number(GrammaticalNumber::Plural);
     article_with_features(&plural_features)
+}
+
+/// Pluralize a multi-word Spanish noun phrase by pluralizing each whitespace-
+/// separated token (e.g. "archivo modificado" → "archivos modificados").
+fn pluralize_phrase_es(phrase: &str) -> String {
+    phrase
+        .split_whitespace()
+        .map(pluralize_es)
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Resolve the gender to use for proportion phrasing: explicit features take
+/// precedence, then inference from the head (first) word of the noun phrase,
+/// then a masculine fallback.
+fn resolve_proportion_gender(noun: Option<&str>, features: &AgreementFeatures) -> Gender {
+    match features.gender {
+        Gender::Unknown => noun
+            .and_then(|n| n.split_whitespace().next())
+            .map(gender::infer_gender)
+            .unwrap_or(Gender::Masc),
+        g => g,
+    }
+}
+
+fn spanish_proportion(
+    matching: i64,
+    total: i64,
+    noun_singular: Option<&str>,
+    features: &AgreementFeatures,
+) -> String {
+    let n = matching.max(0);
+    let t = total.max(0);
+    let gender = resolve_proportion_gender(noun_singular, features);
+    let is_fem = matches!(gender, Gender::Fem);
+
+    if t == 0 {
+        return match (noun_singular, n) {
+            (Some(noun), 0) if is_fem => format!("ninguna {noun}"),
+            (Some(noun), 0) => format!("ningún {noun}"),
+            (None, 0) if is_fem => "ninguna".to_string(),
+            (None, 0) => "ninguno".to_string(),
+            // n > 0, t == 0: self-inconsistent; literal fall-through.
+            (Some(noun), _) => format!("{n} de 0 {}", pluralize_phrase_es(noun)),
+            (None, _) => format!("{n} de 0"),
+        };
+    }
+
+    if n == 0 {
+        let (none_word, plural_article) = if is_fem {
+            ("ninguna", "las")
+        } else {
+            ("ninguno", "los")
+        };
+        return match noun_singular {
+            Some(noun) => format!(
+                "{none_word} de {plural_article} {t} {}",
+                pluralize_phrase_es(noun)
+            ),
+            None => format!("{none_word} de {plural_article} {t}"),
+        };
+    }
+
+    if n >= t {
+        return match (noun_singular, t) {
+            (Some(noun), 1) if is_fem => format!("la única {noun}"),
+            (Some(noun), 1) => format!("el único {noun}"),
+            (None, 1) if is_fem => "la única".to_string(),
+            (None, 1) => "el único".to_string(),
+            (Some(noun), 2) if is_fem => format!("ambas {}", pluralize_phrase_es(noun)),
+            (Some(noun), 2) => format!("ambos {}", pluralize_phrase_es(noun)),
+            (None, 2) if is_fem => "ambas".to_string(),
+            (None, 2) => "ambos".to_string(),
+            (Some(noun), _) if is_fem => {
+                format!("todas las {t} {}", pluralize_phrase_es(noun))
+            }
+            (Some(noun), _) => format!("todos los {t} {}", pluralize_phrase_es(noun)),
+            (None, _) if is_fem => format!("todas las {t}"),
+            (None, _) => format!("todos los {t}"),
+        };
+    }
+
+    match noun_singular {
+        Some(noun) => format!("{n} de {t} {}", pluralize_phrase_es(noun)),
+        None => format!("{n} de {t}"),
+    }
 }
 
 fn join_list_es(items: &[&str], conjunction: &str) -> String {
@@ -562,6 +658,155 @@ mod tests {
         assert_eq!(
             es.discourse_marker(RstRelation::Result),
             Some("Como resultado, ")
+        );
+    }
+
+    // ── proportion_phrase ─────────────────────────────────────────────────────
+
+    fn no_features() -> AgreementFeatures {
+        AgreementFeatures::default()
+    }
+
+    #[test]
+    fn proportion_two_of_two_masc_noun_reads_ambos() {
+        let es = Spanish::new();
+        assert_eq!(
+            es.proportion_phrase(2, 2, Some("archivo modificado"), &no_features()),
+            "ambos archivos modificados"
+        );
+    }
+
+    #[test]
+    fn proportion_two_of_two_fem_noun_reads_ambas() {
+        let es = Spanish::new();
+        assert_eq!(
+            es.proportion_phrase(2, 2, Some("clase modificada"), &no_features()),
+            "ambas clases modificadas"
+        );
+    }
+
+    #[test]
+    fn proportion_all_n_masc_noun_reads_todos_los() {
+        let es = Spanish::new();
+        assert_eq!(
+            es.proportion_phrase(13, 13, Some("archivo modificado"), &no_features()),
+            "todos los 13 archivos modificados"
+        );
+    }
+
+    #[test]
+    fn proportion_all_n_fem_noun_reads_todas_las() {
+        let es = Spanish::new();
+        assert_eq!(
+            es.proportion_phrase(13, 13, Some("clase modificada"), &no_features()),
+            "todas las 13 clases modificadas"
+        );
+    }
+
+    #[test]
+    fn proportion_one_of_one_masc_reads_el_unico() {
+        let es = Spanish::new();
+        assert_eq!(
+            es.proportion_phrase(1, 1, Some("archivo modificado"), &no_features()),
+            "el único archivo modificado"
+        );
+    }
+
+    #[test]
+    fn proportion_one_of_one_fem_reads_la_unica() {
+        let es = Spanish::new();
+        assert_eq!(
+            es.proportion_phrase(1, 1, Some("clase modificada"), &no_features()),
+            "la única clase modificada"
+        );
+    }
+
+    #[test]
+    fn proportion_zero_of_n_masc_reads_ninguno_de_los() {
+        let es = Spanish::new();
+        assert_eq!(
+            es.proportion_phrase(0, 5, Some("archivo modificado"), &no_features()),
+            "ninguno de los 5 archivos modificados"
+        );
+    }
+
+    #[test]
+    fn proportion_zero_of_n_fem_reads_ninguna_de_las() {
+        let es = Spanish::new();
+        assert_eq!(
+            es.proportion_phrase(0, 5, Some("clase modificada"), &no_features()),
+            "ninguna de las 5 clases modificadas"
+        );
+    }
+
+    #[test]
+    fn proportion_zero_zero_masc_reads_ningun() {
+        let es = Spanish::new();
+        assert_eq!(
+            es.proportion_phrase(0, 0, Some("archivo modificado"), &no_features()),
+            "ningún archivo modificado"
+        );
+    }
+
+    #[test]
+    fn proportion_zero_zero_fem_reads_ninguna() {
+        let es = Spanish::new();
+        assert_eq!(
+            es.proportion_phrase(0, 0, Some("clase modificada"), &no_features()),
+            "ninguna clase modificada"
+        );
+    }
+
+    #[test]
+    fn proportion_partial_keeps_de_form() {
+        let es = Spanish::new();
+        assert_eq!(
+            es.proportion_phrase(3, 13, Some("archivo modificado"), &no_features()),
+            "3 de 13 archivos modificados"
+        );
+    }
+
+    #[test]
+    fn proportion_no_noun_two_two_masc_default() {
+        let es = Spanish::new();
+        // Without noun and without explicit gender, default to masc.
+        assert_eq!(
+            es.proportion_phrase(2, 2, None, &no_features()),
+            "ambos"
+        );
+    }
+
+    #[test]
+    fn proportion_no_noun_two_two_fem_explicit() {
+        let es = Spanish::new();
+        let f = AgreementFeatures::default().with_gender(Gender::Fem);
+        assert_eq!(es.proportion_phrase(2, 2, None, &f), "ambas");
+    }
+
+    #[test]
+    fn proportion_no_noun_all_n_masc() {
+        let es = Spanish::new();
+        assert_eq!(
+            es.proportion_phrase(7, 7, None, &no_features()),
+            "todos los 7"
+        );
+    }
+
+    #[test]
+    fn proportion_no_noun_all_n_fem() {
+        let es = Spanish::new();
+        let f = AgreementFeatures::default().with_gender(Gender::Fem);
+        assert_eq!(es.proportion_phrase(7, 7, None, &f), "todas las 7");
+    }
+
+    #[test]
+    fn proportion_features_gender_overrides_inference() {
+        // Caller explicitly sets fem; the noun's masc ending is overridden.
+        let es = Spanish::new();
+        let f = AgreementFeatures::default().with_gender(Gender::Fem);
+        assert_eq!(
+            es.proportion_phrase(2, 2, Some("foo"), &f),
+            "ambas foos"
         );
     }
 

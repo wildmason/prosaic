@@ -325,6 +325,31 @@ pub trait Language: Send + Sync {
         })
     }
 
+    /// Produce a natural "X of Y" proportion phrase.
+    ///
+    /// Called by the `{…|proportion:total_key[:noun]}` pipe. Collapses the
+    /// awkward literal "N of N noun" to natural forms: "both noun" (when
+    /// both equal 2), "all N noun" (saturated, N>2), "the only noun" (1/1),
+    /// "none of the N noun" (0/N), "no noun" (0/0), and the literal
+    /// "n of t noun" only for partial coverage. See
+    /// [`crate::english_proportion`] for the full phrasing matrix.
+    ///
+    /// The default implementation encodes English via [`crate::english_proportion`].
+    /// Non-English grammars override with locale-appropriate forms
+    /// (e.g. Spanish `"ambos/ambas"`, `"todos los N"`; German `"beide"`,
+    /// `"alle N"`). The `features` parameter carries gender/number metadata
+    /// so implementations can select correctly-agreeing articles and
+    /// modifiers.
+    fn proportion_phrase(
+        &self,
+        matching: i64,
+        total: i64,
+        noun_singular: Option<&str>,
+        _features: &crate::agreement::AgreementFeatures,
+    ) -> String {
+        crate::proportion::english_proportion(self, matching, total, noun_singular)
+    }
+
     /// Format an inter-event temporal delta as a narrative phrase.
     ///
     /// Called by the `{…|since_last}` pipe when the session has a
@@ -748,6 +773,45 @@ mod tests {
         assert_eq!(
             lang.realize_reference(crate::discourse::ReferenceForm::ShortName, &f),
             None
+        );
+    }
+
+    // ── proportion_phrase default implementation ────────────────────────────
+
+    #[test]
+    fn proportion_phrase_default_delegates_to_english_both() {
+        let lang = MiniLang;
+        let f = AgreementFeatures::default();
+        assert_eq!(
+            lang.proportion_phrase(2, 2, Some("modified file"), &f),
+            "both modified files"
+        );
+    }
+
+    #[test]
+    fn proportion_phrase_default_delegates_to_english_all_n() {
+        let lang = MiniLang;
+        let f = AgreementFeatures::default();
+        assert_eq!(
+            lang.proportion_phrase(13, 13, Some("modified file"), &f),
+            "all 13 modified files"
+        );
+    }
+
+    #[test]
+    fn proportion_phrase_default_partial_without_noun() {
+        let lang = MiniLang;
+        let f = AgreementFeatures::default();
+        assert_eq!(lang.proportion_phrase(3, 13, None, &f), "3 of 13");
+    }
+
+    #[test]
+    fn proportion_phrase_default_zero_zero_with_noun() {
+        let lang = MiniLang;
+        let f = AgreementFeatures::default();
+        assert_eq!(
+            lang.proportion_phrase(0, 0, Some("file"), &f),
+            "no files"
         );
     }
 

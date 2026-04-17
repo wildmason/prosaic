@@ -2,7 +2,7 @@
 //!
 //! Rules (applied in order):
 //! 1. Irregular lookup table (~20 common nouns).
-//! 2. Feminine derivational suffixes (-ung, -heit, etc.) → -en.
+//! 2. Feminine derivational suffixes (-ung, -heit, -keit, -schaft, -ion, -ei) → -en.
 //! 3. Diminutives (-chen, -lein) → unchanged.
 //! 4. Nouns ending in bare -e → append -n (Klasse → Klassen).
 //! 5. Nouns ending in -er, -el, -en → unchanged (no heuristic umlaut).
@@ -112,6 +112,7 @@ fn has_fem_derivational_suffix(lower: &str) -> bool {
         || lower.ends_with("keit")
         || lower.ends_with("schaft")
         || lower.ends_with("ion")
+        || lower.ends_with("ei")
 }
 
 fn add_en(word: &str) -> String {
@@ -163,6 +164,16 @@ mod tests {
         // Meinung is not in the irregular table; rule fires
         assert_eq!(pluralize_de("Meinung"), "Meinungen");
         assert_eq!(pluralize_de("Zeitung"), "Zeitungen");
+    }
+
+    #[test]
+    fn pluralize_fem_derivational_ei_adds_en() {
+        // -ei nouns are feminine and pluralize with -en (Datei → Dateien,
+        // Polizei → Polizeien, Bäckerei → Bäckereien). Without this rule
+        // they fell through to the default -e and produced "Dateie".
+        assert_eq!(pluralize_de("Datei"), "Dateien");
+        assert_eq!(pluralize_de("Polizei"), "Polizeien");
+        assert_eq!(pluralize_de("Bäckerei"), "Bäckereien");
     }
 
     #[test]
