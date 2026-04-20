@@ -123,6 +123,21 @@ pub const PIPE_SPECS: &[PipeSpec] = &[
     PipeSpec { name: "demonstrative", input: ValueType::Any,    output: ValueType::String },
 ];
 
+/// Returns `true` when a value of type `actual` can satisfy a slot or
+/// pipe that expects type `expected`. `ValueType::Any` is compatible
+/// with every concrete type in either direction; concrete types are
+/// compatible only with themselves.
+pub const fn types_compatible(actual: ValueType, expected: ValueType) -> bool {
+    match (actual, expected) {
+        (ValueType::Any, _) | (_, ValueType::Any) => true,
+        (ValueType::String, ValueType::String) => true,
+        (ValueType::Number, ValueType::Number) => true,
+        (ValueType::List, ValueType::List) => true,
+        (ValueType::Entity, ValueType::Entity) => true,
+        _ => false,
+    }
+}
+
 /// Look up a pipe by name. `const fn` so it is usable inside `const _: () = { ... }`
 /// assertion blocks emitted by the `prosaic_template!` macro.
 pub const fn pipe_spec(name: &str) -> Option<&'static PipeSpec> {
@@ -207,5 +222,40 @@ mod pipe_spec_tests {
     fn pipe_spec_unknown_is_const_evaluable() {
         const MISSING: Option<&'static PipeSpec> = pipe_spec("nonexistent_pipe_xyz");
         assert!(MISSING.is_none());
+    }
+}
+
+#[cfg(test)]
+mod types_compatible_tests {
+    use super::*;
+
+    #[test]
+    fn any_matches_every_concrete_type() {
+        assert!(types_compatible(ValueType::Any, ValueType::Number));
+        assert!(types_compatible(ValueType::Number, ValueType::Any));
+        assert!(types_compatible(ValueType::Any, ValueType::Any));
+    }
+
+    #[test]
+    fn same_concrete_types_match() {
+        assert!(types_compatible(ValueType::Number, ValueType::Number));
+        assert!(types_compatible(ValueType::String, ValueType::String));
+        assert!(types_compatible(ValueType::List, ValueType::List));
+        assert!(types_compatible(ValueType::Entity, ValueType::Entity));
+    }
+
+    #[test]
+    fn distinct_concrete_types_reject() {
+        assert!(!types_compatible(ValueType::Number, ValueType::String));
+        assert!(!types_compatible(ValueType::List, ValueType::Number));
+        assert!(!types_compatible(ValueType::String, ValueType::Entity));
+    }
+
+    #[test]
+    fn compat_is_const_evaluable() {
+        const OK: bool = types_compatible(ValueType::Number, ValueType::Number);
+        const NOT_OK: bool = types_compatible(ValueType::Number, ValueType::List);
+        assert!(OK);
+        assert!(!NOT_OK);
     }
 }
