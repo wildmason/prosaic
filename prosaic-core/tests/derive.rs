@@ -188,3 +188,66 @@ fn derived_schema_handles_str_reference() {
     let schema = <Borrowed as HasProsaicSchema>::PROSAIC_SCHEMA;
     assert_eq!(schema_lookup(schema, "label"), Some(ValueType::String));
 }
+
+#[derive(IntoContext)]
+#[allow(dead_code)]
+struct BoolFields {
+    active: bool,
+    maybe: Option<bool>,
+}
+
+#[test]
+fn derived_schema_maps_bool_to_number() {
+    let schema = <BoolFields as HasProsaicSchema>::PROSAIC_SCHEMA;
+    assert_eq!(schema_lookup(schema, "active"), Some(ValueType::Number));
+    assert_eq!(schema_lookup(schema, "maybe"), Some(ValueType::Number));
+}
+
+#[derive(IntoContext)]
+#[allow(dead_code)]
+struct BoolValues {
+    active: bool,
+    maybe_true: Option<bool>,
+    maybe_none: Option<bool>,
+}
+
+#[test]
+fn derive_bool_into_context() {
+    let event = BoolValues {
+        active: true,
+        maybe_true: Some(false),
+        maybe_none: None,
+    };
+    let ctx = IntoContext::into_context(event);
+    assert_eq!(ctx.get("active"), Some(&Value::Number(1)));
+    assert_eq!(ctx.get("maybe_true"), Some(&Value::Number(0)));
+    assert_eq!(ctx.get("maybe_none"), None); // Option::None omits the key entirely
+}
+
+#[derive(IntoContext)]
+#[allow(dead_code)]
+struct WithOptVec {
+    tags: Option<Vec<String>>,
+}
+
+#[test]
+fn derived_schema_handles_option_vec_string() {
+    let schema = <WithOptVec as HasProsaicSchema>::PROSAIC_SCHEMA;
+    assert_eq!(schema_lookup(schema, "tags"), Some(ValueType::List));
+}
+
+#[test]
+fn derive_option_vec_string_into_context_round_trips() {
+    let event = WithOptVec {
+        tags: Some(vec!["a".into(), "b".into()]),
+    };
+    let ctx = IntoContext::into_context(event);
+    assert_eq!(
+        ctx.get("tags"),
+        Some(&Value::List(vec!["a".into(), "b".into()])),
+    );
+
+    let none_event = WithOptVec { tags: None };
+    let ctx = IntoContext::into_context(none_event);
+    assert!(ctx.get("tags").is_none());
+}

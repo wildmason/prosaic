@@ -65,7 +65,10 @@ pub fn derive_into_context(input: TokenStream) -> TokenStream {
         let effective_ty = extract_option_inner(ty).unwrap_or(ty);
         let value_type_tokens = match value_type_for_rust_type(effective_ty) {
             Some(t) => t,
-            None => return unsupported_field_error(field_name, ty, false),
+            None => {
+                let was_opt = extract_option_inner(ty).is_some();
+                return unsupported_field_error(field_name, effective_ty, was_opt);
+            }
         };
         schema_entries.push(quote! { (#key, #value_type_tokens) });
 
@@ -114,8 +117,8 @@ fn unsupported_field_error(field: &syn::Ident, ty: &Type, was_option: bool) -> T
     let wrapper = if was_option { "Option<…>" } else { "" };
     let message = format!(
         "IntoContext: field `{field}` has unsupported type {wrapper}`{ty}`. \
-         Supported types are String, &str, integer types, Vec<String>, and \
-         Option<T> wrapping any of the above.",
+         Supported types are String, &str, integer types (i8..i64/isize/u8..u32/u64/usize), \
+         bool, Vec<String>, and Option<T> wrapping any of the above.",
         field = field,
         wrapper = wrapper,
         ty = quote!(#ty),
@@ -144,6 +147,11 @@ fn value_conversion_for_type(
                 ::core::convert::TryFrom::try_from(#accessor)
                     .unwrap_or(::core::primitive::i64::MAX)
             )
+        })
+    } else if is_type(ty, "bool") {
+        // Match IntoValue for bool: true → 1, false → 0.
+        Some(quote! {
+            ::prosaic_core::Value::Number(if #accessor { 1_i64 } else { 0_i64 })
         })
     } else if is_vec_string(ty) {
         Some(quote! { ::prosaic_core::Value::List(#accessor) })
