@@ -330,12 +330,16 @@ pub fn prosaic_template(input: TokenStream) -> TokenStream {
 struct ProsaicTemplateInput {
     template: LitStr,
     slots: Vec<Ident>,
+    /// Parsed but unused until Task 13 wires up the assertion emission.
+    #[allow(dead_code)]
+    context: Option<syn::Path>,
 }
 
 impl Parse for ProsaicTemplateInput {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let mut template: Option<LitStr> = None;
         let mut slots: Option<Vec<Ident>> = None;
+        let mut context: Option<syn::Path> = None;
 
         while !input.is_empty() {
             let key: Ident = input.parse()?;
@@ -351,10 +355,15 @@ impl Parse for ProsaicTemplateInput {
                         Punctuated::parse_terminated(&content)?;
                     slots = Some(parsed_idents.into_iter().collect());
                 }
+                "context" => {
+                    context = Some(input.parse::<syn::Path>()?);
+                }
                 other => {
                     return Err(syn::Error::new(
                         key.span(),
-                        format!("unknown key `{other}` — expected `template` or `slots`"),
+                        format!(
+                            "unknown key `{other}` — expected `template`, `slots`, or `context`"
+                        ),
                     ));
                 }
             }
@@ -367,7 +376,7 @@ impl Parse for ProsaicTemplateInput {
             .ok_or_else(|| syn::Error::new(input.span(), "missing `template: \"...\"` argument"))?;
         let slots = slots.unwrap_or_default();
 
-        Ok(ProsaicTemplateInput { template, slots })
+        Ok(ProsaicTemplateInput { template, slots, context })
     }
 }
 
