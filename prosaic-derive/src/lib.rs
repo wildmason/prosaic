@@ -292,6 +292,12 @@ const VALID_PIPES: &[&str] = &[
 /// set. On success, expands to the original template string literal (`&'static str`).
 /// On mismatch, emits a compile error pointing at the `template:` argument.
 ///
+/// When `context: <Type>` is provided, the macro also emits `const` assertions
+/// at compile time, verifying that each slot's required type (inferred from its
+/// pipe chain) is compatible with the corresponding field in `<Type>`'s
+/// `HasProsaicSchema` implementation. A missing slot or type mismatch is a
+/// hard compile error with a clear message identifying the slot and context type.
+///
 /// # Syntax
 ///
 /// ```
@@ -319,9 +325,9 @@ pub fn prosaic_template(input: TokenStream) -> TokenStream {
     let parsed = parse_macro_input!(input as ProsaicTemplateInput);
 
     match validate_template(&parsed) {
-        Ok(()) => {
+        Ok(assertions) => {
             let lit = &parsed.template;
-            quote! { #lit }.into()
+            quote! { { #assertions #lit } }.into()
         }
         Err(e) => e.to_compile_error().into(),
     }
@@ -380,7 +386,9 @@ impl Parse for ProsaicTemplateInput {
     }
 }
 
-fn validate_template(input: &ProsaicTemplateInput) -> syn::Result<()> {
+fn validate_template(
+    input: &ProsaicTemplateInput,
+) -> syn::Result<proc_macro2::TokenStream> {
     let template_str = input.template.value();
     let span = input.template.span();
 
@@ -393,7 +401,63 @@ fn validate_template(input: &ProsaicTemplateInput) -> syn::Result<()> {
     validate_slots(&parsed, &declared, span)?;
     validate_pipes(&parsed, span)?;
 
-    Ok(())
+    // Infer per-slot types using the shared PIPE_SPECS registry. Chain
+    // mismatches and multi-mention conflicts surface here as compile errors.
+    let inferred = parsed
+        .infer_types()
+        .map_err(|reason| syn::Error::new(span, reason))?;
+
+    let assertions = match &input.context {
+        Some(ctx_path) => emit_context_assertions(ctx_path, &inferred),
+        None => proc_macro2::TokenStream::new(),
+    };
+
+    Ok(assertions)
+}
+
+fn emit_context_assertions(
+    ctx_path: &syn::Path,
+    inferred: &[(String, prosaic_core::ValueType)],
+) -> proc_macro2::TokenStream {
+    use prosaic_core::ValueType;
+
+    let mut stmts = proc_macro2::TokenStream::new();
+    for (slot, expected) in inferred {
+        let expected_tok = match expected {
+            ValueType::String => quote! { ::prosaic_core::ValueType::String },
+            ValueType::Number => quote! { ::prosaic_core::ValueType::Number },
+            ValueType::List => quote! { ::prosaic_core::ValueType::List },
+            ValueType::Entity => quote! { ::prosaic_core::ValueType::Entity },
+            ValueType::Any => {
+                // A slot inferred as Any imposes no constraint on the context.
+                continue;
+            }
+        };
+
+        let ctx_name_str = quote!(#ctx_path).to_string();
+        let missing_msg = format!(
+            "prosaic_template: slot `{slot}` is not declared in context `{ctx_name_str}` (no matching field)"
+        );
+        let mismatch_msg = format!(
+            "prosaic_template: slot `{slot}` in context `{ctx_name_str}` has an incompatible type — required by template pipe chain"
+        );
+
+        stmts.extend(quote! {
+            const _: () = {
+                let actual = match ::prosaic_core::schema_lookup(
+                    <#ctx_path as ::prosaic_core::HasProsaicSchema>::PROSAIC_SCHEMA,
+                    #slot,
+                ) {
+                    ::core::option::Option::Some(t) => t,
+                    ::core::option::Option::None => ::core::panic!(#missing_msg),
+                };
+                if !::prosaic_core::types_compatible(actual, #expected_tok) {
+                    ::core::panic!(#mismatch_msg);
+                }
+            };
+        });
+    }
+    stmts
 }
 
 fn validate_slots(
