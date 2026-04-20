@@ -918,7 +918,10 @@ mod tests {
     }
 
     #[test]
-    fn infer_slot_with_list_chain_is_list() {
+    fn infer_slot_input_is_first_pipe_input_for_list_chain() {
+        // The chain `truncate|join` starts by consuming a List and ends
+        // producing a String. `infer_types` returns the slot's required
+        // INPUT type (List), not the chain's final output.
         let t = Template::parse("{items|truncate:3|join}").unwrap();
         assert_eq!(types(&t), vec![("items".into(), ValueType::List)]);
     }
@@ -927,8 +930,12 @@ mod tests {
     fn infer_chain_mismatch_is_error() {
         let t = Template::parse("{x|capitalize|pluralize}").unwrap();
         let err = t.infer_types().unwrap_err();
+        // Error must name the pipes AND the types involved so downstream
+        // callers (macro / register_template) don't need to re-derive them.
         assert!(err.contains("capitalize"), "error was: {err}");
         assert!(err.contains("pluralize"), "error was: {err}");
+        assert!(err.contains("String"), "error should name the output type; got: {err}");
+        assert!(err.contains("Number"), "error should name the expected input; got: {err}");
     }
 
     #[test]
@@ -941,9 +948,19 @@ mod tests {
     fn infer_multi_mention_conflict_is_error() {
         let t = Template::parse("{x|pluralize:item} {x|join}").unwrap();
         let err = t.infer_types().unwrap_err();
-        assert!(err.contains("'x'") || err.contains("`x`"), "error was: {err}");
+        // The implementation uses backtick quoting — assert it directly so
+        // a future style change surfaces here instead of silently passing.
+        assert!(err.contains("`x`"), "error was: {err}");
         assert!(err.contains("Number"), "error was: {err}");
         assert!(err.contains("List"), "error was: {err}");
+    }
+
+    #[test]
+    fn infer_same_bare_slot_twice_stays_any() {
+        // Two bare mentions of the same slot unify as Any ∩ Any → Any,
+        // not an error.
+        let t = Template::parse("{x} and {x}").unwrap();
+        assert_eq!(types(&t), vec![("x".into(), ValueType::Any)]);
     }
 
     #[test]
@@ -970,6 +987,14 @@ mod tests {
     fn infer_literal_only_is_empty() {
         let t = Template::parse("no slots").unwrap();
         assert_eq!(types(&t), vec![]);
+    }
+
+    #[test]
+    fn infer_skips_partial_nodes() {
+        // Partial nodes are opaque at parse time — any slots they
+        // reference are resolved at registration time, not here.
+        let t = Template::parse("{x|pluralize:item} {>some_partial}").unwrap();
+        assert_eq!(types(&t), vec![("x".into(), ValueType::Number)]);
     }
 
     // ── as_bare_slots tests ──────────────────────────────────────────────
