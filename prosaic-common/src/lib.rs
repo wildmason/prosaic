@@ -127,6 +127,11 @@ pub const PIPE_SPECS: &[PipeSpec] = &[
 /// pipe that expects type `expected`. `ValueType::Any` is compatible
 /// with every concrete type in either direction; concrete types are
 /// compatible only with themselves.
+///
+/// Compatibility is symmetric: `types_compatible(a, b) == types_compatible(b, a)`.
+/// The narrowing behaviour during unification (e.g. `Number ∩ Any → Number`) is
+/// handled by the caller (see `Template::infer_types`) — this function only
+/// answers the binary "is this assignment legal?" question.
 pub const fn types_compatible(actual: ValueType, expected: ValueType) -> bool {
     match (actual, expected) {
         (ValueType::Any, _) | (_, ValueType::Any) => true,
@@ -257,5 +262,24 @@ mod types_compatible_tests {
         const NOT_OK: bool = types_compatible(ValueType::Number, ValueType::List);
         assert!(OK);
         assert!(!NOT_OK);
+    }
+
+    #[test]
+    fn compatibility_is_symmetric() {
+        // Compatibility must be commutative: a future regression that adds a
+        // directional special case (e.g. "Any on the left but not the right")
+        // would violate the unification semantics.
+        assert_eq!(
+            types_compatible(ValueType::Number, ValueType::String),
+            types_compatible(ValueType::String, ValueType::Number),
+        );
+        assert_eq!(
+            types_compatible(ValueType::Number, ValueType::Any),
+            types_compatible(ValueType::Any, ValueType::Number),
+        );
+        assert_eq!(
+            types_compatible(ValueType::List, ValueType::Entity),
+            types_compatible(ValueType::Entity, ValueType::List),
+        );
     }
 }
