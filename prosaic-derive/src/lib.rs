@@ -253,37 +253,6 @@ fn value_type_for_rust_type(ty: &Type) -> Option<proc_macro2::TokenStream> {
 
 // ── prosaic_template! ──────────────────────────────────────────────────────────
 
-/// Pipe names that the NLG engine's `apply_pipe` dispatch recognises.
-/// Kept in sync with `engine.rs::apply_pipe`. Used by `prosaic_template!` for
-/// compile-time pipe validation.
-///
-/// Note on feature-gated pipes: `relative` and `since_last` are only
-/// registered by the runtime when the `time` feature is active on
-/// `prosaic-core`. The macro validates the superset so templates that
-/// target time-enabled builds still compile; callers who compile
-/// `prosaic-core` without `time` will receive an `InvalidPipe` error at
-/// render time if those pipes appear in a template.
-const VALID_PIPES: &[&str] = &[
-    "plural",
-    "pluralize",
-    "article",
-    "join",
-    "ordinal",
-    "words",
-    "truncate",
-    "capitalize",
-    "refer",
-    "verb",
-    "syn",
-    "relative",
-    "since_last",
-    "quantify",
-    "proportion",
-    "hedge",
-    "negated",
-    "choose",
-    "demonstrative",
-];
 
 /// Compile-time-validated template string.
 ///
@@ -336,8 +305,6 @@ pub fn prosaic_template(input: TokenStream) -> TokenStream {
 struct ProsaicTemplateInput {
     template: LitStr,
     slots: Vec<Ident>,
-    /// Parsed but unused until Task 13 wires up the assertion emission.
-    #[allow(dead_code)]
     context: Option<syn::Path>,
 }
 
@@ -489,7 +456,7 @@ fn validate_pipes(template: &prosaic_core::Template, span: proc_macro2::Span) ->
     let used = template.pipe_names();
     let mut unknown: Vec<String> = used
         .into_iter()
-        .filter(|p| !VALID_PIPES.contains(&p.as_str()))
+        .filter(|p| !prosaic_core::PIPE_SPECS.iter().any(|spec| spec.name == p.as_str()))
         .collect();
     unknown.sort();
     unknown.dedup();
@@ -503,11 +470,12 @@ fn validate_pipes(template: &prosaic_core::Template, span: proc_macro2::Span) ->
             })
             .collect::<Vec<_>>()
             .join(", ");
+        let known: Vec<&str> = prosaic_core::PIPE_SPECS.iter().map(|s| s.name).collect();
         return Err(syn::Error::new(
             span,
             format!(
                 "template uses unknown pipe(s): {list}\n  known pipes: [{}]",
-                VALID_PIPES.join(", ")
+                known.join(", ")
             ),
         ));
     }
@@ -515,19 +483,14 @@ fn validate_pipes(template: &prosaic_core::Template, span: proc_macro2::Span) ->
 }
 
 fn nearest_pipe(unknown: &str) -> Option<&'static str> {
+    let mut names = prosaic_core::PIPE_SPECS.iter().map(|s| s.name);
     // Exact prefix / suffix match first (catches common truncations).
-    if let Some(&valid) = VALID_PIPES
-        .iter()
-        .find(|&&v| v.starts_with(unknown) || unknown.starts_with(v))
-    {
+    if let Some(valid) = names.clone().find(|&v| v.starts_with(unknown) || unknown.starts_with(v)) {
         return Some(valid);
     }
     // Fallback: any pipe sharing the first three characters.
     let prefix: String = unknown.chars().take(3).collect();
-    VALID_PIPES
-        .iter()
-        .find(|&&v| v.starts_with(prefix.as_str()))
-        .copied()
+    names.find(|&v| v.starts_with(prefix.as_str()))
 }
 
 // ── prosaic_template_compiled! ─────────────────────────────────────────────────

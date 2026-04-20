@@ -157,7 +157,13 @@ pub use reg::{
     EntityDescriptor, EntityRegistry, SubgraphDescription, distinguishing_attributes,
     distinguishing_subgraph,
 };
-pub use prosaic_common::{PipeSpec, ValueType, pipe_spec, schema_lookup, types_compatible, PIPE_SPECS};
+pub use prosaic_common::{ValueType, pipe_spec, schema_lookup, types_compatible};
+
+// Implementation details consumed by the `prosaic_template!` macro at
+// expansion time. Not intended for direct use — the public contract goes
+// through `ValueType` and `HasProsaicSchema`.
+#[doc(hidden)]
+pub use prosaic_common::{PipeSpec, PIPE_SPECS};
 pub use rst::RstRelation;
 pub use salience::{Salience, SalienceThresholds};
 pub use session::Session;

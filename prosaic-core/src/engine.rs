@@ -1881,7 +1881,8 @@ impl Engine {
     }
 
     /// Register a template and cross-check every slot's inferred type
-    /// against the static schema of the `T` context type.
+    /// against the static schema of `T`, a type that implements
+    /// `IntoContext + HasProsaicSchema`.
     ///
     /// Slot types inferred from pipe chains (e.g. `{count|pluralize:item}`
     /// implies `count: Number`) must be compatible with `T`'s schema. Use
@@ -1894,7 +1895,7 @@ impl Engine {
         source: &str,
     ) -> Result<(), ProsaicError>
     where
-        T: crate::HasProsaicSchema,
+        T: crate::HasProsaicSchema + crate::IntoContext,
     {
         let template = Template::parse(source)?;
         let inferred = template
@@ -1905,13 +1906,14 @@ impl Engine {
                 reason,
             })?;
 
+        let ty = core::any::type_name::<T>();
         for (slot, expected) in &inferred {
             let actual = crate::schema_lookup(T::PROSAIC_SCHEMA, slot).ok_or_else(|| {
                 ProsaicError::TemplateParseError {
                     template: source.to_string(),
                     position: 0,
                     reason: format!(
-                        "slot `{slot}` required by template is not declared in context schema"
+                        "slot `{slot}` required by template is not declared in context `{ty}`"
                     ),
                 }
             })?;
@@ -1920,7 +1922,7 @@ impl Engine {
                     template: source.to_string(),
                     position: 0,
                     reason: format!(
-                        "slot `{slot}` context type {actual:?} is not compatible with template-required {expected:?}"
+                        "slot `{slot}` in context `{ty}` has type {actual:?} but template pipe chain expects {expected:?}"
                     ),
                 });
             }
