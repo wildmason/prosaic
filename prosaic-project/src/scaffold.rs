@@ -12,13 +12,15 @@ pub enum Starter {
     VocabPack,
 }
 
-impl Starter {
-    pub fn from_str(s: &str) -> Option<Self> {
+impl std::str::FromStr for Starter {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "blank" => Some(Self::Blank),
-            "changelog" => Some(Self::Changelog),
-            "vocab-pack" => Some(Self::VocabPack),
-            _ => None,
+            "blank" => Ok(Self::Blank),
+            "changelog" => Ok(Self::Changelog),
+            "vocab-pack" => Ok(Self::VocabPack),
+            other => Err(format!("unknown starter `{other}`; expected: blank | changelog | vocab-pack")),
         }
     }
 }

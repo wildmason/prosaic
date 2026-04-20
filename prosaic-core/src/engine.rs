@@ -3583,22 +3583,6 @@ fn prepend_replacing_subject_in_place(
     core::mem::swap(output, &mut buf);
 }
 
-/// Filter templates to those matching the target salience level.
-///
-/// Fallback order:
-/// 1. Templates registered at the exact target salience.
-/// 2. Templates registered at Medium salience (the default).
-/// 3. All registered templates (degrades gracefully).
-/// Pick the candidate alternatives for a render: first filter by the
-/// engine's language preference (matching tag → untagged → all), then
-/// by salience (exact tier → medium fallback → all).
-fn filter_by_salience<'a>(
-    alternatives: &'a [SalientTemplate],
-    target: Salience,
-) -> Vec<&'a Template> {
-    filter_alternatives(alternatives, target, None)
-}
-
 /// Two-stage filter: language preference first, then salience.
 fn filter_alternatives<'a>(
     alternatives: &'a [SalientTemplate],
@@ -6920,6 +6904,9 @@ mod manifest_loader {
         pub partials: Vec<ManifestPartial>,
     }
 
+    // Fields are deserialized from manifest JSON for round-trip compatibility;
+    // the engine reads them via `load_manifest` but does not yet act on all of them.
+    #[allow(dead_code)]
     #[derive(Deserialize, Default)]
     pub struct ManifestEngineSettings {
         #[serde(default)]

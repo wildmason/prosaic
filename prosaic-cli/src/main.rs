@@ -160,10 +160,10 @@ fn run_new(args: &[String]) {
             std::process::exit(2);
         }
     };
-    let starter_kind = match prosaic_project::Starter::from_str(&starter) {
-        Some(s) => s,
-        None => {
-            eprintln!("unknown starter `{starter}`; expected: blank | changelog | vocab-pack");
+    let starter_kind = match starter.parse::<prosaic_project::Starter>() {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("{e}");
             std::process::exit(2);
         }
     };
