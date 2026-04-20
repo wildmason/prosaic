@@ -135,20 +135,44 @@ pub use time::format_relative;
 
 #[cfg(test)]
 mod common_reexport_tests {
+    //! Sanity checks that `prosaic-common`'s public surface is visible
+    //! through `prosaic-core`'s re-exports. Each test invokes a re-exported
+    //! fn through a non-trivial code path so a broken re-export or a
+    //! behavioural regression in `prosaic-common` surfaces here.
+
     use super::*;
 
     #[test]
-    fn value_type_is_reexported() {
-        let _ = ValueType::Number;
-    }
-
-    #[test]
-    fn pipe_specs_is_reexported_with_all_pipes() {
+    fn pipe_specs_length_matches_registry() {
         assert_eq!(PIPE_SPECS.len(), 19);
     }
 
     #[test]
-    fn types_compatible_is_reexported() {
+    fn pipe_spec_lookup_round_trips_through_reexport() {
+        let p = pipe_spec("pluralize").expect("pluralize must resolve via re-export");
+        assert_eq!(p.input, ValueType::Number);
+        assert_eq!(p.output, ValueType::String);
+    }
+
+    #[test]
+    fn types_compatible_via_reexport_rejects_mismatches() {
+        // Any + concrete → compatible; distinct concretes → not.
         assert!(types_compatible(ValueType::Any, ValueType::Number));
+        assert!(!types_compatible(ValueType::Number, ValueType::List));
+    }
+
+    #[test]
+    fn schema_lookup_via_reexport_finds_keys() {
+        let schema: &[(&str, ValueType)] = &[("x", ValueType::Number)];
+        assert_eq!(schema_lookup(schema, "x"), Some(ValueType::Number));
+        assert_eq!(schema_lookup(schema, "missing"), None);
+    }
+
+    #[test]
+    fn pipe_spec_struct_is_constructible_via_reexport() {
+        // Confirms the struct re-export is usable as a type, not just a name.
+        let p = PipeSpec { name: "test", input: ValueType::Any, output: ValueType::String };
+        assert_eq!(p.name, "test");
+        assert_eq!(p.input, ValueType::Any);
     }
 }
