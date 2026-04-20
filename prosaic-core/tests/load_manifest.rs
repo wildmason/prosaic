@@ -1,3 +1,5 @@
+#![cfg(feature = "serde")]
+
 use prosaic_core::{Context, Engine, Session, Value};
 use prosaic_grammar_en::English;
 
