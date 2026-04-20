@@ -71,3 +71,127 @@ mod value_type_tests {
         assert_eq!(ALL.len(), 5);
     }
 }
+
+/// The type contract of a named pipe: the [`ValueType`] of its input
+/// value and the [`ValueType`] of its output.
+///
+/// Pipe-argument validation (e.g. that `truncate` has a numeric arg) is
+/// deliberately **not** modelled here — it remains a runtime check.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PipeSpec {
+    pub name: &'static str,
+    pub input: ValueType,
+    pub output: ValueType,
+}
+
+/// The complete set of pipes recognised by the Prosaic engine.
+///
+/// This registry is the single source of truth shared between
+/// `prosaic-core::engine::apply_pipe` (dispatch) and
+/// `prosaic-derive::prosaic_template!` (compile-time validation).
+///
+/// Adding a new pipe: add a `PipeSpec` here, add a match arm in
+/// `prosaic-core::engine::apply_pipe`, and the `prosaic_template!` macro
+/// will automatically recognise it.
+pub const PIPE_SPECS: &[PipeSpec] = &[
+    PipeSpec { name: "pluralize",     input: ValueType::Number, output: ValueType::String },
+    PipeSpec { name: "plural",        input: ValueType::Number, output: ValueType::String },
+    PipeSpec { name: "article",       input: ValueType::Any,    output: ValueType::String },
+    PipeSpec { name: "join",          input: ValueType::List,   output: ValueType::String },
+    PipeSpec { name: "ordinal",       input: ValueType::Number, output: ValueType::String },
+    PipeSpec { name: "words",         input: ValueType::Number, output: ValueType::String },
+    PipeSpec { name: "truncate",      input: ValueType::List,   output: ValueType::List   },
+    PipeSpec { name: "capitalize",    input: ValueType::Any,    output: ValueType::String },
+    PipeSpec { name: "refer",         input: ValueType::Any,    output: ValueType::String },
+    PipeSpec { name: "verb",          input: ValueType::Any,    output: ValueType::String },
+    PipeSpec { name: "syn",           input: ValueType::Any,    output: ValueType::String },
+    PipeSpec { name: "relative",      input: ValueType::Number, output: ValueType::String },
+    PipeSpec { name: "since_last",    input: ValueType::Number, output: ValueType::String },
+    PipeSpec { name: "quantify",      input: ValueType::Number, output: ValueType::String },
+    PipeSpec { name: "proportion",    input: ValueType::Number, output: ValueType::String },
+    PipeSpec { name: "hedge",         input: ValueType::Number, output: ValueType::String },
+    PipeSpec { name: "negated",       input: ValueType::Any,    output: ValueType::String },
+    PipeSpec { name: "choose",        input: ValueType::Any,    output: ValueType::String },
+    PipeSpec { name: "demonstrative", input: ValueType::Any,    output: ValueType::String },
+];
+
+/// Look up a pipe by name. `const fn` so it is usable inside `const _: () = { ... }`
+/// assertion blocks emitted by the `prosaic_template!` macro.
+pub const fn pipe_spec(name: &str) -> Option<&'static PipeSpec> {
+    let mut i = 0;
+    while i < PIPE_SPECS.len() {
+        if byte_eq(PIPE_SPECS[i].name.as_bytes(), name.as_bytes()) {
+            return Some(&PIPE_SPECS[i]);
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Byte-wise equality, usable in `const fn` (unlike `str::eq`).
+/// Internal helper — not part of the public contract.
+pub const fn byte_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut i = 0;
+    while i < a.len() {
+        if a[i] != b[i] {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+#[cfg(test)]
+mod pipe_spec_tests {
+    use super::*;
+
+    #[test]
+    fn all_nineteen_pipes_are_registered() {
+        assert_eq!(PIPE_SPECS.len(), 19);
+    }
+
+    #[test]
+    fn pluralize_is_number_to_string() {
+        let p = pipe_spec("pluralize").expect("pluralize must be registered");
+        assert_eq!(p.input, ValueType::Number);
+        assert_eq!(p.output, ValueType::String);
+    }
+
+    #[test]
+    fn truncate_is_list_to_list_for_chain_compatibility() {
+        let p = pipe_spec("truncate").expect("truncate must be registered");
+        assert_eq!(p.input, ValueType::List);
+        assert_eq!(p.output, ValueType::List, "truncate must chain into join");
+    }
+
+    #[test]
+    fn join_is_list_to_string() {
+        let p = pipe_spec("join").expect("join must be registered");
+        assert_eq!(p.input, ValueType::List);
+        assert_eq!(p.output, ValueType::String);
+    }
+
+    #[test]
+    fn refer_is_any_to_string() {
+        let p = pipe_spec("refer").expect("refer must be registered");
+        assert_eq!(p.input, ValueType::Any);
+        assert_eq!(p.output, ValueType::String);
+    }
+
+    #[test]
+    fn unknown_pipe_lookup_returns_none() {
+        assert!(pipe_spec("nonexistent").is_none());
+    }
+
+    #[test]
+    fn pipe_spec_lookup_is_const_evaluable() {
+        const SPEC: Option<&'static PipeSpec> = pipe_spec("pluralize");
+        // Verify both const evaluation worked AND returned the right data.
+        // Using matches! lets us destructure inside a const-context assertion
+        // without relying on PartialEq on references.
+        assert!(matches!(SPEC, Some(s) if s.input == ValueType::Number && s.output == ValueType::String));
+    }
+}
