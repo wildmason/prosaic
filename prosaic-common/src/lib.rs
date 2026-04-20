@@ -159,6 +159,9 @@ pub const fn pipe_spec(name: &str) -> Option<&'static PipeSpec> {
 /// Look up a slot's declared [`ValueType`] in a `HasProsaicSchema`-style
 /// schema slice. `const fn` so it is usable inside compile-time assertion
 /// blocks emitted by the `prosaic_template!` macro.
+///
+/// Matching is byte-exact and case-sensitive. If the schema contains
+/// duplicate keys, the first entry wins.
 pub const fn schema_lookup(
     schema: &[(&str, ValueType)],
     slot: &str,
@@ -309,6 +312,7 @@ mod schema_lookup_tests {
         ("name", ValueType::String),
         ("count", ValueType::Number),
         ("items", ValueType::List),
+        ("actor", ValueType::Entity),
     ];
 
     #[test]
@@ -316,6 +320,7 @@ mod schema_lookup_tests {
         assert_eq!(schema_lookup(FIXTURE, "name"), Some(ValueType::String));
         assert_eq!(schema_lookup(FIXTURE, "count"), Some(ValueType::Number));
         assert_eq!(schema_lookup(FIXTURE, "items"), Some(ValueType::List));
+        assert_eq!(schema_lookup(FIXTURE, "actor"), Some(ValueType::Entity));
     }
 
     #[test]
@@ -341,5 +346,25 @@ mod schema_lookup_tests {
         // Guards against accidental prefix matching in byte_eq.
         assert_eq!(schema_lookup(FIXTURE, "namer"), None);
         assert_eq!(schema_lookup(FIXTURE, "nam"), None);
+    }
+
+    #[test]
+    fn duplicate_keys_return_first_match() {
+        // Documents the first-match contract — if a schema contains
+        // duplicate keys (shouldn't happen with the derive but could with
+        // hand-authored impls), the first entry wins.
+        const DUPE: &[(&str, ValueType)] = &[
+            ("x", ValueType::Number),
+            ("x", ValueType::String),
+        ];
+        assert_eq!(schema_lookup(DUPE, "x"), Some(ValueType::Number));
+    }
+
+    #[test]
+    fn lookup_is_case_sensitive() {
+        // Comparison is byte-exact — case folding is out of scope.
+        assert_eq!(schema_lookup(FIXTURE, "Name"), None);
+        assert_eq!(schema_lookup(FIXTURE, "NAME"), None);
+        assert_eq!(schema_lookup(FIXTURE, "ACTOR"), None);
     }
 }
