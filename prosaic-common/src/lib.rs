@@ -93,9 +93,17 @@ pub struct PipeSpec {
 /// Adding a new pipe: add a `PipeSpec` here, add a match arm in
 /// `prosaic-core::engine::apply_pipe`, and the `prosaic_template!` macro
 /// will automatically recognise it.
+///
+/// Feature-gated pipes: `relative` and `since_last` are listed
+/// unconditionally so templates targeting time-enabled builds still
+/// validate. When `prosaic-core` is compiled without the `time` feature,
+/// using either pipe produces an `InvalidPipe` error at render time.
+// Ordering mirrors `prosaic-derive::VALID_PIPES` so the two tables read
+// identically when reviewed side by side. Lookup is a linear scan so
+// order has no behavioral impact — this is purely for maintainability.
 pub const PIPE_SPECS: &[PipeSpec] = &[
-    PipeSpec { name: "pluralize",     input: ValueType::Number, output: ValueType::String },
     PipeSpec { name: "plural",        input: ValueType::Number, output: ValueType::String },
+    PipeSpec { name: "pluralize",     input: ValueType::Number, output: ValueType::String },
     PipeSpec { name: "article",       input: ValueType::Any,    output: ValueType::String },
     PipeSpec { name: "join",          input: ValueType::List,   output: ValueType::String },
     PipeSpec { name: "ordinal",       input: ValueType::Number, output: ValueType::String },
@@ -130,7 +138,7 @@ pub const fn pipe_spec(name: &str) -> Option<&'static PipeSpec> {
 
 /// Byte-wise equality, usable in `const fn` (unlike `str::eq`).
 /// Internal helper — not part of the public contract.
-pub const fn byte_eq(a: &[u8], b: &[u8]) -> bool {
+pub(crate) const fn byte_eq(a: &[u8], b: &[u8]) -> bool {
     if a.len() != b.len() {
         return false;
     }
@@ -193,5 +201,11 @@ mod pipe_spec_tests {
         // Using matches! lets us destructure inside a const-context assertion
         // without relying on PartialEq on references.
         assert!(matches!(SPEC, Some(s) if s.input == ValueType::Number && s.output == ValueType::String));
+    }
+
+    #[test]
+    fn pipe_spec_unknown_is_const_evaluable() {
+        const MISSING: Option<&'static PipeSpec> = pipe_spec("nonexistent_pipe_xyz");
+        assert!(MISSING.is_none());
     }
 }
