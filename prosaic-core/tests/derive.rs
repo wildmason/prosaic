@@ -1,4 +1,4 @@
-use prosaic_core::{Context, IntoContext, Value};
+use prosaic_core::{Context, HasProsaicSchema, IntoContext, Value, ValueType, schema_lookup};
 use prosaic_derive::IntoContext;
 
 #[derive(IntoContext)]
@@ -140,4 +140,51 @@ fn derive_u64_in_i64_range_is_exact() {
     let ctx = event.into_context();
     assert_eq!(ctx.get("big_u64"), Some(&Value::Number(1_000_000)));
     assert_eq!(ctx.get("big_usize"), Some(&Value::Number(2_000_000)));
+}
+
+// ── HasProsaicSchema derive tests ──────────────────────────────────────────────
+
+#[derive(IntoContext)]
+#[allow(dead_code)]
+struct Doc {
+    name: String,
+    count: i64,
+    tags: Vec<String>,
+}
+
+#[test]
+fn derived_schema_matches_fields() {
+    let schema = <Doc as HasProsaicSchema>::PROSAIC_SCHEMA;
+    assert_eq!(schema.len(), 3);
+    assert_eq!(schema_lookup(schema, "name"), Some(ValueType::String));
+    assert_eq!(schema_lookup(schema, "count"), Some(ValueType::Number));
+    assert_eq!(schema_lookup(schema, "tags"), Some(ValueType::List));
+}
+
+#[derive(IntoContext)]
+#[allow(dead_code)]
+struct Sizes {
+    big: u64,
+    arch: usize,
+    small: u8,
+}
+
+#[test]
+fn derived_schema_maps_wide_numerics_to_number() {
+    let schema = <Sizes as HasProsaicSchema>::PROSAIC_SCHEMA;
+    assert_eq!(schema_lookup(schema, "big"), Some(ValueType::Number));
+    assert_eq!(schema_lookup(schema, "arch"), Some(ValueType::Number));
+    assert_eq!(schema_lookup(schema, "small"), Some(ValueType::Number));
+}
+
+#[derive(IntoContext)]
+#[allow(dead_code)]
+struct Borrowed<'a> {
+    label: &'a str,
+}
+
+#[test]
+fn derived_schema_handles_str_reference() {
+    let schema = <Borrowed as HasProsaicSchema>::PROSAIC_SCHEMA;
+    assert_eq!(schema_lookup(schema, "label"), Some(ValueType::String));
 }

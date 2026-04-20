@@ -51,6 +51,8 @@ pub fn derive_into_context(input: TokenStream) -> TokenStream {
     };
 
     let mut insertions = Vec::with_capacity(fields.len());
+    let mut schema_entries = Vec::with_capacity(fields.len());
+
     for field in fields {
         let field_name = match &field.ident {
             Some(ident) => ident,
@@ -59,6 +61,15 @@ pub fn derive_into_context(input: TokenStream) -> TokenStream {
         let key = field_name.to_string();
         let ty = &field.ty;
 
+        // Value-type mapping (for schema) — unwraps Option<T> to T.
+        let effective_ty = extract_option_inner(ty).unwrap_or(ty);
+        let value_type_tokens = match value_type_for_rust_type(effective_ty) {
+            Some(t) => t,
+            None => return unsupported_field_error(field_name, ty, false),
+        };
+        schema_entries.push(quote! { (#key, #value_type_tokens) });
+
+        // IntoContext insertion (unchanged from prior implementation).
         let conversion = if let Some(inner_ty) = extract_option_inner(ty) {
             match value_conversion_for_type(inner_ty, &quote!(val)) {
                 Some(conv) => quote! {
@@ -66,18 +77,14 @@ pub fn derive_into_context(input: TokenStream) -> TokenStream {
                         ctx.insert(#key, #conv);
                     }
                 },
-                None => {
-                    return unsupported_field_error(field_name, inner_ty, true);
-                }
+                None => return unsupported_field_error(field_name, inner_ty, true),
             }
         } else {
             match value_conversion_for_type(ty, &quote!(self.#field_name)) {
                 Some(conv) => quote! {
                     ctx.insert(#key, #conv);
                 },
-                None => {
-                    return unsupported_field_error(field_name, ty, false);
-                }
+                None => return unsupported_field_error(field_name, ty, false),
             }
         };
 
@@ -91,6 +98,12 @@ pub fn derive_into_context(input: TokenStream) -> TokenStream {
                 #(#insertions)*
                 ctx
             }
+        }
+
+        impl #impl_generics ::prosaic_core::HasProsaicSchema for #name #ty_generics #where_clause {
+            const PROSAIC_SCHEMA: &'static [(&'static str, ::prosaic_core::ValueType)] = &[
+                #(#schema_entries),*
+            ];
         }
     };
 
@@ -213,6 +226,21 @@ fn extract_option_inner(ty: &Type) -> Option<&Type> {
         return Some(inner);
     }
     None
+}
+
+/// Map a Rust field type to the `ValueType` it projects into when inserted
+/// into a `Context`. Returns `None` if the type is unsupported (caller
+/// raises `unsupported_field_error`).
+fn value_type_for_rust_type(ty: &Type) -> Option<proc_macro2::TokenStream> {
+    if is_type(ty, "String") || is_str_reference(ty) {
+        Some(quote! { ::prosaic_core::ValueType::String })
+    } else if is_safe_numeric_type(ty) || is_wide_numeric_type(ty) || is_type(ty, "bool") {
+        Some(quote! { ::prosaic_core::ValueType::Number })
+    } else if is_vec_string(ty) {
+        Some(quote! { ::prosaic_core::ValueType::List })
+    } else {
+        None
+    }
 }
 
 // ── prosaic_template! ──────────────────────────────────────────────────────────
