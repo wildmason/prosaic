@@ -6,6 +6,7 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
 use crate::error::ProsaicError;
+use prosaic_common::{PipeSpec, ValueType, pipe_spec, types_compatible};
 
 /// An argument passed to a pipe transform.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -118,6 +119,29 @@ impl Template {
         let mut out = Vec::new();
         collect_partial_names(&self.segments, &mut out);
         out
+    }
+
+    /// Infer the [`ValueType`] required for each slot, based on pipe-chain flow.
+    ///
+    /// Walks every slot (including condition keys in `{?key}...{/?}` and
+    /// slots nested inside conditionals). For each slot:
+    /// - If it is used bare, its inferred type is `Any`.
+    /// - If its first pipe has input type `T`, the slot type is `T`.
+    /// - Every downstream pipe's input must match the previous pipe's output
+    ///   (using [`types_compatible`]); mismatch returns an `Err`.
+    /// - When a slot appears multiple times, the inferred types are **unified**
+    ///   by intersection: `Any ∩ T → T`, `T ∩ T → T`, and two distinct
+    ///   concrete types produce an `Err`.
+    ///
+    /// Unknown pipe names produce an `Err`. Slots inside `{>partial}` are
+    /// skipped (partials are opaque at parse time).
+    ///
+    /// Returns a `Vec<(slot_name, inferred_type)>` in unspecified order on
+    /// success, or a human-readable error string on conflict.
+    pub fn infer_types(&self) -> Result<Vec<(String, ValueType)>, String> {
+        let mut by_slot: Vec<(String, ValueType)> = Vec::new();
+        infer_segments(&self.segments, &mut by_slot)?;
+        Ok(by_slot)
     }
 
     /// Decompose this template into bare segments (literal text and bare slot
@@ -438,6 +462,79 @@ fn parse_pipe(content: &str, source: &str, position: usize) -> Result<Pipe, Pros
             arg: None,
         })
     }
+}
+
+fn infer_segments(
+    segments: &[Segment],
+    out: &mut Vec<(String, ValueType)>,
+) -> Result<(), String> {
+    for seg in segments {
+        match seg {
+            Segment::Literal(_) | Segment::Partial { .. } => {}
+            Segment::Slot { key, pipes } => {
+                let slot_ty = slot_type_from_pipes(key, pipes)?;
+                unify(out, key, slot_ty)?;
+            }
+            Segment::Conditional { condition_key, inner } => {
+                unify(out, condition_key, ValueType::Any)?;
+                infer_segments(inner, out)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn slot_type_from_pipes(key: &str, pipes: &[Pipe]) -> Result<ValueType, String> {
+    // Bare slot: unconstrained.
+    let Some(first) = pipes.first() else {
+        return Ok(ValueType::Any);
+    };
+
+    let first_spec = lookup_spec(&first.name)?;
+    let slot_ty = first_spec.input;
+    let mut current_output = first_spec.output;
+    let mut prev_name: &str = &first.name;
+
+    for next in &pipes[1..] {
+        let next_spec = lookup_spec(&next.name)?;
+        if !types_compatible(current_output, next_spec.input) {
+            return Err(format!(
+                "pipe chain mismatch on slot `{key}`: \
+                 pipe `{prev_name}` outputs {current_output:?} but pipe `{cur}` expects {expected:?}",
+                cur = next.name,
+                expected = next_spec.input,
+            ));
+        }
+        current_output = next_spec.output;
+        prev_name = &next.name;
+    }
+
+    Ok(slot_ty)
+}
+
+fn lookup_spec(name: &str) -> Result<&'static PipeSpec, String> {
+    pipe_spec(name).ok_or_else(|| format!("unknown pipe `{name}`"))
+}
+
+fn unify(
+    out: &mut Vec<(String, ValueType)>,
+    key: &str,
+    ty: ValueType,
+) -> Result<(), String> {
+    if let Some(entry) = out.iter_mut().find(|(k, _)| k == key) {
+        entry.1 = match (entry.1, ty) {
+            (ValueType::Any, t) | (t, ValueType::Any) => t,
+            (a, b) if a == b => a,
+            (a, b) => {
+                return Err(format!(
+                    "slot `{key}` has conflicting types: used as both {a:?} and {b:?}"
+                ));
+            }
+        };
+    } else {
+        out.push((key.to_string(), ty));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -796,6 +893,83 @@ mod tests {
         let names = t.pipe_names();
         assert_eq!(names, vec!["truncate"]);
         assert!(!names.iter().any(|n| n.contains(':')));
+    }
+
+    // ── infer_types tests ───────────────────────────────────────────────
+
+    use prosaic_common::ValueType;
+
+    fn types(t: &Template) -> Vec<(String, ValueType)> {
+        let mut v = t.infer_types().expect("expected successful inference");
+        v.sort_by(|a, b| a.0.cmp(&b.0));
+        v
+    }
+
+    #[test]
+    fn infer_bare_slot_is_any() {
+        let t = Template::parse("{x}").unwrap();
+        assert_eq!(types(&t), vec![("x".into(), ValueType::Any)]);
+    }
+
+    #[test]
+    fn infer_slot_with_number_pipe_is_number() {
+        let t = Template::parse("{count|pluralize:item}").unwrap();
+        assert_eq!(types(&t), vec![("count".into(), ValueType::Number)]);
+    }
+
+    #[test]
+    fn infer_slot_with_list_chain_is_list() {
+        let t = Template::parse("{items|truncate:3|join}").unwrap();
+        assert_eq!(types(&t), vec![("items".into(), ValueType::List)]);
+    }
+
+    #[test]
+    fn infer_chain_mismatch_is_error() {
+        let t = Template::parse("{x|capitalize|pluralize}").unwrap();
+        let err = t.infer_types().unwrap_err();
+        assert!(err.contains("capitalize"), "error was: {err}");
+        assert!(err.contains("pluralize"), "error was: {err}");
+    }
+
+    #[test]
+    fn infer_multi_mention_any_and_number_unifies_to_number() {
+        let t = Template::parse("{x|pluralize:item} {x}").unwrap();
+        assert_eq!(types(&t), vec![("x".into(), ValueType::Number)]);
+    }
+
+    #[test]
+    fn infer_multi_mention_conflict_is_error() {
+        let t = Template::parse("{x|pluralize:item} {x|join}").unwrap();
+        let err = t.infer_types().unwrap_err();
+        assert!(err.contains("'x'") || err.contains("`x`"), "error was: {err}");
+        assert!(err.contains("Number"), "error was: {err}");
+        assert!(err.contains("List"), "error was: {err}");
+    }
+
+    #[test]
+    fn infer_unknown_pipe_is_error() {
+        let t = Template::parse("{x|nonexistent_pipe}").unwrap();
+        let err = t.infer_types().unwrap_err();
+        assert!(err.contains("nonexistent_pipe"), "error was: {err}");
+    }
+
+    #[test]
+    fn infer_conditional_guard_slot_is_any() {
+        let t = Template::parse("{?count}hello{/?}").unwrap();
+        let ts = types(&t);
+        assert_eq!(ts, vec![("count".into(), ValueType::Any)]);
+    }
+
+    #[test]
+    fn infer_pipes_inside_conditional_are_checked() {
+        let t = Template::parse("{?count}{count|pluralize:item}{/?}").unwrap();
+        assert_eq!(types(&t), vec![("count".into(), ValueType::Number)]);
+    }
+
+    #[test]
+    fn infer_literal_only_is_empty() {
+        let t = Template::parse("no slots").unwrap();
+        assert_eq!(types(&t), vec![]);
     }
 
     // ── as_bare_slots tests ──────────────────────────────────────────────
