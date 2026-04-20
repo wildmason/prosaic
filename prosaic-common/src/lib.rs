@@ -156,6 +156,23 @@ pub const fn pipe_spec(name: &str) -> Option<&'static PipeSpec> {
     None
 }
 
+/// Look up a slot's declared [`ValueType`] in a `HasProsaicSchema`-style
+/// schema slice. `const fn` so it is usable inside compile-time assertion
+/// blocks emitted by the `prosaic_template!` macro.
+pub const fn schema_lookup(
+    schema: &[(&str, ValueType)],
+    slot: &str,
+) -> Option<ValueType> {
+    let mut i = 0;
+    while i < schema.len() {
+        if byte_eq(schema[i].0.as_bytes(), slot.as_bytes()) {
+            return Some(schema[i].1);
+        }
+        i += 1;
+    }
+    None
+}
+
 /// Byte-wise equality, usable in `const fn` (unlike `str::eq`).
 /// Internal helper — not part of the public contract.
 pub(crate) const fn byte_eq(a: &[u8], b: &[u8]) -> bool {
@@ -281,5 +298,48 @@ mod types_compatible_tests {
             types_compatible(ValueType::List, ValueType::Entity),
             types_compatible(ValueType::Entity, ValueType::List),
         );
+    }
+}
+
+#[cfg(test)]
+mod schema_lookup_tests {
+    use super::*;
+
+    const FIXTURE: &[(&str, ValueType)] = &[
+        ("name", ValueType::String),
+        ("count", ValueType::Number),
+        ("items", ValueType::List),
+    ];
+
+    #[test]
+    fn found_key_returns_type() {
+        assert_eq!(schema_lookup(FIXTURE, "name"), Some(ValueType::String));
+        assert_eq!(schema_lookup(FIXTURE, "count"), Some(ValueType::Number));
+        assert_eq!(schema_lookup(FIXTURE, "items"), Some(ValueType::List));
+    }
+
+    #[test]
+    fn missing_key_returns_none() {
+        assert_eq!(schema_lookup(FIXTURE, "absent"), None);
+    }
+
+    #[test]
+    fn empty_schema_returns_none() {
+        assert_eq!(schema_lookup(&[], "anything"), None);
+    }
+
+    #[test]
+    fn lookup_is_const_evaluable() {
+        const FOUND: Option<ValueType> = schema_lookup(FIXTURE, "count");
+        const MISSING: Option<ValueType> = schema_lookup(FIXTURE, "absent");
+        assert_eq!(FOUND, Some(ValueType::Number));
+        assert_eq!(MISSING, None);
+    }
+
+    #[test]
+    fn similar_but_longer_key_does_not_match() {
+        // Guards against accidental prefix matching in byte_eq.
+        assert_eq!(schema_lookup(FIXTURE, "namer"), None);
+        assert_eq!(schema_lookup(FIXTURE, "nam"), None);
     }
 }
