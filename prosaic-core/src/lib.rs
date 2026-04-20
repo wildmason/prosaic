@@ -35,6 +35,39 @@
 //! assert_eq!(sentence, "The class Foo was renamed to Foobar.");
 //! ```
 //!
+//! # Type-aware template validation
+//!
+//! Context types that derive `IntoContext` also get a `HasProsaicSchema`
+//! impl for free. Pair it with the `context:` argument of
+//! `prosaic_template!` to validate slot types at compile time:
+//!
+//! ```no_run
+//! use prosaic_core::{Engine, Session};
+//! use prosaic_derive::{IntoContext, prosaic_template};
+//! use prosaic_grammar_en::English;
+//!
+//! #[derive(IntoContext)]
+//! struct RenameCtx {
+//!     old_name: String,
+//!     new_name: String,
+//!     consumer_count: i64,
+//! }
+//!
+//! // Compile error if `consumer_count` were declared as `String`:
+//! let tpl = prosaic_template! {
+//!     template: "{old_name} → {new_name} ({consumer_count|pluralize:consumer})",
+//!     slots: [old_name, new_name, consumer_count],
+//!     context: RenameCtx,
+//! };
+//!
+//! let mut engine = Engine::new(English::new());
+//! engine.register_template("rename", tpl).unwrap();
+//! ```
+//!
+//! For templates loaded dynamically (JSON manifests, on-disk sources),
+//! use [`Engine::register_template_with_schema`] to get the same check
+//! at registration time.
+//!
 //! # Feature flags
 //!
 //! - `std` (default): `std::error::Error` on `ProsaicError`, `SystemTime::now()`
