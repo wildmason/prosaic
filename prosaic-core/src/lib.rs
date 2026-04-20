@@ -94,7 +94,7 @@ pub use agreement::{
     AgreementFeatures, AgreementPerson, Animacy, Case, Definiteness, Gender,
     Number as GrammaticalNumber,
 };
-pub use context::{Context, EntityValue, IntoValue, Value, entity};
+pub use context::{Context, EntityValue, HasProsaicSchema, IntoValue, Value, entity};
 pub use faithfulness::{FaithfulnessScore, PolarityDrift, score_faithfulness};
 pub use language::{
     Aspect, Conjunction, Language, Mood, Person, PluralCategory, Tense, VerbForm, Voice,

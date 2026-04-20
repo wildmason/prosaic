@@ -6,6 +6,7 @@ use alloc::vec::Vec;
 use crate::collections::HashMap;
 
 use crate::agreement::AgreementFeatures;
+use prosaic_common::ValueType;
 
 /// A value that can be inserted into a rendering context.
 ///
@@ -415,6 +416,21 @@ impl IntoContext for &Context {
     }
 }
 
+/// Compile-time schema for a context type.
+///
+/// Deriving `#[derive(IntoContext)]` automatically implements this trait
+/// using the field names and Rust types of the struct. Hand-written impls
+/// are also supported for types that need `ValueType::Entity` slots or
+/// other mappings the derive does not produce.
+///
+/// The `PROSAIC_SCHEMA` constant is queryable at const evaluation time, so
+/// the `prosaic_template!` macro can emit per-slot assertions against it
+/// using [`prosaic_common::schema_lookup`] and
+/// [`prosaic_common::types_compatible`].
+pub trait HasProsaicSchema {
+    const PROSAIC_SCHEMA: &'static [(&'static str, ValueType)];
+}
+
 #[cfg(test)]
 mod into_value_tests {
     use super::*;
@@ -769,5 +785,32 @@ mod entity_builder_tests {
         let ev1 = entity("TestService").fem();
         let ev2 = ev1.clone();
         assert_eq!(ev1.build(), ev2.into_value());
+    }
+}
+
+#[cfg(test)]
+mod has_schema_tests {
+    use super::*;
+    use prosaic_common::{ValueType, schema_lookup};
+
+    struct Manual;
+
+    impl HasProsaicSchema for Manual {
+        const PROSAIC_SCHEMA: &'static [(&'static str, ValueType)] = &[
+            ("count", ValueType::Number),
+            ("name", ValueType::String),
+        ];
+    }
+
+    #[test]
+    fn manual_impl_exposes_schema() {
+        assert_eq!(Manual::PROSAIC_SCHEMA.len(), 2);
+    }
+
+    #[test]
+    fn schema_is_const_queryable() {
+        const T: Option<ValueType> =
+            schema_lookup(<Manual as HasProsaicSchema>::PROSAIC_SCHEMA, "count");
+        assert_eq!(T, Some(ValueType::Number));
     }
 }
