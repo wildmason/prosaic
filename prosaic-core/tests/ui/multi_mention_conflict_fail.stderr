@@ -1,0 +1,5 @@
+error: slot `x` has conflicting types: used as both Number and List
+ --> tests/ui/multi_mention_conflict_fail.rs:5:19
+  |
+5 |         template: "{x|pluralize:item} and {x|join}",
+  |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

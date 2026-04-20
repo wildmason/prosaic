@@ -1,0 +1,10 @@
+error[E0080]: evaluation panicked: prosaic_template: slot `count` is not declared in context `Ctx` (no matching field)
+  --> tests/ui/missing_slot_in_schema_fail.rs:10:16
+   |
+10 |       let _tpl = prosaic_template! {
+   |  ________________^
+11 | |         template: "{count|pluralize:item}",
+12 | |         slots: [count],
+13 | |         context: Ctx,
+14 | |     };
+   | |_____^ evaluation of `main::_` failed here

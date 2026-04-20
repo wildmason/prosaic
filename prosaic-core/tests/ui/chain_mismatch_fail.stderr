@@ -1,0 +1,5 @@
+error: pipe chain mismatch on slot `x`: pipe `capitalize` outputs String but pipe `pluralize` expects Number
+ --> tests/ui/chain_mismatch_fail.rs:5:19
+  |
+5 |         template: "{x|capitalize|pluralize}",
+  |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^
