@@ -132,6 +132,10 @@ pub const PIPE_SPECS: &[PipeSpec] = &[
 /// The narrowing behaviour during unification (e.g. `Number ∩ Any → Number`) is
 /// handled by the caller (see `Template::infer_types`) — this function only
 /// answers the binary "is this assignment legal?" question.
+// Clippy wants `matches!(...)` here, but `matches!` is not stable in `const fn`
+// contexts — and this function MUST stay `const fn` because it is called from
+// the compile-time assertion blocks emitted by `prosaic_template!`.
+#[allow(clippy::match_like_matches_macro)]
 pub const fn types_compatible(actual: ValueType, expected: ValueType) -> bool {
     match (actual, expected) {
         (ValueType::Any, _) | (_, ValueType::Any) => true,
