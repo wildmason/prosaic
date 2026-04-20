@@ -1863,6 +1863,16 @@ impl Engine {
         language: Option<&str>,
     ) -> Result<(), ProsaicError> {
         let template = Template::parse(source)?;
+
+        // Chain-level sanity check: pipe n's output must match pipe n+1's input,
+        // and multi-mention slots must unify. This turns what used to be a
+        // render-time `InvalidPipe` into a register-time `TemplateParseError`.
+        template.infer_types().map_err(|reason| ProsaicError::TemplateParseError {
+            template: source.to_string(),
+            position: 0,
+            reason,
+        })?;
+
         self.templates.entry(key.to_string()).or_default().push(
             SalientTemplate::new(salience, template, language.map(|s| s.to_string())),
         );
@@ -4127,15 +4137,17 @@ mod tests {
 
     #[test]
     fn unknown_pipe_is_error() {
+        // Since infer_types now runs at register time, an unknown pipe is caught
+        // before the template is stored — the error surfaces as a TemplateParseError
+        // at register_template, not as an InvalidPipe at render time.
         let mut engine = test_engine();
-        engine.register_template("t", "{name|nonexistent}").unwrap();
-
-        let mut session = test_session();
-        let mut ctx = Context::new();
-        ctx.insert("name", Value::String("test".into()));
-
-        let result = engine.render(&mut session, "t", &ctx);
-        assert!(matches!(result, Err(ProsaicError::InvalidPipe { .. })));
+        let err = engine
+            .register_template("t", "{name|nonexistent}")
+            .unwrap_err();
+        assert!(
+            matches!(err, ProsaicError::TemplateParseError { .. }),
+            "expected TemplateParseError for unknown pipe, got {err:?}"
+        );
     }
 
     #[test]
@@ -6895,5 +6907,77 @@ mod manifest_loader {
     pub struct ManifestPartial {
         pub name: String,
         pub body: String,
+    }
+}
+
+#[cfg(test)]
+mod register_template_type_tests {
+    use super::*;
+    use crate::language::{Conjunction, Language, Person, Tense};
+
+    /// Minimal language for register-time type-checking tests.
+    /// These tests never render, so the implementation bodies are irrelevant.
+    struct TestLang;
+
+    impl Language for TestLang {
+        fn pluralize(&self, word: &str, count: usize) -> String {
+            if count == 1 { word.to_string() } else { format!("{word}s") }
+        }
+        fn singularize(&self, word: &str) -> String {
+            word.strip_suffix('s').unwrap_or(word).to_string()
+        }
+        fn article(&self, _word: &str) -> &str { "a" }
+        fn conjugate(&self, verb: &str, _t: Tense, _p: Person) -> String {
+            verb.to_string()
+        }
+        fn past_participle(&self, verb: &str) -> String { format!("{verb}ed") }
+        fn present_participle(&self, verb: &str) -> String { format!("{verb}ing") }
+        fn join_list(&self, items: &[&str], conj: Conjunction) -> String {
+            let c = match conj { Conjunction::And => "and", Conjunction::Or => "or" };
+            items.join(&format!(" {c} "))
+        }
+        fn ordinal(&self, n: usize) -> String { format!("{n}th") }
+        fn number_to_words(&self, n: usize) -> String { format!("<{n}>") }
+    }
+
+    #[test]
+    fn register_template_rejects_chain_mismatch() {
+        let mut engine = Engine::new(TestLang);
+        let err = engine
+            .register_template("bad", "{x|capitalize|pluralize}")
+            .unwrap_err();
+        match err {
+            ProsaicError::TemplateParseError { reason, .. } => {
+                assert!(
+                    reason.contains("chain mismatch"),
+                    "unexpected reason: {reason}"
+                );
+            }
+            other => panic!("expected TemplateParseError, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn register_template_rejects_multi_mention_conflict() {
+        let mut engine = Engine::new(TestLang);
+        let err = engine
+            .register_template("bad", "{x|pluralize:item} and {x|join}")
+            .unwrap_err();
+        assert!(matches!(err, ProsaicError::TemplateParseError { .. }));
+    }
+
+    #[test]
+    fn register_template_accepts_valid_template() {
+        let mut engine = Engine::new(TestLang);
+        engine
+            .register_template("good", "The {name} has {count|pluralize:item}")
+            .unwrap();
+    }
+
+    #[test]
+    fn register_template_accepts_bare_slots() {
+        // No pipes => no chain checks to fail.
+        let mut engine = Engine::new(TestLang);
+        engine.register_template("bare", "Hello {name}").unwrap();
     }
 }
