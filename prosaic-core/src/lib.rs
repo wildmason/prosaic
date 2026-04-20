@@ -124,6 +124,7 @@ pub use reg::{
     EntityDescriptor, EntityRegistry, SubgraphDescription, distinguishing_attributes,
     distinguishing_subgraph,
 };
+pub use prosaic_common::{PipeSpec, ValueType, pipe_spec, schema_lookup, types_compatible, PIPE_SPECS};
 pub use rst::RstRelation;
 pub use salience::{Salience, SalienceThresholds};
 pub use session::Session;
@@ -131,3 +132,23 @@ pub use synonyms::SynonymRegistry;
 pub use template::{BareSegment, Pipe, PipeArg, Template};
 #[cfg(feature = "time")]
 pub use time::format_relative;
+
+#[cfg(test)]
+mod common_reexport_tests {
+    use super::*;
+
+    #[test]
+    fn value_type_is_reexported() {
+        let _ = ValueType::Number;
+    }
+
+    #[test]
+    fn pipe_specs_is_reexported_with_all_pipes() {
+        assert_eq!(PIPE_SPECS.len(), 19);
+    }
+
+    #[test]
+    fn types_compatible_is_reexported() {
+        assert!(types_compatible(ValueType::Any, ValueType::Number));
+    }
+}
