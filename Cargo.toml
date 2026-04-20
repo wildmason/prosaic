@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "prosaic-common",
     "prosaic-core",
     "prosaic-grammar-de",
     "prosaic-grammar-en",
