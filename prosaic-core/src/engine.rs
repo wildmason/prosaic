@@ -1880,6 +1880,59 @@ impl Engine {
         Ok(())
     }
 
+    /// Register a template and cross-check every slot's inferred type
+    /// against the static schema of the `T` context type.
+    ///
+    /// Slot types inferred from pipe chains (e.g. `{count|pluralize:item}`
+    /// implies `count: Number`) must be compatible with `T`'s schema. Use
+    /// this when loading templates dynamically (from JSON, disk, etc.) and
+    /// you want the same strong guarantees the `prosaic_template!` macro
+    /// provides at compile time.
+    pub fn register_template_with_schema<T>(
+        &mut self,
+        key: &str,
+        source: &str,
+    ) -> Result<(), ProsaicError>
+    where
+        T: crate::HasProsaicSchema,
+    {
+        let template = Template::parse(source)?;
+        let inferred = template
+            .infer_types()
+            .map_err(|reason| ProsaicError::TemplateParseError {
+                template: source.to_string(),
+                position: 0,
+                reason,
+            })?;
+
+        for (slot, expected) in &inferred {
+            let actual = crate::schema_lookup(T::PROSAIC_SCHEMA, slot).ok_or_else(|| {
+                ProsaicError::TemplateParseError {
+                    template: source.to_string(),
+                    position: 0,
+                    reason: format!(
+                        "slot `{slot}` required by template is not declared in context schema"
+                    ),
+                }
+            })?;
+            if !crate::types_compatible(actual, *expected) {
+                return Err(ProsaicError::TemplateParseError {
+                    template: source.to_string(),
+                    position: 0,
+                    reason: format!(
+                        "slot `{slot}` context type {actual:?} is not compatible with template-required {expected:?}"
+                    ),
+                });
+            }
+        }
+
+        self.templates.entry(key.to_string()).or_default().push(
+            SalientTemplate::new(Salience::Medium, template, None),
+        );
+        self.rr_initial.entry(key.to_string()).or_insert(0);
+        Ok(())
+    }
+
     /// Check whether a template is registered under the given key.
     ///
     /// Pure read, no mutation. Useful for callers that want to skip
