@@ -79,12 +79,16 @@ body = "{name|refer} was modified"
 
 [[variants]]
 salience = "medium"
-body = "{name|refer} was modified, affecting {consumer_count} {consumer_count|pluralize:consumer}"
+body = "{name|refer} was modified{?consumer_count}, affecting {consumer_count} {consumer_count|pluralize:consumer}{/?}"
 "#,
             )?;
             write(
                 &dir.join("fixtures/userservice-modified.json"),
                 r#"{"name": "UserService", "entity_type": "class", "consumer_count": 6}"#,
+            )?;
+            write(
+                &dir.join("fixtures/authguard-added.json"),
+                r#"{"name": "AuthGuard", "entity_type": "class"}"#,
             )?;
             write(
                 &dir.join("tests/sample-changeset.toml"),
@@ -97,6 +101,15 @@ context = { name = "AuthGuard", entity_type = "class" }
 [[events]]
 template = "code.modified"
 context = { name = "UserService", entity_type = "class", consumer_count = 6 }
+"#,
+            )?;
+            write(
+                &dir.join("tests/authguard-added.toml"),
+                r#"name = "authguard-added"
+
+[[events]]
+template = "code.added"
+context = { name = "AuthGuard", entity_type = "class" }
 "#,
             )?;
         }
@@ -167,7 +180,21 @@ mod tests {
         assert!(dir.join("templates/code.added.toml").exists());
         assert!(dir.join("templates/code.modified.toml").exists());
         assert!(dir.join("fixtures/userservice-modified.json").exists());
+        assert!(dir.join("fixtures/authguard-added.json").exists());
         assert!(dir.join("tests/sample-changeset.toml").exists());
+        assert!(dir.join("tests/authguard-added.toml").exists());
+
+        let project = crate::Project::load_from_dir(&dir).unwrap();
+        assert_eq!(project.fixtures.len(), 2);
+        assert_eq!(project.scenarios.len(), 2);
+
+        let engine = project.into_engine().unwrap();
+        let authguard = project.fixtures.get("authguard-added").unwrap();
+        let mut session = prosaic_core::Session::new();
+        let output = engine
+            .render(&mut session, "code.modified", authguard)
+            .unwrap();
+        assert!(output.contains("AuthGuard"));
     }
 
     #[test]
