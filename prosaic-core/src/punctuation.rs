@@ -5,6 +5,11 @@
 //! are disabled by default since they change output characters that some
 //! downstream consumers (code blocks, JSON payloads) won't want touched.
 
+#[cfg(not(feature = "std"))]
+use alloc::string::{String, ToString};
+#[cfg(not(feature = "std"))]
+use alloc::vec::Vec;
+
 /// Convert straight quotes into curly (typographic) quotes using a simple
 /// open/close alternation. Honours nested and adjacent punctuation; the
 /// state machine is naive but robust enough for standard prose.

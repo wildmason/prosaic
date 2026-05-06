@@ -147,8 +147,7 @@ impl ProsaicEngine {
     #[wasm_bindgen(js_name = scoreFaithfulness)]
     pub fn score_faithfulness(&self, output: &str, context: &JsValue) -> Result<JsValue, JsValue> {
         let ctx = js_object_to_context(context)?;
-        let score =
-            prosaic_core::score_faithfulness(output, &ctx, &[], self.inner.language());
+        let score = prosaic_core::score_faithfulness(output, &ctx, &[], self.inner.language());
         serde_wasm_bindgen::to_value(&score)
             .map_err(|e| JsValue::from_str(&format!("encode FaithfulnessScore: {e}")))
     }
@@ -173,17 +172,7 @@ impl ProsaicEngine {
     /// Set the BCP-47 language preference for variant selection.
     #[wasm_bindgen(js_name = setLanguagePreference)]
     pub fn set_language_preference(&mut self, lang: &str) {
-        // Builder consumes self, so swap with a fresh engine
-        // configured the same way then with language preference.
-        // We rebuild the inner engine; templates are preserved on
-        // the existing engine, so this is a separate API: callers
-        // should set this BEFORE registering templates or loading a
-        // manifest.
-        let mut new_engine = Engine::new(English::new())
-            .strictness(Strictness::Strict)
-            .variation(Variation::Fixed)
-            .language_preference(lang);
-        std::mem::swap(&mut self.inner, &mut new_engine);
+        self.inner.set_language_preference(lang);
     }
 
     /// Render a batch of events as a single aggregated paragraph.
@@ -363,6 +352,24 @@ mod tests {
             .inner
             .render(&mut session.inner, "greet", &ctx)
             .expect("render must not fail");
+        assert_eq!(result, "Hello, world!");
+    }
+
+    #[test]
+    fn set_language_preference_preserves_registered_templates() {
+        let mut engine = ProsaicEngine::new();
+        engine
+            .register_template("greet", "Hello, {name}!")
+            .expect("template registration must not fail");
+        engine.set_language_preference("en");
+
+        let mut session = ProsaicSession::new();
+        let mut ctx = Context::new();
+        ctx.insert("name", Value::String("world".into()));
+        let result = engine
+            .inner
+            .render(&mut session.inner, "greet", &ctx)
+            .expect("render must not fail after changing language preference");
         assert_eq!(result, "Hello, world!");
     }
 

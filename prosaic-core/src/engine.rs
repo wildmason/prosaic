@@ -16,6 +16,7 @@ use crate::collections::{HashMap, HashSet, new_map, new_set};
 use crate::faithfulness::score_faithfulness;
 use crate::session::Session;
 
+use crate::agreement::AgreementFeatures;
 use crate::antonyms::{AntonymRegistry, insert_not};
 use crate::context::{Context, IntoContext, Value};
 use crate::discourse::{ListStyle, ReferenceForm, Transition};
@@ -26,7 +27,6 @@ use crate::language::{Conjunction, Language, Person, PluralCategory, VerbForm};
 use crate::length::split_long_in_place;
 #[cfg(feature = "polish")]
 use crate::punctuation::smart_quotes_in_place;
-use crate::agreement::AgreementFeatures;
 use crate::quantify::{QuantifyMode, parse_mode as parse_quantify_mode, quantify as quantify_fn};
 #[cfg(feature = "reg")]
 use crate::reg::{
@@ -1191,8 +1191,7 @@ impl<'e, 's> RenderCtx<'e, 's> {
         if total_key.is_empty() {
             return Err(ProsaicError::InvalidPipe {
                 pipe: "proportion".to_string(),
-                reason: "missing total context key — use `proportion:total_key[:noun]`"
-                    .to_string(),
+                reason: "missing total context key — use `proportion:total_key[:noun]`".to_string(),
             });
         }
 
@@ -1216,10 +1215,10 @@ impl<'e, 's> RenderCtx<'e, 's> {
             })?;
 
         let features = AgreementFeatures::default();
-        let phrase =
-            self.engine
-                .language
-                .proportion_phrase(matching, total, noun, &features);
+        let phrase = self
+            .engine
+            .language
+            .proportion_phrase(matching, total, noun, &features);
         Ok(Value::String(phrase))
     }
 
@@ -1479,6 +1478,13 @@ impl Engine {
     pub fn language_preference(mut self, lang: impl Into<String>) -> Self {
         self.language_preference = Some(lang.into());
         self
+    }
+
+    /// Update the BCP-47 language code used to prefer language-tagged
+    /// variants without rebuilding the engine or dropping registered
+    /// templates.
+    pub fn set_language_preference(&mut self, lang: impl Into<String>) {
+        self.language_preference = Some(lang.into());
     }
 
     /// Set the strictness mode for missing slot handling.
@@ -1829,9 +1835,13 @@ impl Engine {
             return Err(ProsaicError::TemplateParseError {
                 template: "(manifest)".to_string(),
                 position: 0,
-                reason: format!("unsupported manifest schema version {}", bundle.schema_version),
+                reason: format!(
+                    "unsupported manifest schema version {}",
+                    bundle.schema_version
+                ),
             });
         }
+        apply_manifest_engine_settings(self, &bundle.engine)?;
         self.language_preference = Some(bundle.language);
         for partial in bundle.partials {
             self.register_partial(&partial.name, &partial.body)?;
@@ -1840,8 +1850,18 @@ impl Engine {
             for variant in template.variants {
                 let salience = match variant.salience.as_str() {
                     "low" => Salience::Low,
+                    "medium" => Salience::Medium,
                     "high" => Salience::High,
-                    _ => Salience::Medium,
+                    other => {
+                        return Err(ProsaicError::TemplateParseError {
+                            template: "(manifest)".to_string(),
+                            position: 0,
+                            reason: format!(
+                                "unknown salience `{other}` for template `{}`",
+                                template.key
+                            ),
+                        });
+                    }
                 };
                 self.register_template_with_language_at(
                     &template.key,
@@ -1867,15 +1887,22 @@ impl Engine {
         // Chain-level sanity check: pipe n's output must match pipe n+1's input,
         // and multi-mention slots must unify. This turns what used to be a
         // render-time `InvalidPipe` into a register-time `TemplateParseError`.
-        template.infer_types().map_err(|reason| ProsaicError::TemplateParseError {
-            template: source.to_string(),
-            position: 0,
-            reason,
-        })?;
+        template
+            .infer_types()
+            .map_err(|reason| ProsaicError::TemplateParseError {
+                template: source.to_string(),
+                position: 0,
+                reason,
+            })?;
 
-        self.templates.entry(key.to_string()).or_default().push(
-            SalientTemplate::new(salience, template, language.map(|s| s.to_string())),
-        );
+        self.templates
+            .entry(key.to_string())
+            .or_default()
+            .push(SalientTemplate::new(
+                salience,
+                template,
+                language.map(|s| s.to_string()),
+            ));
         self.rr_initial.entry(key.to_string()).or_insert(0);
         Ok(())
     }
@@ -1898,13 +1925,14 @@ impl Engine {
         T: crate::HasProsaicSchema + crate::IntoContext,
     {
         let template = Template::parse(source)?;
-        let inferred = template
-            .infer_types()
-            .map_err(|reason| ProsaicError::TemplateParseError {
-                template: source.to_string(),
-                position: 0,
-                reason,
-            })?;
+        let inferred =
+            template
+                .infer_types()
+                .map_err(|reason| ProsaicError::TemplateParseError {
+                    template: source.to_string(),
+                    position: 0,
+                    reason,
+                })?;
 
         let ty = core::any::type_name::<T>();
         for (slot, expected) in &inferred {
@@ -1928,9 +1956,10 @@ impl Engine {
             }
         }
 
-        self.templates.entry(key.to_string()).or_default().push(
-            SalientTemplate::new(Salience::Medium, template, None),
-        );
+        self.templates
+            .entry(key.to_string())
+            .or_default()
+            .push(SalientTemplate::new(Salience::Medium, template, None));
         self.rr_initial.entry(key.to_string()).or_insert(0);
         Ok(())
     }
@@ -6835,7 +6864,7 @@ mod render_batch_with_relations_tests {
         // Because the RST render did NOT consume any connective, the
         // next render must still pick the first available ("Similarly,").
         let exp = engine
-            .render_explained(&mut s, "t", &ctx_with_entity("Baz"))
+            .render_explained(&mut s, "t", ctx_with_entity("Baz"))
             .unwrap();
         assert_eq!(
             exp.connective,
@@ -6886,9 +6915,88 @@ mod engine_thread_safety {
     };
 }
 
+#[cfg(feature = "serde")]
+fn apply_manifest_engine_settings(
+    engine: &mut Engine,
+    settings: &manifest_loader::ManifestEngineSettings,
+) -> Result<(), ProsaicError> {
+    engine.strictness = match settings.strictness.as_str() {
+        "" | "strict" => Strictness::Strict,
+        "lenient" => Strictness::Lenient,
+        "silent" => Strictness::Silent,
+        other => {
+            return Err(ProsaicError::TemplateParseError {
+                template: "(manifest)".to_string(),
+                position: 0,
+                reason: format!("unknown strictness `{other}`"),
+            });
+        }
+    };
+
+    engine.variation = match settings.variation.as_str() {
+        "" | "fixed" => Variation::Fixed,
+        "round_robin" | "round-robin" => Variation::RoundRobin,
+        "random" => Variation::Random,
+        other => {
+            return Err(ProsaicError::TemplateParseError {
+                template: "(manifest)".to_string(),
+                position: 0,
+                reason: format!("unknown variation `{other}`"),
+            });
+        }
+    };
+
+    #[cfg(feature = "polish")]
+    {
+        engine.smart_quotes = settings.smart_quotes;
+        engine.max_sentence_length = if settings.max_sentence_length > 0 {
+            Some(settings.max_sentence_length)
+        } else {
+            None
+        };
+    }
+
+    #[cfg(not(feature = "polish"))]
+    if settings.smart_quotes || settings.max_sentence_length > 0 {
+        return Err(ProsaicError::TemplateParseError {
+            template: "(manifest)".to_string(),
+            position: 0,
+            reason: "manifest uses polish settings, but prosaic-core was built without the `polish` feature".to_string(),
+        });
+    }
+
+    if settings.faithfulness_min < 0.0 {
+        return Err(ProsaicError::TemplateParseError {
+            template: "(manifest)".to_string(),
+            position: 0,
+            reason: format!(
+                "faithfulness_min must be non-negative, got {}",
+                settings.faithfulness_min
+            ),
+        });
+    }
+    engine.faithfulness_threshold = if settings.faithfulness_min > 0.0 {
+        Some(settings.faithfulness_min as f32)
+    } else {
+        None
+    };
+
+    if let Some(thresholds) = &settings.salience_thresholds {
+        engine.salience_thresholds = SalienceThresholds {
+            low_max: thresholds.low_max,
+            high_min: thresholds.high_min,
+        };
+    }
+
+    Ok(())
+}
 
 #[cfg(feature = "serde")]
 mod manifest_loader {
+    #[cfg(not(feature = "std"))]
+    use alloc::string::{String, ToString};
+    #[cfg(not(feature = "std"))]
+    use alloc::vec::Vec;
     use serde::Deserialize;
 
     #[derive(Deserialize)]
@@ -6906,8 +7014,8 @@ mod manifest_loader {
         pub partials: Vec<ManifestPartial>,
     }
 
-    // Fields are deserialized from manifest JSON for round-trip compatibility;
-    // the engine reads them via `load_manifest` but does not yet act on all of them.
+    // Fields are deserialized from manifest JSON and applied by
+    // `Engine::load_manifest`.
     #[allow(dead_code)]
     #[derive(Deserialize, Default)]
     pub struct ManifestEngineSettings {
@@ -6921,6 +7029,14 @@ mod manifest_loader {
         pub max_sentence_length: usize,
         #[serde(default)]
         pub faithfulness_min: f64,
+        #[serde(default)]
+        pub salience_thresholds: Option<ManifestSalienceThresholds>,
+    }
+
+    #[derive(Deserialize)]
+    pub struct ManifestSalienceThresholds {
+        pub low_max: i64,
+        pub high_min: i64,
     }
 
     #[derive(Deserialize)]
@@ -6963,23 +7079,40 @@ mod register_template_type_tests {
 
     impl Language for TestLang {
         fn pluralize(&self, word: &str, count: usize) -> String {
-            if count == 1 { word.to_string() } else { format!("{word}s") }
+            if count == 1 {
+                word.to_string()
+            } else {
+                format!("{word}s")
+            }
         }
         fn singularize(&self, word: &str) -> String {
             word.strip_suffix('s').unwrap_or(word).to_string()
         }
-        fn article(&self, _word: &str) -> &str { "a" }
+        fn article(&self, _word: &str) -> &str {
+            "a"
+        }
         fn conjugate(&self, verb: &str, _t: Tense, _p: Person) -> String {
             verb.to_string()
         }
-        fn past_participle(&self, verb: &str) -> String { format!("{verb}ed") }
-        fn present_participle(&self, verb: &str) -> String { format!("{verb}ing") }
+        fn past_participle(&self, verb: &str) -> String {
+            format!("{verb}ed")
+        }
+        fn present_participle(&self, verb: &str) -> String {
+            format!("{verb}ing")
+        }
         fn join_list(&self, items: &[&str], conj: Conjunction) -> String {
-            let c = match conj { Conjunction::And => "and", Conjunction::Or => "or" };
+            let c = match conj {
+                Conjunction::And => "and",
+                Conjunction::Or => "or",
+            };
             items.join(&format!(" {c} "))
         }
-        fn ordinal(&self, n: usize) -> String { format!("{n}th") }
-        fn number_to_words(&self, n: usize) -> String { format!("<{n}>") }
+        fn ordinal(&self, n: usize) -> String {
+            format!("{n}th")
+        }
+        fn number_to_words(&self, n: usize) -> String {
+            format!("<{n}>")
+        }
     }
 
     #[test]

@@ -282,10 +282,10 @@ mod types_compatible_tests {
 
     #[test]
     fn compat_is_const_evaluable() {
-        const OK: bool = types_compatible(ValueType::Number, ValueType::Number);
-        const NOT_OK: bool = types_compatible(ValueType::Number, ValueType::List);
-        assert!(OK);
-        assert!(!NOT_OK);
+        const {
+            assert!(types_compatible(ValueType::Number, ValueType::Number));
+            assert!(!types_compatible(ValueType::Number, ValueType::List));
+        }
     }
 
     #[test]

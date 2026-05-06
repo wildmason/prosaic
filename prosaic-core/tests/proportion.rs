@@ -36,7 +36,7 @@ fn crucible_use_case_both_collapse() {
         .unwrap();
     let mut session = Session::new();
     let out = engine
-        .render(&mut session, "summary", &ctx_pair(2, 2))
+        .render(&mut session, "summary", ctx_pair(2, 2))
         .unwrap();
     assert_eq!(
         out,
@@ -57,7 +57,7 @@ fn crucible_use_case_all_n_collapse() {
         .unwrap();
     let mut session = Session::new();
     let out = engine
-        .render(&mut session, "summary", &ctx_pair(13, 13))
+        .render(&mut session, "summary", ctx_pair(13, 13))
         .unwrap();
     assert_eq!(
         out,
@@ -78,7 +78,7 @@ fn crucible_use_case_partial_keeps_n_of_t() {
         .unwrap();
     let mut session = Session::new();
     let out = engine
-        .render(&mut session, "summary", &ctx_pair(3, 13))
+        .render(&mut session, "summary", ctx_pair(3, 13))
         .unwrap();
     assert_eq!(
         out,
@@ -96,7 +96,9 @@ fn bare_one_of_one_uses_singular_noun() {
         .register_template("files", "{matching|proportion:total:modified file}")
         .unwrap();
     let mut session = Session::new();
-    let out = engine.render(&mut session, "files", &ctx_pair(1, 1)).unwrap();
+    let out = engine
+        .render(&mut session, "files", ctx_pair(1, 1))
+        .unwrap();
     assert_eq!(out, "the only modified file");
 }
 
@@ -107,7 +109,9 @@ fn bare_zero_zero_with_noun_reads_no_plural() {
         .register_template("files", "{matching|proportion:total:modified file}")
         .unwrap();
     let mut session = Session::new();
-    let out = engine.render(&mut session, "files", &ctx_pair(0, 0)).unwrap();
+    let out = engine
+        .render(&mut session, "files", ctx_pair(0, 0))
+        .unwrap();
     assert_eq!(out, "no modified files");
 }
 
@@ -118,7 +122,9 @@ fn bare_zero_of_n_with_noun_reads_none_of_the_n() {
         .register_template("files", "{matching|proportion:total:modified file}")
         .unwrap();
     let mut session = Session::new();
-    let out = engine.render(&mut session, "files", &ctx_pair(0, 5)).unwrap();
+    let out = engine
+        .render(&mut session, "files", ctx_pair(0, 5))
+        .unwrap();
     assert_eq!(out, "none of the 5 modified files");
 }
 
@@ -131,7 +137,7 @@ fn bare_both_collapse_no_noun() {
         .register_template("p", "{matching|proportion:total}")
         .unwrap();
     let mut session = Session::new();
-    let out = engine.render(&mut session, "p", &ctx_pair(2, 2)).unwrap();
+    let out = engine.render(&mut session, "p", ctx_pair(2, 2)).unwrap();
     assert_eq!(out, "both");
 }
 
@@ -142,7 +148,7 @@ fn bare_all_n_no_noun() {
         .register_template("p", "{matching|proportion:total}")
         .unwrap();
     let mut session = Session::new();
-    let out = engine.render(&mut session, "p", &ctx_pair(7, 7)).unwrap();
+    let out = engine.render(&mut session, "p", ctx_pair(7, 7)).unwrap();
     assert_eq!(out, "all 7");
 }
 
@@ -153,7 +159,7 @@ fn bare_partial_no_noun() {
         .register_template("p", "{matching|proportion:total}")
         .unwrap();
     let mut session = Session::new();
-    let out = engine.render(&mut session, "p", &ctx_pair(3, 7)).unwrap();
+    let out = engine.render(&mut session, "p", ctx_pair(3, 7)).unwrap();
     assert_eq!(out, "3 of 7");
 }
 
@@ -203,7 +209,7 @@ fn pipe_with_no_argument_errors() {
         .unwrap();
     let mut session = Session::new();
     let err = engine
-        .render(&mut session, "p", &ctx_pair(2, 2))
+        .render(&mut session, "p", ctx_pair(2, 2))
         .unwrap_err();
     let msg = format!("{err}");
     assert!(

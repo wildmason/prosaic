@@ -6,6 +6,11 @@
 //! gets a lightweight transform so it stands on its own grammatically
 //! (`, which impacts 6 consumers` → `This impacts 6 consumers.`).
 
+#[cfg(not(feature = "std"))]
+use alloc::format;
+#[cfg(not(feature = "std"))]
+use alloc::string::{String, ToString};
+
 /// Try to split `sentence` so each piece fits within `max_chars`.
 ///
 /// Returns the input unchanged if it's already short enough, or if no
