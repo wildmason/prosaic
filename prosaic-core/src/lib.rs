@@ -109,9 +109,9 @@ mod hedge;
 mod language;
 #[cfg(feature = "polish")]
 mod length;
+mod proportion;
 #[cfg(feature = "polish")]
 mod punctuation;
-mod proportion;
 mod quantify;
 #[cfg(feature = "reg")]
 mod reg;
@@ -148,22 +148,22 @@ pub use error::ProsaicError;
 pub use hedge::{HedgeMode, hedge};
 #[cfg(feature = "polish")]
 pub use length::split_long;
+pub use proportion::english_proportion;
+pub use prosaic_common::{ValueType, pipe_spec, schema_lookup, types_compatible};
 #[cfg(feature = "polish")]
 pub use punctuation::{em_dash_nested_parentheticals, smart_quotes};
-pub use proportion::english_proportion;
 pub use quantify::{QuantifyMode, quantify};
 #[cfg(feature = "reg")]
 pub use reg::{
     EntityDescriptor, EntityRegistry, SubgraphDescription, distinguishing_attributes,
     distinguishing_subgraph,
 };
-pub use prosaic_common::{ValueType, pipe_spec, schema_lookup, types_compatible};
 
 // Implementation details consumed by the `prosaic_template!` macro at
 // expansion time. Not intended for direct use — the public contract goes
 // through `ValueType` and `HasProsaicSchema`.
 #[doc(hidden)]
-pub use prosaic_common::{PipeSpec, PIPE_SPECS};
+pub use prosaic_common::{PIPE_SPECS, PipeSpec};
 pub use rst::RstRelation;
 pub use salience::{Salience, SalienceThresholds};
 pub use session::Session;
@@ -183,7 +183,7 @@ mod common_reexport_tests {
 
     #[test]
     fn pipe_specs_length_matches_registry() {
-        assert_eq!(PIPE_SPECS.len(), 19);
+        assert_eq!(PIPE_SPECS.len(), 20);
     }
 
     #[test]
@@ -210,7 +210,11 @@ mod common_reexport_tests {
     #[test]
     fn pipe_spec_struct_is_constructible_via_reexport() {
         // Confirms the struct re-export is usable as a type, not just a name.
-        let p = PipeSpec { name: "test", input: ValueType::Any, output: ValueType::String };
+        let p = PipeSpec {
+            name: "test",
+            input: ValueType::Any,
+            output: ValueType::String,
+        };
         assert_eq!(p.name, "test");
         assert_eq!(p.input, ValueType::Any);
     }

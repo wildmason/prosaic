@@ -22,6 +22,7 @@ fn save_template_round_trips() {
         variants: vec![Variant {
             salience: "medium".to_string(),
             language: Some("en".to_string()),
+            style: None,
             description: String::new(),
             body: "{name} was added".to_string(),
         }],

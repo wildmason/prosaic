@@ -29,6 +29,7 @@
 //! --strategy <strategy>  Batch strategy: sequential (default), by-entity, by-action
 //! --smart-quotes         Enable typographic quote substitution
 //! --max-length <N>       Cap each sentence at N characters, splitting at natural boundaries
+//! --style <name>         Prefer template variants tagged with this free-form style
 //! --explain              Emit a JSON RenderExplanation per line instead of plain text
 //! --strict | --lenient | --silent
 //!                         Missing-slot behavior (default: strict)
@@ -68,6 +69,7 @@ struct Config {
     strategy: Strategy,
     smart_quotes: bool,
     max_length: Option<usize>,
+    style: Option<String>,
     explain: bool,
     strictness: Strictness,
 }
@@ -82,6 +84,7 @@ impl Default for Config {
             strategy: Strategy::Sequential,
             smart_quotes: false,
             max_length: None,
+            style: None,
             explain: false,
             strictness: Strictness::Strict,
         }
@@ -371,6 +374,10 @@ fn parse_args() -> Result<Config, String> {
                         .map_err(|_| format!("--max-length: `{v}` is not a valid number"))?,
                 );
             }
+            "--style" => {
+                i += 1;
+                cfg.style = Some(args.get(i).ok_or("--style requires a value")?.clone());
+            }
             "--preset" => {
                 i += 1;
                 let v = args.get(i).ok_or("--preset requires a value")?.clone();
@@ -425,6 +432,7 @@ OPTIONS:
     --strategy <mode>      Batch mode: sequential, by-entity, by-action (default: sequential)
     --smart-quotes         Enable typographic quote substitution
     --max-length <N>       Cap each sentence at N characters
+    --style <name>         Prefer variants tagged with a free-form style
     --explain              Emit a JSON RenderExplanation per line instead of text
     --strict | --lenient | --silent
                            Missing-slot behavior (default: strict)
@@ -483,6 +491,9 @@ fn build_engine(cfg: &Config) -> Engine {
     }
     if let Some(n) = cfg.max_length {
         e = e.max_sentence_length(n);
+    }
+    if let Some(style) = &cfg.style {
+        e = e.style_preference(style);
     }
     e
 }

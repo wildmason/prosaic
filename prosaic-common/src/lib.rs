@@ -11,7 +11,7 @@
 ///
 /// Mirrors the variants of `prosaic_core::Value` plus `Any` as an
 /// escape hatch for pipes that accept heterogeneous inputs (such as
-/// `capitalize`, `verb`, `refer`).
+/// `capitalize`, `verb`, `refer`, `possessive`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ValueType {
     String,
@@ -111,6 +111,7 @@ pub const PIPE_SPECS: &[PipeSpec] = &[
     PipeSpec { name: "truncate",      input: ValueType::List,   output: ValueType::List   },
     PipeSpec { name: "capitalize",    input: ValueType::Any,    output: ValueType::String },
     PipeSpec { name: "refer",         input: ValueType::Any,    output: ValueType::String },
+    PipeSpec { name: "possessive",    input: ValueType::Any,    output: ValueType::String },
     PipeSpec { name: "verb",          input: ValueType::Any,    output: ValueType::String },
     PipeSpec { name: "syn",           input: ValueType::Any,    output: ValueType::String },
     PipeSpec { name: "relative",      input: ValueType::Number, output: ValueType::String },
@@ -201,8 +202,8 @@ mod pipe_spec_tests {
     use super::*;
 
     #[test]
-    fn all_nineteen_pipes_are_registered() {
-        assert_eq!(PIPE_SPECS.len(), 19);
+    fn all_twenty_pipes_are_registered() {
+        assert_eq!(PIPE_SPECS.len(), 20);
     }
 
     #[test]
@@ -229,6 +230,13 @@ mod pipe_spec_tests {
     #[test]
     fn refer_is_any_to_string() {
         let p = pipe_spec("refer").expect("refer must be registered");
+        assert_eq!(p.input, ValueType::Any);
+        assert_eq!(p.output, ValueType::String);
+    }
+
+    #[test]
+    fn possessive_is_any_to_string() {
+        let p = pipe_spec("possessive").expect("possessive must be registered");
         assert_eq!(p.input, ValueType::Any);
         assert_eq!(p.output, ValueType::String);
     }

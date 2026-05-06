@@ -29,3 +29,43 @@ fn into_engine_blank_project_succeeds() {
     let engine = p.into_engine().unwrap();
     drop(engine);
 }
+
+#[test]
+fn into_engine_applies_style_preference() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::create_dir(tmp.path().join("templates")).unwrap();
+    std::fs::write(
+        tmp.path().join("prosaic.toml"),
+        r#"
+            name = "styled"
+            version = "0.1.0"
+            language = "en"
+
+            [engine]
+            style = "executive"
+        "#,
+    )
+    .unwrap();
+    std::fs::write(
+        tmp.path().join("templates").join("event.toml"),
+        r#"
+            key = "event"
+
+            [[variants]]
+            body = "technical {name}"
+
+            [[variants]]
+            style = "executive"
+            body = "executive {name}"
+        "#,
+    )
+    .unwrap();
+
+    let p = Project::load_from_dir(tmp.path()).unwrap();
+    let engine = p.into_engine().unwrap();
+    let mut ctx = Context::new();
+    ctx.insert("name", Value::String("summary".into()));
+
+    let out = engine.render(&mut Session::new(), "event", &ctx).unwrap();
+    assert_eq!(out, "executive summary");
+}

@@ -368,11 +368,11 @@ pub trait Language: Send + Sync {
     /// Realize a reference form as surface text for this language.
     ///
     /// The discourse policy layer chooses the [`crate::discourse::ReferenceForm`]
-    /// (Full, ShortName, Pronoun, Demonstrative, or Zero) based on
+    /// (Full, ShortName, Pronoun, Possessive, Demonstrative, or Zero) based on
     /// language-agnostic rules. This method converts that choice into the
     /// language-specific surface string.
     ///
-    /// Only `Pronoun`, `Demonstrative`, and `Zero` are meaningfully handled
+    /// Only `Pronoun`, `Possessive`, `Demonstrative`, and `Zero` are meaningfully handled
     /// here. `Full` and `ShortName` route through the engine's REG layer
     /// (Dale & Reiter, graph-based) because they involve entity-attribute
     /// logic that's not the language's concern.
@@ -385,6 +385,8 @@ pub trait Language: Send + Sync {
     /// The default implementation encodes English:
     /// - `Pronoun`: `"they"` when `features.number` is `Plural` or `Dual`,
     ///   `"it"` otherwise.
+    /// - `Possessive`: `"their"` when `features.number` is `Plural` or `Dual`,
+    ///   `"its"` otherwise.
     /// - `Demonstrative`: `"this"`.
     /// - `Zero`: `None` (English doesn't drop pronouns).
     /// - `Full` / `ShortName`: `None` (engine handles via REG).
@@ -400,9 +402,32 @@ pub trait Language: Send + Sync {
                 Number::Plural | Number::Dual => "they".to_string(),
                 _ => "it".to_string(),
             }),
+            ReferenceForm::Possessive => Some(match features.number {
+                Number::Plural | Number::Dual => "their".to_string(),
+                _ => "its".to_string(),
+            }),
             ReferenceForm::Demonstrative => Some("this".to_string()),
             ReferenceForm::Zero => None,
             ReferenceForm::Full | ReferenceForm::ShortName => None,
+        }
+    }
+
+    /// Convert a named owner phrase into a possessive owner phrase.
+    ///
+    /// Called by `{name|possessive}` when discourse policy says the entity
+    /// should be rendered by name rather than possessive pronoun. The default
+    /// is English-shaped (`"Foo" -> "Foo's"`, `"Services" -> "Services'"`);
+    /// non-English grammars should override for language-specific genitive
+    /// constructions.
+    fn possessive_name(&self, owner: &str) -> String {
+        let owner = owner.trim();
+        if owner.is_empty() {
+            return String::new();
+        }
+        if owner.ends_with('s') || owner.ends_with('S') {
+            format!("{owner}'")
+        } else {
+            format!("{owner}'s")
         }
     }
 }
@@ -735,6 +760,26 @@ mod tests {
     }
 
     #[test]
+    fn realize_reference_possessive_singular() {
+        let lang = MiniLang;
+        let f = AgreementFeatures::default();
+        assert_eq!(
+            lang.realize_reference(crate::discourse::ReferenceForm::Possessive, &f),
+            Some("its".to_string())
+        );
+    }
+
+    #[test]
+    fn realize_reference_possessive_plural() {
+        let lang = MiniLang;
+        let f = AgreementFeatures::default().with_number(crate::agreement::Number::Plural);
+        assert_eq!(
+            lang.realize_reference(crate::discourse::ReferenceForm::Possessive, &f),
+            Some("their".to_string())
+        );
+    }
+
+    #[test]
     fn realize_reference_demonstrative() {
         let lang = MiniLang;
         let f = AgreementFeatures::default();
@@ -774,6 +819,13 @@ mod tests {
             lang.realize_reference(crate::discourse::ReferenceForm::ShortName, &f),
             None
         );
+    }
+
+    #[test]
+    fn possessive_name_adds_english_suffix() {
+        let lang = MiniLang;
+        assert_eq!(lang.possessive_name("UserService"), "UserService's");
+        assert_eq!(lang.possessive_name("CoreServices"), "CoreServices'");
     }
 
     // ── proportion_phrase default implementation ────────────────────────────

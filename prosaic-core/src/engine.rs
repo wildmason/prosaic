@@ -97,23 +97,30 @@ pub enum RegAlgorithm {
     GraphBased,
 }
 
-/// A template registered under a key, with its salience level and
-/// optional BCP-47 language tag. Variants without a language tag are
-/// language-agnostic fallbacks; variants with a tag are filtered to
-/// match the engine's configured language preference.
+/// A template registered under a key, with its salience level plus
+/// optional BCP-47 language and free-form style tags. Untagged variants
+/// are fallbacks; tagged variants are filtered to match the engine's
+/// configured preferences.
 #[derive(Debug, Clone)]
 pub struct SalientTemplate {
     pub salience: Salience,
     pub template: Template,
     pub language: Option<String>,
+    pub style: Option<String>,
 }
 
 impl SalientTemplate {
-    pub fn new(salience: Salience, template: Template, language: Option<String>) -> Self {
+    pub fn new(
+        salience: Salience,
+        template: Template,
+        language: Option<String>,
+        style: Option<String>,
+    ) -> Self {
         Self {
             salience,
             template,
             language,
+            style,
         }
     }
 }
@@ -311,6 +318,11 @@ pub struct Engine {
     /// language-tagged variants are registered for a key. `None` means
     /// no preference (engine picks among all alternatives).
     language_preference: Option<String>,
+    /// Free-form style tag that variant selection should prefer when
+    /// style-tagged variants are registered for a key. `None` means no
+    /// explicit style preference; unstyled variants remain preferred
+    /// over styled variants as the conservative default.
+    style_preference: Option<String>,
     /// Optional faithfulness gate. When `Some(threshold)`, each rendered output
     /// is scored via PARENT precision + polarity check. If the score does not
     /// pass the threshold or polarity mismatches, the render returns
@@ -390,6 +402,7 @@ impl<'e, 's> RenderCtx<'e, 's> {
             all_alternatives,
             target_salience,
             self.engine.language_preference.as_deref(),
+            self.engine.style_preference.as_deref(),
         );
 
         // Select template with choosebest scoring and anti-repeat
@@ -419,7 +432,7 @@ impl<'e, 's> RenderCtx<'e, 's> {
             }
         }
 
-        // Capitalize if the template starts with a refer pipe
+        // Capitalize if the template starts with a reference pipe.
         if starts_with_refer_pipe(template) {
             capitalize_first_in_place(&mut output);
         }
@@ -698,6 +711,7 @@ impl<'e, 's> RenderCtx<'e, 's> {
             "truncate" => self.pipe_truncate(pipe, value),
             "capitalize" => self.pipe_capitalize(value),
             "refer" => self.pipe_refer(pipe, value, context),
+            "possessive" => self.pipe_possessive(pipe, value, context),
             "verb" => self.pipe_verb(pipe, value),
             "syn" => self.pipe_syn(value),
             #[cfg(feature = "time")]
@@ -779,6 +793,18 @@ impl<'e, 's> RenderCtx<'e, 's> {
         self.pipe_refer_single(pipe, value, context)
     }
 
+    fn pipe_possessive(
+        &self,
+        pipe: &Pipe,
+        value: &Value,
+        context: &Context,
+    ) -> Result<Value, ProsaicError> {
+        if let Value::List(names) = value {
+            return self.pipe_possessive_plural(pipe, names, context);
+        }
+        self.pipe_possessive_single(value)
+    }
+
     /// Single-entity refer path (existing logic, extracted for reuse by the
     /// plural dispatch).
     fn pipe_refer_single(
@@ -802,18 +828,11 @@ impl<'e, 's> RenderCtx<'e, 's> {
         let rendered = match form {
             ReferenceForm::Full => self.engine.render_full_reference(&name, &entity_type),
             ReferenceForm::ShortName => name,
-            ReferenceForm::Pronoun | ReferenceForm::Demonstrative | ReferenceForm::Zero => {
-                // Synthesize features from discourse state. Today this is just
-                // the plural flag; v1.5+ multilingual grammars can thread richer
-                // features through via Value::Entity at the call site.
-                let features = crate::agreement::AgreementFeatures {
-                    number: if self.session.discourse.focus_is_plural() {
-                        crate::agreement::Number::Plural
-                    } else {
-                        crate::agreement::Number::Singular
-                    },
-                    ..crate::agreement::AgreementFeatures::default()
-                };
+            ReferenceForm::Pronoun
+            | ReferenceForm::Possessive
+            | ReferenceForm::Demonstrative
+            | ReferenceForm::Zero => {
+                let features = reference_features(value, self.session.discourse.focus_is_plural());
                 self.engine
                     .language
                     .realize_reference(form, &features)
@@ -822,6 +841,62 @@ impl<'e, 's> RenderCtx<'e, 's> {
         };
 
         Ok(Value::String(rendered))
+    }
+
+    fn pipe_possessive_single(&self, value: &Value) -> Result<Value, ProsaicError> {
+        let name = value.as_display();
+        let form = self.session.discourse.reference_form(&name);
+        let rendered = match form {
+            ReferenceForm::Pronoun | ReferenceForm::Demonstrative | ReferenceForm::Zero => {
+                let features = reference_features(value, self.session.discourse.focus_is_plural());
+                self.engine
+                    .language
+                    .realize_reference(ReferenceForm::Possessive, &features)
+                    .unwrap_or_else(|| self.engine.language.possessive_name(&name))
+            }
+            ReferenceForm::Full | ReferenceForm::ShortName | ReferenceForm::Possessive => {
+                self.engine.language.possessive_name(&name)
+            }
+        };
+
+        Ok(Value::String(rendered))
+    }
+
+    fn pipe_possessive_plural(
+        &self,
+        pipe: &Pipe,
+        names: &[String],
+        context: &Context,
+    ) -> Result<Value, ProsaicError> {
+        match names.len() {
+            0 => Ok(Value::String(String::new())),
+            1 => {
+                let v = Value::String(names[0].clone());
+                self.pipe_possessive_single(&v)
+            }
+            n => {
+                let entity_type = match &pipe.arg {
+                    Some(PipeArg::String(t)) => t.clone(),
+                    _ => context
+                        .get("entity_type")
+                        .map(|v| v.as_display())
+                        .unwrap_or_default(),
+                };
+                let owner = if entity_type.is_empty() {
+                    let items: Vec<&str> = names.iter().map(|s| s.as_str()).collect();
+                    self.engine
+                        .language
+                        .join_list(&items, crate::language::Conjunction::And)
+                } else {
+                    self.engine.language.plural_description(
+                        &entity_type,
+                        n,
+                        &crate::agreement::AgreementFeatures::default(),
+                    )
+                };
+                Ok(Value::String(self.engine.language.possessive_name(&owner)))
+            }
+        }
     }
 
     /// Plural REG path: collapses a list of same-type entities to a plural
@@ -1353,6 +1428,7 @@ impl<'e, 's> RenderCtx<'e, 's> {
             all,
             target_salience,
             self.engine.language_preference.as_deref(),
+            self.engine.style_preference.as_deref(),
         );
 
         // Snapshot so candidate renders leave no residue.
@@ -1466,6 +1542,7 @@ impl Engine {
             smart_quotes: false,
             partials: new_map(),
             language_preference: None,
+            style_preference: None,
             faithfulness_threshold: None,
         }
     }
@@ -1485,6 +1562,22 @@ impl Engine {
     /// templates.
     pub fn set_language_preference(&mut self, lang: impl Into<String>) {
         self.language_preference = Some(lang.into());
+    }
+
+    /// Set the free-form style tag that variant selection should prefer.
+    /// Style tags are application-defined strings such as `"executive"`,
+    /// `"technical"`, or `"customer"`. The fallback chain mirrors language:
+    /// preferred style first, then unstyled variants, then any registered
+    /// variant for the already-selected language bucket.
+    pub fn style_preference(mut self, style: impl Into<String>) -> Self {
+        self.style_preference = Some(style.into());
+        self
+    }
+
+    /// Update the style tag used to prefer style-tagged variants without
+    /// rebuilding the engine or dropping registered templates.
+    pub fn set_style_preference(&mut self, style: impl Into<String>) {
+        self.style_preference = Some(style.into());
     }
 
     /// Set the strictness mode for missing slot handling.
@@ -1800,7 +1893,7 @@ impl Engine {
         source: &str,
         salience: Salience,
     ) -> Result<(), ProsaicError> {
-        self.register_template_with_language_at(key, source, salience, None)
+        self.register_template_with_language_and_style_at(key, source, salience, None, None)
     }
 
     /// Register a template variant tagged with a BCP-47 language code.
@@ -1814,13 +1907,55 @@ impl Engine {
         source: &str,
         language: Option<&str>,
     ) -> Result<(), ProsaicError> {
-        self.register_template_with_language_at(key, source, Salience::Medium, language)
+        self.register_template_with_language_and_style_at(
+            key,
+            source,
+            Salience::Medium,
+            language,
+            None,
+        )
+    }
+
+    /// Register a template variant tagged with a free-form style.
+    /// Variants registered with `None` style are unstyled fallbacks. The
+    /// engine's [`Engine::style_preference`] biases variant selection
+    /// after language filtering and before salience filtering.
+    pub fn register_template_with_style(
+        &mut self,
+        key: &str,
+        source: &str,
+        style: Option<&str>,
+    ) -> Result<(), ProsaicError> {
+        self.register_template_with_language_and_style_at(
+            key,
+            source,
+            Salience::Medium,
+            None,
+            style,
+        )
+    }
+
+    /// Register a template variant tagged with both language and style.
+    pub fn register_template_with_language_and_style(
+        &mut self,
+        key: &str,
+        source: &str,
+        language: Option<&str>,
+        style: Option<&str>,
+    ) -> Result<(), ProsaicError> {
+        self.register_template_with_language_and_style_at(
+            key,
+            source,
+            Salience::Medium,
+            language,
+            style,
+        )
     }
 
     /// Load a project from its bundled JSON manifest (produced by
     /// `prosaic build --target=json`). Registers all partials and
     /// template variants, applies engine settings, and sets the
-    /// language preference.
+    /// language/style preferences.
     ///
     /// Available with the `serde` feature.
     #[cfg(feature = "serde")]
@@ -1863,11 +1998,12 @@ impl Engine {
                         });
                     }
                 };
-                self.register_template_with_language_at(
+                self.register_template_with_language_and_style_at(
                     &template.key,
                     &variant.body,
                     salience,
                     variant.language.as_deref(),
+                    variant.style.as_deref(),
                 )?;
             }
         }
@@ -1881,6 +2017,29 @@ impl Engine {
         source: &str,
         salience: Salience,
         language: Option<&str>,
+    ) -> Result<(), ProsaicError> {
+        self.register_template_with_language_and_style_at(key, source, salience, language, None)
+    }
+
+    /// Salience-aware companion to [`Engine::register_template_with_style`].
+    pub fn register_template_with_style_at(
+        &mut self,
+        key: &str,
+        source: &str,
+        salience: Salience,
+        style: Option<&str>,
+    ) -> Result<(), ProsaicError> {
+        self.register_template_with_language_and_style_at(key, source, salience, None, style)
+    }
+
+    /// Register a template variant with explicit salience, language, and style tags.
+    pub fn register_template_with_language_and_style_at(
+        &mut self,
+        key: &str,
+        source: &str,
+        salience: Salience,
+        language: Option<&str>,
+        style: Option<&str>,
     ) -> Result<(), ProsaicError> {
         let template = Template::parse(source)?;
 
@@ -1902,6 +2061,7 @@ impl Engine {
                 salience,
                 template,
                 language.map(|s| s.to_string()),
+                style.map(|s| s.to_string()),
             ));
         self.rr_initial.entry(key.to_string()).or_insert(0);
         Ok(())
@@ -1959,7 +2119,7 @@ impl Engine {
         self.templates
             .entry(key.to_string())
             .or_default()
-            .push(SalientTemplate::new(Salience::Medium, template, None));
+            .push(SalientTemplate::new(Salience::Medium, template, None, None));
         self.rr_initial.entry(key.to_string()).or_insert(0);
         Ok(())
     }
@@ -2380,6 +2540,7 @@ impl Engine {
             all_alternatives,
             target_salience,
             self.language_preference.as_deref(),
+            self.style_preference.as_deref(),
         );
 
         // Pre-compute candidate scores for diagnostics when choose-best
@@ -3506,11 +3667,28 @@ fn terminate_sentence_in_place(output: &mut String) {
     output.push('.');
 }
 
-/// Check if a template's first segment is a `refer` pipe, meaning the
+fn reference_features(value: &Value, focus_is_plural: bool) -> crate::agreement::AgreementFeatures {
+    let mut features = match value {
+        Value::Entity { features, .. } => *features,
+        _ => crate::agreement::AgreementFeatures::default(),
+    };
+
+    if focus_is_plural {
+        features.number = crate::agreement::Number::Plural;
+    } else if matches!(features.number, crate::agreement::Number::Unknown) {
+        features.number = crate::agreement::Number::Singular;
+    }
+
+    features
+}
+
+/// Check if a template's first segment is a reference pipe, meaning the
 /// rendered output may start with a lowercase word that needs capitalization.
 fn starts_with_refer_pipe(template: &Template) -> bool {
     match template.segments.first() {
-        Some(Segment::Slot { pipes, .. }) => pipes.iter().any(|p| p.name == "refer"),
+        Some(Segment::Slot { pipes, .. }) => pipes
+            .iter()
+            .any(|p| p.name == "refer" || p.name == "possessive"),
         _ => false,
     }
 }
@@ -3614,43 +3792,20 @@ fn prepend_replacing_subject_in_place(
     core::mem::swap(output, &mut buf);
 }
 
-/// Two-stage filter: language preference first, then salience.
+/// Three-stage filter: language preference first, style preference second,
+/// then salience. Language and style are intersected, not ORed: style is
+/// resolved only inside the selected language bucket.
 fn filter_alternatives<'a>(
     alternatives: &'a [SalientTemplate],
     target: Salience,
     language_preference: Option<&str>,
+    style_preference: Option<&str>,
 ) -> Vec<&'a Template> {
-    let lang_filtered: Vec<&'a SalientTemplate> = if let Some(pref) = language_preference {
-        let matching: Vec<&'a SalientTemplate> = alternatives
-            .iter()
-            .filter(|s| s.language.as_deref() == Some(pref))
-            .collect();
-        if !matching.is_empty() {
-            matching
-        } else {
-            let untagged: Vec<&'a SalientTemplate> = alternatives
-                .iter()
-                .filter(|s| s.language.is_none())
-                .collect();
-            if !untagged.is_empty() {
-                untagged
-            } else {
-                alternatives.iter().collect()
-            }
-        }
-    } else {
-        let untagged: Vec<&'a SalientTemplate> = alternatives
-            .iter()
-            .filter(|s| s.language.is_none())
-            .collect();
-        if !untagged.is_empty() {
-            untagged
-        } else {
-            alternatives.iter().collect()
-        }
-    };
+    let all: Vec<&'a SalientTemplate> = alternatives.iter().collect();
+    let lang_filtered = prefer_tag(all, language_preference, |s| s.language.as_deref());
+    let style_filtered = prefer_tag(lang_filtered, style_preference, |s| s.style.as_deref());
 
-    let exact: Vec<&'a Template> = lang_filtered
+    let exact: Vec<&'a Template> = style_filtered
         .iter()
         .filter(|s| s.salience == target)
         .map(|s| &s.template)
@@ -3659,7 +3814,7 @@ fn filter_alternatives<'a>(
         return exact;
     }
 
-    let medium: Vec<&'a Template> = lang_filtered
+    let medium: Vec<&'a Template> = style_filtered
         .iter()
         .filter(|s| s.salience == Salience::Medium)
         .map(|s| &s.template)
@@ -3668,7 +3823,35 @@ fn filter_alternatives<'a>(
         return medium;
     }
 
-    lang_filtered.iter().map(|s| &s.template).collect()
+    style_filtered.iter().map(|s| &s.template).collect()
+}
+
+fn prefer_tag<'a>(
+    alternatives: Vec<&'a SalientTemplate>,
+    preference: Option<&str>,
+    tag: impl Fn(&SalientTemplate) -> Option<&str>,
+) -> Vec<&'a SalientTemplate> {
+    if let Some(pref) = preference {
+        let matching: Vec<&'a SalientTemplate> = alternatives
+            .iter()
+            .copied()
+            .filter(|s| tag(s) == Some(pref))
+            .collect();
+        if !matching.is_empty() {
+            return matching;
+        }
+    }
+
+    let untagged: Vec<&'a SalientTemplate> = alternatives
+        .iter()
+        .copied()
+        .filter(|s| tag(s).is_none())
+        .collect();
+    if !untagged.is_empty() {
+        untagged
+    } else {
+        alternatives
+    }
 }
 
 /// Determine if a value is "truthy" for conditional rendering.
@@ -3877,6 +4060,78 @@ mod tests {
 
     fn test_session() -> Session {
         Session::new()
+    }
+
+    // Style-aware variant selection
+
+    #[test]
+    fn style_preference_selects_matching_style() {
+        let mut engine = test_engine().style_preference("executive");
+        engine.register_template("t", "technical {name}").unwrap();
+        engine
+            .register_template_with_style("t", "executive {name}", Some("executive"))
+            .unwrap();
+
+        let mut ctx = Context::new();
+        ctx.insert("name", Value::String("summary".into()));
+        let out = engine.render(&mut test_session(), "t", &ctx).unwrap();
+        assert_eq!(out, "executive summary");
+    }
+
+    #[test]
+    fn style_preference_falls_back_to_unstyled_before_any_style() {
+        let mut engine = test_engine().style_preference("customer");
+        engine
+            .register_template_with_style("t", "executive {name}", Some("executive"))
+            .unwrap();
+        engine.register_template("t", "plain {name}").unwrap();
+
+        let mut ctx = Context::new();
+        ctx.insert("name", Value::String("summary".into()));
+        let out = engine.render(&mut test_session(), "t", &ctx).unwrap();
+        assert_eq!(out, "plain summary");
+    }
+
+    #[test]
+    fn style_filter_runs_inside_language_filter() {
+        let mut engine = test_engine()
+            .language_preference("en")
+            .style_preference("executive");
+        engine
+            .register_template_with_language_and_style(
+                "t",
+                "english executive {name}",
+                Some("en"),
+                Some("executive"),
+            )
+            .unwrap();
+        engine
+            .register_template_with_language_and_style(
+                "t",
+                "spanish executive {name}",
+                Some("es"),
+                Some("executive"),
+            )
+            .unwrap();
+
+        let mut ctx = Context::new();
+        ctx.insert("name", Value::String("summary".into()));
+        let out = engine.render(&mut test_session(), "t", &ctx).unwrap();
+        assert_eq!(out, "english executive summary");
+    }
+
+    #[test]
+    fn no_style_preference_prefers_unstyled_variants() {
+        let mut engine = test_engine();
+        engine
+            .register_template_with_style("t", "styled {name}", Some("executive"))
+            .unwrap();
+        engine.register_template("t", "unstyled {name}").unwrap();
+
+        let mut ctx = Context::new();
+        ctx.insert("name", Value::String("summary".into()));
+        let out = engine.render(&mut test_session(), "t", &ctx).unwrap();
+        assert_eq!(out, "unstyled summary");
     }
 
     // ── Template existence ──────────────────────────────────────────────────
@@ -6988,6 +7243,8 @@ fn apply_manifest_engine_settings(
         };
     }
 
+    engine.style_preference = settings.style.clone();
+
     Ok(())
 }
 
@@ -7031,6 +7288,8 @@ mod manifest_loader {
         pub faithfulness_min: f64,
         #[serde(default)]
         pub salience_thresholds: Option<ManifestSalienceThresholds>,
+        #[serde(default)]
+        pub style: Option<String>,
     }
 
     #[derive(Deserialize)]
@@ -7054,6 +7313,8 @@ mod manifest_loader {
         pub salience: String,
         #[serde(default)]
         pub language: Option<String>,
+        #[serde(default)]
+        pub style: Option<String>,
         pub body: String,
     }
 

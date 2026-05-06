@@ -177,6 +177,10 @@ pub enum ReferenceForm {
     /// Reserved slot for future discourse rules; not currently emitted by
     /// `DiscourseState::reference_form`.
     Demonstrative,
+    /// Possessive pronoun/determiner: "its" / "their" / (lang-specific).
+    /// Used by the `{name|possessive}` pipe after the standard discourse
+    /// policy has decided that a pronoun-form reference is appropriate.
+    Possessive,
     /// Zero realization: surface is empty. Used by pro-drop languages
     /// (Japanese, colloquial Spanish/Italian) where the pronoun is
     /// recoverable from context and the slot emits nothing.
@@ -1040,6 +1044,8 @@ mod tests {
         // Sanity: ensure the new variants are distinguishable.
         assert_ne!(ReferenceForm::Full, ReferenceForm::Zero);
         assert_ne!(ReferenceForm::Pronoun, ReferenceForm::Demonstrative);
+        assert_ne!(ReferenceForm::Pronoun, ReferenceForm::Possessive);
+        assert_ne!(ReferenceForm::Possessive, ReferenceForm::ShortName);
         assert_ne!(ReferenceForm::Zero, ReferenceForm::Demonstrative);
     }
 

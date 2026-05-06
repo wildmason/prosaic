@@ -56,7 +56,8 @@ impl Project {
                 cause: e.to_string(),
             })?;
 
-        let templates = load_toml_dir::<TemplateFile, _>(&root.join("templates"), |t| t.key.clone())?;
+        let templates =
+            load_toml_dir::<TemplateFile, _>(&root.join("templates"), |t| t.key.clone())?;
         let partials = load_toml_dir::<PartialFile, _>(&root.join("partials"), |p| p.name.clone())?;
         let scenarios = load_toml_dir::<Scenario, _>(&root.join("tests"), |s| s.name.clone())?;
         let fixtures = load_fixtures_dir(&root.join("fixtures"))?;
@@ -136,8 +137,7 @@ impl Project {
     /// references as validation issues. Does not error.
     pub fn validate(&self) -> Vec<ValidationIssue> {
         let mut issues = Vec::new();
-        let known_partials: std::collections::HashSet<_> =
-            self.partials.keys().cloned().collect();
+        let known_partials: std::collections::HashSet<_> = self.partials.keys().cloned().collect();
 
         for (key, template) in &self.templates {
             for (vi, variant) in template.variants.iter().enumerate() {
@@ -192,11 +192,10 @@ impl Project {
                 cause: e.to_string(),
             })?;
         }
-        let serialized =
-            toml::to_string_pretty(template).map_err(|e| ProjectError::TomlParse {
-                file: format!("{key}.toml"),
-                cause: e.to_string(),
-            })?;
+        let serialized = toml::to_string_pretty(template).map_err(|e| ProjectError::TomlParse {
+            file: format!("{key}.toml"),
+            cause: e.to_string(),
+        })?;
         let path = dir.join(format!("{key}.toml"));
         fs::write(&path, serialized).map_err(|e| ProjectError::Io {
             path: path.display().to_string(),
@@ -220,11 +219,10 @@ impl Project {
                 cause: e.to_string(),
             })?;
         }
-        let serialized =
-            toml::to_string_pretty(partial).map_err(|e| ProjectError::TomlParse {
-                file: format!("{name}.toml"),
-                cause: e.to_string(),
-            })?;
+        let serialized = toml::to_string_pretty(partial).map_err(|e| ProjectError::TomlParse {
+            file: format!("{name}.toml"),
+            cause: e.to_string(),
+        })?;
         let path = dir.join(format!("{name}.toml"));
         fs::write(&path, serialized).map_err(|e| ProjectError::Io {
             path: path.display().to_string(),
@@ -234,13 +232,13 @@ impl Project {
 
     /// Write the named scenario back to disk as TOML.
     pub fn save_scenario(&self, name: &str) -> Result<(), ProjectError> {
-        let scenario = self
-            .scenarios
-            .get(name)
-            .ok_or_else(|| ProjectError::ScenarioValidation {
-                name: name.to_string(),
-                reason: "scenario not present in project".to_string(),
-            })?;
+        let scenario =
+            self.scenarios
+                .get(name)
+                .ok_or_else(|| ProjectError::ScenarioValidation {
+                    name: name.to_string(),
+                    reason: "scenario not present in project".to_string(),
+                })?;
         let dir = self.root.join("tests");
         if !dir.exists() {
             fs::create_dir_all(&dir).map_err(|e| ProjectError::Io {
@@ -248,11 +246,10 @@ impl Project {
                 cause: e.to_string(),
             })?;
         }
-        let serialized =
-            toml::to_string_pretty(scenario).map_err(|e| ProjectError::TomlParse {
-                file: format!("{name}.toml"),
-                cause: e.to_string(),
-            })?;
+        let serialized = toml::to_string_pretty(scenario).map_err(|e| ProjectError::TomlParse {
+            file: format!("{name}.toml"),
+            cause: e.to_string(),
+        })?;
         let path = dir.join(format!("{name}.toml"));
         fs::write(&path, serialized).map_err(|e| ProjectError::Io {
             path: path.display().to_string(),
@@ -307,15 +304,18 @@ impl Project {
                 high_min: thr.high_min,
             });
         }
+        if let Some(style) = &s.style {
+            engine = engine.style_preference(style);
+        }
         engine = engine.language_preference(&self.manifest.language);
 
         for (name, partial) in &self.partials {
-            engine
-                .register_partial(name, &partial.body)
-                .map_err(|e| ProjectError::PartialValidation {
+            engine.register_partial(name, &partial.body).map_err(|e| {
+                ProjectError::PartialValidation {
                     name: name.clone(),
                     reason: e.to_string(),
-                })?;
+                }
+            })?;
         }
 
         for (key, template) in &self.templates {
@@ -332,8 +332,15 @@ impl Project {
                     }
                 };
                 let language = variant.language.as_deref();
+                let style = variant.style.as_deref();
                 engine
-                    .register_template_with_language_at(key, &variant.body, salience, language)
+                    .register_template_with_language_and_style_at(
+                        key,
+                        &variant.body,
+                        salience,
+                        language,
+                        style,
+                    )
                     .map_err(|e| ProjectError::TemplateValidation {
                         key: key.clone(),
                         reason: e.to_string(),

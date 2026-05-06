@@ -84,7 +84,8 @@ fn build_rust(project: &Project) -> Result<String, ProjectError> {
                 _ => "Salience::Medium",
             };
             let lang = variant.language.as_deref().unwrap_or("");
-            if lang.is_empty() {
+            let style = variant.style.as_deref().unwrap_or("");
+            if lang.is_empty() && style.is_empty() {
                 writeln!(
                     s,
                     "    engine.register_template_at({:?}, {:?}, {})?;",
@@ -94,8 +95,12 @@ fn build_rust(project: &Project) -> Result<String, ProjectError> {
             } else {
                 writeln!(
                     s,
-                    "    engine.register_template_with_language_at({:?}, {:?}, {}, Some({:?}))?;",
-                    template.key, variant.body, salience, lang
+                    "    engine.register_template_with_language_and_style_at({:?}, {:?}, {}, {}, {})?;",
+                    template.key,
+                    variant.body,
+                    salience,
+                    option_str_literal(lang),
+                    option_str_literal(style)
                 )
                 .unwrap();
             }
@@ -104,6 +109,14 @@ fn build_rust(project: &Project) -> Result<String, ProjectError> {
     writeln!(s, "    Ok(())").unwrap();
     writeln!(s, "}}").unwrap();
     Ok(s)
+}
+
+fn option_str_literal(value: &str) -> String {
+    if value.is_empty() {
+        "None".to_string()
+    } else {
+        format!("Some({value:?})")
+    }
 }
 
 #[cfg(test)]
@@ -137,6 +150,18 @@ mod tests {
         assert!(rust.contains("Salience::Low"));
         assert!(rust.contains("Salience::Medium"));
         assert!(rust.contains("Salience::High"));
+    }
+
+    #[test]
+    fn rust_bundle_emits_style_tagged_register_call() {
+        let mut p = project();
+        let t = p.templates.get_mut("code.modified").unwrap();
+        t.variants[0].style = Some("executive".to_string());
+
+        let bundle = build_bundle(&p, BuildTarget::RustModule).unwrap();
+        let rust = bundle.rust.unwrap();
+        assert!(rust.contains("register_template_with_language_and_style_at(\"code.modified\""));
+        assert!(rust.contains("Some(\"executive\")"));
     }
 
     #[test]

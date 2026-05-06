@@ -85,6 +85,7 @@ Templates use `{slot}` for substitution and `{slot|pipe}` for transforms. Pipes 
 | `words` | `{n\|words}` | 42 → "forty-two" |
 | `capitalize` | `{word\|capitalize}` | "Hello" |
 | `refer` | `{name\|refer}` | Discourse-aware entity reference (see below) |
+| `possessive` | `{name\|possessive}` | Discourse-aware possessive: "UserService's", then "its" / "their" |
 | `verb:form` | `{rename\|verb:present_perfect}` | "has been renamed" — full tense/aspect phrase (see below) |
 | `syn` | `{class\|syn}` | Pick a registered synonym, least recently used (see *Elegant Variation*) |
 | `relative` | `{ts\|relative}` | Unix timestamp → "yesterday" / "3 weeks ago" / "in 2 months" |
@@ -122,6 +123,15 @@ The `{name|refer}` pipe tracks entity mentions and adapts the reference form:
 | Distant mention (3+ renders ago) | Re-introduces with full form |
 
 Capitalization is handled automatically based on sentence position.
+
+The `{name|possessive}` pipe uses the same discourse state but emits possessive owner forms:
+
+```rust
+engine.register_template("intro", "{name|refer} was modified")?;
+engine.register_template("impact", "{name|possessive} consumers need review")?;
+```
+
+The first possessive mention uses the owner name (`"UserService's consumers"`). Once the entity is focused and unambiguous, the same template renders a possessive pronoun (`"its consumers"` or `"their consumers"` for plural focus). Ambiguous or distant references fall back to the name possessive rather than guessing.
 
 ### Referring Expression Generation (REG)
 
@@ -872,7 +882,7 @@ produces
 The class Foo was renamed to Bar, which impacts 3 direct consumers.
 ```
 
-Flags: `--vocab code|git|both|none`, `--strategy sequential|by-entity|by-action`, `--smart-quotes`, `--max-length <N>`, `--explain` (emit JSON `RenderExplanation` per event), `--strict|--lenient|--silent`.
+Flags: `--vocab code|git|both|none`, `--strategy sequential|by-entity|by-action`, `--smart-quotes`, `--max-length <N>`, `--style <name>`, `--explain` (emit JSON `RenderExplanation` per event), `--strict|--lenient|--silent`.
 
 ### Project subcommands
 
@@ -891,7 +901,7 @@ prosaic test my-changelog
 
 Bundles produced by `prosaic build --target=json` can be loaded at runtime by any host language via `Engine::load_manifest(json)` (Rust) or `engine.loadManifest(json)` (JavaScript via `prosaic-wasm`).
 
-### Multi-language template variants
+### Multi-language and style template variants
 
 Templates can carry a per-variant `language` tag (`en`, `es`, `de`, etc.). The engine's `language_preference` setting biases variant selection:
 
@@ -903,6 +913,33 @@ engine.register_template_with_language("greet", "Hola {name}", Some("es"))?;
 ```
 
 Falls back gracefully: if no language-matching variant exists, untagged variants are picked; if neither exists, any registered variant.
+
+Variants can also carry a free-form `style` tag so the same event key can render for different readers without forking templates:
+
+```rust
+let mut engine = Engine::new(English::new()).style_preference("executive");
+engine.register_template("release.item", "{name} changed")?;
+engine.register_template_with_style(
+    "release.item",
+    "Executive note: {name} materially changed",
+    Some("executive"),
+)?;
+// Renders "Executive note: Billing materially changed"
+```
+
+Language and style are deterministic AND filters, not OR filters. Selection first chooses the best language bucket, then the best style bucket inside that language bucket, then applies salience and variation. Both axes use the same fallback chain: preferred tag, then untagged, then any variant.
+
+Project files use the same fields:
+
+```toml
+[engine]
+style = "executive"
+
+[[variants]]
+language = "en"
+style = "executive"
+body = "Executive note: {name} materially changed"
+```
 
 ## Design Philosophy
 

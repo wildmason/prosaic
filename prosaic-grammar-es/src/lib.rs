@@ -121,6 +121,7 @@ impl Language for Spanish {
     ) -> Option<String> {
         match form {
             ReferenceForm::Pronoun => Some(spanish_pronoun(features)),
+            ReferenceForm::Possessive => Some(spanish_possessive(features)),
             ReferenceForm::Demonstrative => Some(spanish_demonstrative(features)),
             ReferenceForm::Zero => None,
             ReferenceForm::Full | ReferenceForm::ShortName => None,
@@ -243,6 +244,13 @@ fn spanish_pronoun(features: &AgreementFeatures) -> String {
         (Gender::Fem, _) => "ella".to_string(),
         (_, GrammaticalNumber::Plural) | (_, GrammaticalNumber::Dual) => "ellos".to_string(),
         _ => "él".to_string(),
+    }
+}
+
+fn spanish_possessive(features: &AgreementFeatures) -> String {
+    match features.number {
+        GrammaticalNumber::Plural | GrammaticalNumber::Dual => "sus".to_string(),
+        _ => "su".to_string(),
     }
 }
 
@@ -530,6 +538,20 @@ mod tests {
         assert_eq!(
             es.realize_reference(ReferenceForm::Pronoun, &f),
             Some("ellas".to_string())
+        );
+    }
+
+    #[test]
+    fn realize_possessive_singular_and_plural() {
+        let es = Spanish::new();
+        assert_eq!(
+            es.realize_reference(ReferenceForm::Possessive, &AgreementFeatures::default()),
+            Some("su".to_string())
+        );
+        let plural = AgreementFeatures::default().with_number(GrammaticalNumber::Plural);
+        assert_eq!(
+            es.realize_reference(ReferenceForm::Possessive, &plural),
+            Some("sus".to_string())
         );
     }
 

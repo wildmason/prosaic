@@ -22,6 +22,9 @@ pub struct Variant {
     /// BCP-47 lang code; defaults to project language if unspecified.
     #[serde(default)]
     pub language: Option<String>,
+    /// Free-form author-defined style tag, e.g. "executive" or "technical".
+    #[serde(default)]
+    pub style: Option<String>,
     #[serde(default)]
     pub description: String,
     pub body: String,
@@ -49,6 +52,7 @@ mod tests {
         assert_eq!(t.variants[0].salience, "medium");
         assert_eq!(t.variants[0].body, "{name|refer} was modified");
         assert!(t.variants[0].language.is_none());
+        assert!(t.variants[0].style.is_none());
     }
 
     #[test]
@@ -70,6 +74,7 @@ mod tests {
             [[variants]]
             salience = "high"
             language = "en"
+            style = "executive"
             body = "{name|refer} has been substantially modified"
         "#;
         let t: TemplateFile = toml::from_str(toml_str).unwrap();
@@ -78,6 +83,7 @@ mod tests {
         assert_eq!(t.variants[1].salience, "medium");
         assert_eq!(t.variants[2].salience, "high");
         assert_eq!(t.variants[2].language.as_deref(), Some("en"));
+        assert_eq!(t.variants[2].style.as_deref(), Some("executive"));
         assert_eq!(t.slots_required, vec!["name"]);
         assert_eq!(t.slots_optional, vec!["consumer_count"]);
     }
@@ -104,6 +110,20 @@ mod tests {
     }
 
     #[test]
+    fn parse_style_variants() {
+        let toml_str = r#"
+            key = "code.modified"
+
+            [[variants]]
+            salience = "medium"
+            style = "executive"
+            body = "{name} changed"
+        "#;
+        let t: TemplateFile = toml::from_str(toml_str).unwrap();
+        assert_eq!(t.variants[0].style.as_deref(), Some("executive"));
+    }
+
+    #[test]
     fn missing_key_errors() {
         let toml_str = r#"
             variants = [{ body = "x" }]
@@ -120,7 +140,10 @@ mod tests {
             salience = "medium"
         "#;
         let res = toml::from_str::<TemplateFile>(toml_str);
-        assert!(res.is_err(), "expected error for missing variant `body` field");
+        assert!(
+            res.is_err(),
+            "expected error for missing variant `body` field"
+        );
     }
 
     #[test]

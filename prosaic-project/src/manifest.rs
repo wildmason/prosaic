@@ -22,6 +22,7 @@ pub struct EngineSettings {
     pub max_sentence_length: usize,
     pub faithfulness_min: f64,
     pub salience_thresholds: Option<SalienceThresholdsConfig>,
+    pub style: Option<String>,
 }
 
 impl Default for EngineSettings {
@@ -33,6 +34,7 @@ impl Default for EngineSettings {
             max_sentence_length: 0,
             faithfulness_min: 0.0,
             salience_thresholds: None,
+            style: None,
         }
     }
 }
@@ -85,6 +87,7 @@ mod tests {
             smart_quotes = true
             max_sentence_length = 120
             faithfulness_min = 0.85
+            style = "executive"
 
             [engine.salience_thresholds]
             low_max = 2
@@ -102,6 +105,7 @@ mod tests {
         let m: Manifest = toml::from_str(toml_str).unwrap();
         assert_eq!(m.engine.max_sentence_length, 120);
         assert_eq!(m.engine.faithfulness_min, 0.85);
+        assert_eq!(m.engine.style.as_deref(), Some("executive"));
         let st = m.engine.salience_thresholds.unwrap();
         assert_eq!(st.low_max, 2);
         assert_eq!(st.high_min, 30);

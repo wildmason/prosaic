@@ -70,6 +70,19 @@ impl ProsaicEngine {
             .map_err(|e| JsValue::from_str(&e.to_string()))
     }
 
+    /// Register a template under the given key with a free-form style tag.
+    #[wasm_bindgen(js_name = registerTemplateWithStyle)]
+    pub fn register_template_with_style(
+        &mut self,
+        key: &str,
+        template: &str,
+        style: &str,
+    ) -> Result<(), JsValue> {
+        self.inner
+            .register_template_with_style(key, template, Some(style))
+            .map_err(|e| JsValue::from_str(&e.to_string()))
+    }
+
     // NOTE: `Engine::reference_time` is gated behind `prosaic-core`'s `time`
     // feature, which requires `SystemTime`. Since `wasm32-unknown-unknown` does
     // not have `SystemTime::now()`, the `time` feature is intentionally
@@ -173,6 +186,12 @@ impl ProsaicEngine {
     #[wasm_bindgen(js_name = setLanguagePreference)]
     pub fn set_language_preference(&mut self, lang: &str) {
         self.inner.set_language_preference(lang);
+    }
+
+    /// Set the free-form style preference for variant selection.
+    #[wasm_bindgen(js_name = setStylePreference)]
+    pub fn set_style_preference(&mut self, style: &str) {
+        self.inner.set_style_preference(style);
     }
 
     /// Render a batch of events as a single aggregated paragraph.
@@ -371,6 +390,27 @@ mod tests {
             .render(&mut session.inner, "greet", &ctx)
             .expect("render must not fail after changing language preference");
         assert_eq!(result, "Hello, world!");
+    }
+
+    #[test]
+    fn set_style_preference_selects_styled_template() {
+        let mut engine = ProsaicEngine::new();
+        engine
+            .register_template("greet", "Hello, {name}!")
+            .expect("template registration must not fail");
+        engine
+            .register_template_with_style("greet", "Briefing: {name}", "executive")
+            .expect("styled template registration must not fail");
+        engine.set_style_preference("executive");
+
+        let mut session = ProsaicSession::new();
+        let mut ctx = Context::new();
+        ctx.insert("name", Value::String("world".into()));
+        let result = engine
+            .inner
+            .render(&mut session.inner, "greet", &ctx)
+            .expect("render must not fail after changing style preference");
+        assert_eq!(result, "Briefing: world");
     }
 
     #[test]

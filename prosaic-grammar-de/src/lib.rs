@@ -113,6 +113,7 @@ impl Language for German {
     ) -> Option<String> {
         match form {
             ReferenceForm::Pronoun => Some(german_pronoun(features)),
+            ReferenceForm::Possessive => Some(german_possessive(features)),
             ReferenceForm::Demonstrative => Some(german_demonstrative(features)),
             ReferenceForm::Zero => None,
             ReferenceForm::Full | ReferenceForm::ShortName => None,
@@ -242,6 +243,20 @@ fn german_pronoun(features: &AgreementFeatures) -> String {
         Gender::Fem => "sie".into(),
         Gender::Neut => "es".into(),
         _ => "er".into(),
+    }
+}
+
+fn german_possessive(features: &AgreementFeatures) -> String {
+    let plural = matches!(
+        features.number,
+        GrammaticalNumber::Plural | GrammaticalNumber::Dual
+    );
+    if plural {
+        return "ihre".into();
+    }
+    match features.gender {
+        Gender::Fem => "ihre".into(),
+        _ => "sein".into(),
     }
 }
 
@@ -776,6 +791,26 @@ mod tests {
         assert_eq!(
             de.realize_reference(ReferenceForm::Pronoun, &f),
             Some("sie".to_string())
+        );
+    }
+
+    #[test]
+    fn possessive_tracks_owner_gender_and_plural() {
+        let de = German::new();
+        let masc = AgreementFeatures::default().with_gender(Gender::Masc);
+        assert_eq!(
+            de.realize_reference(ReferenceForm::Possessive, &masc),
+            Some("sein".to_string())
+        );
+        let fem = AgreementFeatures::default().with_gender(Gender::Fem);
+        assert_eq!(
+            de.realize_reference(ReferenceForm::Possessive, &fem),
+            Some("ihre".to_string())
+        );
+        let plural = AgreementFeatures::default().with_number(GrammaticalNumber::Plural);
+        assert_eq!(
+            de.realize_reference(ReferenceForm::Possessive, &plural),
+            Some("ihre".to_string())
         );
     }
 
