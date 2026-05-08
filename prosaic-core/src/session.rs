@@ -45,7 +45,9 @@ impl Session {
     }
 
     /// Clear all session state. Equivalent to replacing with `Session::new()`
-    /// but preserves allocations.
+    /// but preserves allocations. Use when starting a fully unrelated
+    /// narrative in the same session — most multi-paragraph callers want
+    /// [`Session::reset_for_paragraph`] instead so style rotation continues.
     ///
     /// NOTE: `last_temporal_anchor` survives so narratives can span paragraphs.
     /// Call [`Session::reset_temporal`] to clear the anchor explicitly when
@@ -58,10 +60,34 @@ impl Session {
         // work correctly.
     }
 
+    /// Reset paragraph-local discourse while keeping narrative-level style
+    /// continuity. Pronoun/centering/template-history state is cleared, but
+    /// the discourse list-style rotation and the temporal anchor are
+    /// preserved so consecutive paragraphs in the same narrative rotate
+    /// through `|join` phrasings and continue to support inter-paragraph
+    /// temporal references.
+    ///
+    /// This is the reset [`crate::DocumentPlan::render`] uses between
+    /// paragraphs. Library consumers driving their own paragraph loop should
+    /// prefer this over [`Session::reset`].
+    pub fn reset_for_paragraph(&mut self) {
+        self.discourse.reset_for_paragraph();
+        self.round_robin_counters.clear();
+        // See `reset`: temporal anchors intentionally survive paragraph breaks.
+    }
+
     /// Clear the temporal anchor. Use when starting a temporally-disjoint
     /// narrative in the same session.
     pub fn reset_temporal(&mut self) {
         self.last_temporal_anchor = None;
+    }
+
+    /// Clear the discourse list-style cycle counter so the next `|join` pipe
+    /// starts at the first style in the rotation. Use when starting a
+    /// stylistically-disjoint narrative in the same session without doing
+    /// a full [`Session::reset`].
+    pub fn reset_list_cycle(&mut self) {
+        self.discourse.reset_list_cycle();
     }
 
     /// Mutable access to the underlying discourse state. Use this to call
@@ -121,6 +147,43 @@ mod tests {
         let mut s = Session::new();
         s.last_temporal_anchor = Some(1_700_000_000);
         s.reset();
+        assert_eq!(s.last_temporal_anchor, Some(1_700_000_000));
+    }
+
+    #[test]
+    fn paragraph_reset_preserves_list_style_cycle() {
+        let mut s = Session::new();
+        let first = s.discourse.next_list_style();
+
+        s.reset_for_paragraph();
+        let second = s.discourse.next_list_style();
+
+        assert_ne!(first, second);
+    }
+
+    #[test]
+    fn full_reset_restarts_list_style_cycle() {
+        let mut s = Session::new();
+        let first = s.discourse.next_list_style();
+
+        s.reset();
+        let second = s.discourse.next_list_style();
+
+        assert_eq!(first, second);
+    }
+
+    #[test]
+    fn reset_list_cycle_restarts_rotation_without_full_reset() {
+        let mut s = Session::new();
+        s.last_temporal_anchor = Some(1_700_000_000);
+        let first = s.discourse.next_list_style();
+        let _ = s.discourse.next_list_style();
+
+        s.reset_list_cycle();
+
+        // Rotation restarts...
+        assert_eq!(s.discourse.next_list_style(), first);
+        // ...but the temporal anchor is untouched.
         assert_eq!(s.last_temporal_anchor, Some(1_700_000_000));
     }
 

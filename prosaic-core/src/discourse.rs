@@ -110,7 +110,15 @@ pub struct DiscourseState {
     /// during construction so `record_output_words` never scans strings.
     stopword_ids: HashSet<u32>,
 
-    /// Last list style index used (for cycling).
+    /// Monotonic cycle index used by [`Self::next_list_style`]. The selected
+    /// style is `LIST_STYLES[last_list_style % LIST_STYLES.len()]`, advanced
+    /// by one each time `|join` fires.
+    ///
+    /// Persists across paragraph-boundary resets so consecutive paragraphs
+    /// rotate through the list-style pool instead of restarting at the same
+    /// phrasing every time. This mirrors the cross-paragraph semantics of
+    /// `Session::last_temporal_anchor`. Use [`Self::reset_list_cycle`] (or
+    /// the [`DiscourseState::reset`] hard reset) to clear it.
     last_list_style: usize,
 
     /// Whether the current focus is a compound/plural subject, so pronoun
@@ -283,9 +291,29 @@ impl DiscourseState {
         self.focus_is_plural
     }
 
-    /// Clear all discourse state. Called between unrelated rendering contexts.
+    /// Clear ALL discourse state, including the cross-paragraph list-style
+    /// cycle counter. Use when starting a fully unrelated narrative — most
+    /// callers want [`Self::reset_for_paragraph`] instead so consecutive
+    /// paragraphs continue to rotate list-style phrasings.
     pub fn reset(&mut self) {
         *self = Self::new();
+    }
+
+    /// Clear discourse state at a paragraph boundary while preserving the
+    /// narrative-level list-style rotation. This is the reset used by
+    /// [`Session::reset_for_paragraph`] so multi-paragraph narratives don't
+    /// restart the `|join` style cycle on every paragraph.
+    pub fn reset_for_paragraph(&mut self) {
+        let last_list_style = self.last_list_style;
+        self.reset();
+        self.last_list_style = last_list_style;
+    }
+
+    /// Clear only the list-style cycle counter. Mirrors
+    /// [`Session::reset_temporal`] for callers that want to start a fresh
+    /// list-style rotation without otherwise resetting discourse state.
+    pub fn reset_list_cycle(&mut self) {
+        self.last_list_style = 0;
     }
 
     /// Advance to the next render. Must be called at the start of each render.

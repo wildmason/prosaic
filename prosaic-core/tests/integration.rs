@@ -1,7 +1,7 @@
 use prosaic_core::{
-    Clause, Context, DocumentPlan, Engine, EntityDescriptor, GroupingStrategy, RhetoricalCategory,
-    Salience, Sentence, Session, Strictness, Tense, Value, Variation, VerbForm, Voice, entity,
-    named, subject,
+    Clause, Context, DocumentPlan, Engine, EntityDescriptor, GroupingStrategy, Paragraph,
+    RhetoricalCategory, Salience, Sentence, Session, Strictness, Tense, Value, Variation, VerbForm,
+    Voice, entity, named, subject,
 };
 use prosaic_derive::IntoContext;
 use prosaic_grammar_en::English;
@@ -1481,5 +1481,156 @@ fn plural_refer_pipe_arg_overrides_context_entity_type() {
     assert!(
         !out.contains("classes"),
         "should use pipe arg, not context: {out}"
+    );
+}
+
+// ── Cross-paragraph list-style rotation ─────────────────────────────────
+//
+// Regression cover for `DocumentPlan::render` paragraph-boundary semantics.
+// Before fix: `session.reset()` between paragraphs wiped
+// `DiscourseState::last_list_style`, so every paragraph's first `|join`
+// pipe restarted at `ListStyle::Including` and the surface prose repeated
+// the same opener ("...including A, B, and C among others...") on each
+// paragraph. After fix: `DocumentPlan::render` calls
+// `Session::reset_for_paragraph`, which preserves the cycle counter so
+// consecutive paragraphs rotate through the pool.
+
+fn list_paragraph(template_key: &str, items: &[&str]) -> Paragraph {
+    let mut p = Paragraph::new();
+    let mut ctx = Context::new();
+    ctx.insert(
+        "items",
+        Value::List(items.iter().map(|s| (*s).to_string()).collect()),
+    );
+    p.push(template_key.to_string(), ctx, Salience::Medium);
+    p
+}
+
+#[test]
+fn document_plan_rotates_list_style_across_paragraphs() {
+    let mut engine = Engine::new(English::new())
+        .strictness(Strictness::Strict)
+        .variation(Variation::Fixed);
+    engine
+        .register_template("p1", "Touched {items|truncate:2|join}.")
+        .unwrap();
+    engine
+        .register_template("p2", "Also touched {items|truncate:2|join}.")
+        .unwrap();
+    engine
+        .register_template("p3", "And touched {items|truncate:2|join}.")
+        .unwrap();
+    engine
+        .register_template("p4", "Finally touched {items|truncate:2|join}.")
+        .unwrap();
+
+    let mut plan = DocumentPlan::new();
+    plan.paragraphs
+        .push(list_paragraph("p1", &["Alpha", "Beta", "Gamma", "Delta"]));
+    plan.paragraphs
+        .push(list_paragraph("p2", &["Echo", "Foxtrot", "Golf", "Hotel"]));
+    plan.paragraphs
+        .push(list_paragraph("p3", &["India", "Juliet", "Kilo", "Lima"]));
+    plan.paragraphs
+        .push(list_paragraph("p4", &["Mike", "November", "Oscar", "Papa"]));
+
+    let mut session = Session::new();
+    let rendered = plan.render(&engine, &mut session).unwrap();
+
+    // Golden: the four canonical list styles render in cycle order across
+    // four paragraphs. Surface markers chosen from `format_truncated_list`
+    // are unique-per-style so any rotation regression flips at least one.
+    let p1_marker = "including Alpha and Beta among others"; // Including
+    let p2_marker = "such as Echo and Foxtrot"; // SuchAs
+    let p3_marker = "\u{2014} notably India and Juliet, plus 2 more"; // Dash
+    let p4_marker = "[Mike, November, and 2 more]"; // Bracketed
+
+    assert!(
+        rendered.contains(p1_marker),
+        "paragraph 1 should use `including` style, got:\n{rendered}"
+    );
+    assert!(
+        rendered.contains(p2_marker),
+        "paragraph 2 should rotate to `such as` style, got:\n{rendered}"
+    );
+    assert!(
+        rendered.contains(p3_marker),
+        "paragraph 3 should rotate to `dash` style, got:\n{rendered}"
+    );
+    assert!(
+        rendered.contains(p4_marker),
+        "paragraph 4 should rotate to `bracketed` style, got:\n{rendered}"
+    );
+}
+
+#[test]
+fn document_plan_list_rotation_wraps_after_full_cycle() {
+    // After the four canonical styles are exhausted, the cycle wraps back
+    // to `Including` rather than getting stuck or going out of bounds.
+    let mut engine = Engine::new(English::new())
+        .strictness(Strictness::Strict)
+        .variation(Variation::Fixed);
+    for key in ["p1", "p2", "p3", "p4", "p5"] {
+        engine
+            .register_template(key, "Touched {items|truncate:2|join}.")
+            .unwrap();
+    }
+
+    let mut plan = DocumentPlan::new();
+    plan.paragraphs
+        .push(list_paragraph("p1", &["A1", "A2", "A3", "A4"]));
+    plan.paragraphs
+        .push(list_paragraph("p2", &["B1", "B2", "B3", "B4"]));
+    plan.paragraphs
+        .push(list_paragraph("p3", &["C1", "C2", "C3", "C4"]));
+    plan.paragraphs
+        .push(list_paragraph("p4", &["D1", "D2", "D3", "D4"]));
+    plan.paragraphs
+        .push(list_paragraph("p5", &["E1", "E2", "E3", "E4"]));
+
+    let mut session = Session::new();
+    let rendered = plan.render(&engine, &mut session).unwrap();
+
+    // The 5th paragraph completes the cycle and uses `Including` again.
+    assert!(
+        rendered.contains("including E1 and E2 among others"),
+        "5th paragraph should wrap to `including`, got:\n{rendered}"
+    );
+}
+
+#[test]
+fn full_session_reset_restarts_list_style_at_first_paragraph() {
+    // Companion negative test: a full `Session::reset` (the documented
+    // "fresh narrative" escape hatch) resets the cycle so the next first-
+    // paragraph again uses `Including`. Proves `reset_list_cycle` /
+    // `Session::reset` semantics aren't accidentally identical to the
+    // paragraph-scoped reset.
+    let mut engine = Engine::new(English::new())
+        .strictness(Strictness::Strict)
+        .variation(Variation::Fixed);
+    engine
+        .register_template("p", "Touched {items|truncate:2|join}.")
+        .unwrap();
+
+    let mut plan = DocumentPlan::new();
+    plan.paragraphs
+        .push(list_paragraph("p", &["X1", "X2", "X3", "X4"]));
+    plan.paragraphs
+        .push(list_paragraph("p", &["Y1", "Y2", "Y3", "Y4"]));
+
+    let mut session = Session::new();
+    let _ = plan.render(&engine, &mut session).unwrap();
+
+    // Hard reset → next render starts the cycle over.
+    session.reset();
+
+    let mut plan2 = DocumentPlan::new();
+    plan2
+        .paragraphs
+        .push(list_paragraph("p", &["Z1", "Z2", "Z3", "Z4"]));
+    let after_full_reset = plan2.render(&engine, &mut session).unwrap();
+    assert!(
+        after_full_reset.contains("including Z1 and Z2 among others"),
+        "full reset should restart cycle at `including`, got:\n{after_full_reset}"
     );
 }

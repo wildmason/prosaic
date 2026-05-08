@@ -375,13 +375,14 @@ impl DocumentPlan {
     /// Paragraphs render concurrently and the results are joined with `"\n\n"`
     /// in the original paragraph order.
     ///
-    /// **Trade-off:** temporal-anchor threading across paragraphs is lost —
-    /// each paragraph anchors independently. For temporally coherent narratives
-    /// (e.g. when you rely on `{ts|since_last}` spanning paragraph boundaries)
-    /// use [`render`][DocumentPlan::render] instead.
+    /// **Trade-off:** temporal-anchor threading and auto list-style rotation
+    /// across paragraphs are lost; each paragraph renders from an independently
+    /// cloned session. For coherent narratives (e.g. when you rely on
+    /// `{ts|since_last}` or cross-paragraph `{items|join}` variety) use
+    /// [`render`][DocumentPlan::render] instead.
     ///
-    /// For temporally independent paragraphs this produces byte-identical output
-    /// to the sequential `render`.
+    /// For paragraphs independent of temporal anchors and auto list-style
+    /// cycling this produces byte-identical output to the sequential `render`.
     ///
     /// Requires the `parallel` feature.
     #[cfg(feature = "parallel")]
@@ -401,9 +402,9 @@ impl DocumentPlan {
             .par_iter()
             .map(|p| {
                 let mut session = initial_session.clone();
-                // Reset discourse state so each paragraph starts fresh,
-                // mirroring the sequential render's session.reset() call.
-                session.reset();
+                // Reset paragraph-local discourse while preserving the
+                // initial session's narrative-level style seed.
+                session.reset_for_paragraph();
 
                 if p.relations.iter().any(|r| r.is_some()) {
                     let triples: Vec<(&str, Context, Option<RstRelation>)> = p
@@ -431,8 +432,8 @@ impl DocumentPlan {
     /// Render the document plan into a narrative.
     ///
     /// Paragraphs are separated by a double newline. Between paragraphs the
-    /// discourse state is reset so pronouns don't span paragraph boundaries —
-    /// each paragraph reintroduces its entity with the full form.
+    /// paragraph-local discourse state is reset so pronouns don't span paragraph
+    /// boundaries, but narrative-level style rotation is preserved.
     ///
     /// When any event in a paragraph carries an RST relation, the paragraph
     /// is rendered via [`Engine::render_batch_with_relations`] which inserts
@@ -444,7 +445,7 @@ impl DocumentPlan {
 
         for (idx, p) in self.paragraphs.iter().enumerate() {
             if idx > 0 {
-                session.reset();
+                session.reset_for_paragraph();
             }
 
             let rendered = if p.relations.iter().any(|r| r.is_some()) {
@@ -628,6 +629,56 @@ mod tests {
     }
 
     // ── Rhetorical grouping ──────────────────────────────────────────────
+
+    #[test]
+    fn document_render_preserves_list_style_cycle_across_paragraphs() {
+        let mut engine = Engine::new(TestLang)
+            .strictness(Strictness::Strict)
+            .variation(Variation::Fixed);
+        engine
+            .register_template(
+                "t",
+                "The {entity_type} {name} touched {items|truncate:1|join}",
+            )
+            .unwrap();
+
+        fn list_ctx(name: &str, first_item: &str) -> Context {
+            let mut ctx = Context::new();
+            ctx.insert("entity_type", Value::String("class".into()));
+            ctx.insert("name", Value::String(name.into()));
+            ctx.insert(
+                "items",
+                Value::List(vec![first_item.into(), "cache".into(), "metrics".into()]),
+            );
+            ctx
+        }
+
+        let events: Vec<(&str, Context)> = vec![
+            ("t", list_ctx("Alpha", "auth")),
+            ("t", list_ctx("Beta", "billing")),
+            ("t", list_ctx("Gamma", "search")),
+            ("t", list_ctx("Delta", "alerts")),
+        ];
+
+        let plan = DocumentPlan::from_events(&events, &engine);
+        let mut session = Session::new();
+        let rendered = plan.render(&engine, &mut session).unwrap();
+
+        assert_eq!(
+            rendered,
+            concat!(
+                "The class Alpha touched including auth among others.\n\n",
+                "The class Beta touched such as billing.\n\n",
+                "The class Gamma touched \u{2014} notably search, plus 2 more.\n\n",
+                "The class Delta touched [alerts, 2 more].",
+            )
+        );
+        assert_eq!(
+            rendered.matches("including ").count(),
+            1,
+            "paragraph resets must not restart every truncated list with the same style: {rendered}",
+        );
+    }
 
     fn ctx_with_entity(name: &str, count: i64) -> Context {
         let mut c = Context::new();
