@@ -102,6 +102,10 @@ pub struct DiscourseState {
     /// Kept for a window of the last 5 renders.
     word_history: VecDeque<(usize, HashSet<u32>)>,
 
+    /// Word counts from recently emitted sentences. Used to avoid a flat
+    /// mid-length cadence when multiple template variants are available.
+    sentence_length_history: VecDeque<usize>,
+
     /// Word interner shared across all render history. Lowercasing happens
     /// once at intern time; all subsequent lookups use pre-lowercased ids.
     interner: WordInterner,
@@ -224,8 +228,9 @@ pub enum ListStyle {
     Bracketed,
 }
 
-const CONNECTIVE_WINDOW: usize = 3;
+const CONNECTIVE_WINDOW: usize = 6;
 const WORD_HISTORY_WINDOW: usize = 5;
+const SENTENCE_RHYTHM_WINDOW: usize = 6;
 const ENTITY_REINTRODUCE_DISTANCE: usize = 3;
 
 /// Stopwords excluded from the word frequency map.
@@ -266,6 +271,7 @@ impl DiscourseState {
             last_template_key: None,
             last_entity_name: None,
             word_history: VecDeque::new(),
+            sentence_length_history: VecDeque::new(),
             interner,
             stopword_ids,
             last_list_style: 0,
@@ -300,13 +306,48 @@ impl DiscourseState {
     }
 
     /// Clear discourse state at a paragraph boundary while preserving the
-    /// narrative-level list-style rotation. This is the reset used by
-    /// [`Session::reset_for_paragraph`] so multi-paragraph narratives don't
-    /// restart the `|join` style cycle on every paragraph.
+    /// narrative-level stylistic anti-repeat machinery. This is the reset
+    /// used by [`Session::reset_for_paragraph`] so multi-paragraph narratives
+    /// don't restart variant cycles, list-style rotation, word-repetition
+    /// penalties, or sentence-rhythm memory on every paragraph break.
+    ///
+    /// **Preserved (narrative-level):** `last_list_style` (list-style cycle),
+    /// `template_history` (variant anti-repeat), `connective_history`
+    /// (connective anti-repeat), `word_history` plus `interner` (repetition
+    /// scoring), `sentence_length_history` (cadence/rhythm scoring),
+    /// `render_index` (so word-history distances stay correct and
+    /// `has_prior_render` keeps reporting earlier discourse exists).
+    ///
+    /// **Cleared (paragraph-local):** the entity table, focus entity and its
+    /// plurality, `last_template_key`/`last_entity_name` (so cross-paragraph
+    /// relation/connective inference is suppressed), the Centering Theory
+    /// `Cb`/`Cf` machinery (`cb`, `previous_focus`, `current_cf`,
+    /// `previous_cf`, `last_transition`), and per-render diagnostic signals.
+    ///
+    /// The clearance set is the load-bearing invariant: anaphora must not
+    /// resolve to entities introduced in an earlier paragraph, and rhetorical
+    /// connectives ("Furthermore,", "However,") must not jump paragraph
+    /// boundaries.
     pub fn reset_for_paragraph(&mut self) {
-        let last_list_style = self.last_list_style;
-        self.reset();
-        self.last_list_style = last_list_style;
+        // Pronoun/anaphora sources.
+        self.entities.clear();
+        self.focus_entity = None;
+        self.focus_is_plural = false;
+        // Relation-detection inputs (drive cross-render connective insertion).
+        self.last_template_key = None;
+        self.last_entity_name = None;
+        // Centering Theory state.
+        self.cb = None;
+        self.previous_focus = None;
+        self.current_cf.clear();
+        self.previous_cf.clear();
+        self.last_transition = Transition::NoCb;
+        // Per-render diagnostics.
+        self.last_list_style_used = None;
+        self.last_cleanup_stripped_tail = false;
+        // Intentionally retained: last_list_style, template_history,
+        // connective_history, word_history, sentence_length_history,
+        // interner, stopword_ids, render_index.
     }
 
     /// Clear only the list-style cycle counter. Mirrors
@@ -497,8 +538,10 @@ impl DiscourseState {
         }
     }
 
-    /// Select a discourse connective for the given relation, respecting the
-    /// non-repetition window. Returns None if no suitable connective is available.
+    /// Select a discourse connective for the given relation, preferring
+    /// candidates absent from recent history. When a small pool is saturated,
+    /// recycle the least-recently-used connective rather than starving the
+    /// discourse of transition cues.
     pub fn select_connective(&mut self, relation: &DiscourseRelation) -> Option<&'static str> {
         let pool = match relation {
             DiscourseRelation::SameEntityDifferentAction => SAME_ENTITY_CONNECTIVES,
@@ -507,21 +550,35 @@ impl DiscourseState {
             DiscourseRelation::None => return None,
         };
 
-        // Find a connective not recently used
-        let selected = pool
-            .iter()
-            .find(|&&c| !self.connective_history.iter().any(|h| h == c));
+        let immediate = self.connective_history.back().map(String::as_str);
+        let mut selected = None;
+        let mut selected_distance = 0usize;
 
-        if let Some(&connective) = selected {
-            self.connective_history.push_back(connective.to_string());
-            if self.connective_history.len() > CONNECTIVE_WINDOW {
-                self.connective_history.pop_front();
+        for &connective in pool {
+            if pool.len() > 1 && immediate == Some(connective) {
+                continue;
             }
-            Some(connective)
-        } else {
-            // All connectives recently used — skip rather than repeat
-            None
+
+            let distance = self
+                .connective_history
+                .iter()
+                .rev()
+                .position(|history| history == connective)
+                .unwrap_or(CONNECTIVE_WINDOW + 1);
+
+            if selected.is_none() || distance > selected_distance {
+                selected = Some(connective);
+                selected_distance = distance;
+            }
         }
+
+        let connective = selected?;
+        self.connective_history.push_back(connective.to_string());
+        if self.connective_history.len() > CONNECTIVE_WINDOW {
+            self.connective_history.pop_front();
+        }
+
+        Some(connective)
     }
 
     /// Record the words from a rendered output for repetition scoring.
@@ -546,6 +603,16 @@ impl DiscourseState {
         // Trim to window
         while self.word_history.len() > WORD_HISTORY_WINDOW {
             self.word_history.pop_front();
+        }
+    }
+
+    /// Record word counts for the sentences emitted by the committed render.
+    pub fn record_sentence_rhythm(&mut self, output: &str) {
+        for len in sentence_word_counts(output) {
+            self.sentence_length_history.push_back(len);
+            while self.sentence_length_history.len() > SENTENCE_RHYTHM_WINDOW {
+                self.sentence_length_history.pop_front();
+            }
         }
     }
 
@@ -586,6 +653,47 @@ impl DiscourseState {
             score += overlap as f64 * weight;
         }
         score
+    }
+
+    /// Score a candidate output against recent sentence-length cadence.
+    /// Lower is better: candidates with sentence lengths that were just
+    /// emitted receive a penalty, while noticeably shorter or longer variants
+    /// are preferred when repetition scores are otherwise close.
+    pub fn sentence_rhythm_score(&self, candidate: &str) -> f64 {
+        let candidate_lengths = sentence_word_counts(candidate);
+        if candidate_lengths.is_empty() || self.sentence_length_history.is_empty() {
+            return 0.0;
+        }
+
+        let recent_mean = self.sentence_length_history.iter().sum::<usize>() as f64
+            / self.sentence_length_history.len() as f64;
+
+        let mut score = 0.0;
+        for len in &candidate_lengths {
+            let closest = self
+                .sentence_length_history
+                .iter()
+                .map(|recent| recent.abs_diff(*len))
+                .min()
+                .unwrap_or(usize::MAX);
+
+            score += match closest {
+                0 => 3.0,
+                1 => 2.0,
+                2 => 1.0,
+                3 => 0.5,
+                _ => 0.0,
+            };
+
+            let mean_delta = (*len as f64 - recent_mean).abs();
+            if mean_delta < 1.0 {
+                score += 1.0;
+            } else if mean_delta < 2.0 {
+                score += 0.5;
+            }
+        }
+
+        score / candidate_lengths.len() as f64
     }
 
     /// Recency-weighted frequency of a specific word in recent output.
@@ -793,6 +901,28 @@ impl Default for DiscourseState {
     }
 }
 
+fn sentence_word_counts(text: &str) -> Vec<usize> {
+    let mut counts = Vec::new();
+    let mut current = 0usize;
+
+    for raw in text.split_whitespace() {
+        if raw.chars().any(|c| c.is_alphanumeric()) {
+            current += 1;
+        }
+
+        if (raw.ends_with('.') || raw.ends_with('!') || raw.ends_with('?')) && current > 0 {
+            counts.push(current);
+            current = 0;
+        }
+    }
+
+    if current > 0 {
+        counts.push(current);
+    }
+
+    counts
+}
+
 /// Check if two template keys represent the same action type.
 /// e.g., "code.renamed" and "code.renamed" → true
 /// e.g., "code.renamed" and "code.deleted" → false
@@ -896,17 +1026,36 @@ mod tests {
     }
 
     #[test]
-    fn connective_returns_none_when_exhausted() {
+    fn connective_recency_window_spans_mixed_relation_types() {
+        let mut state = DiscourseState::new();
+        let same_entity = DiscourseRelation::SameEntityDifferentAction;
+        let same_action = DiscourseRelation::DifferentEntitySameAction;
+        let contrast = DiscourseRelation::Contrast;
+
+        assert_eq!(state.select_connective(&same_entity), Some("Additionally,"));
+        assert_eq!(state.select_connective(&contrast), Some("Meanwhile,"));
+        assert_eq!(state.select_connective(&same_action), Some("Similarly,"));
+        assert_eq!(state.select_connective(&contrast), Some("However,"));
+
+        // "Additionally," is still inside the six-entry recency window, so
+        // the selector moves to the next unused same-entity connective.
+        assert_eq!(state.select_connective(&same_entity), Some("Furthermore,"));
+    }
+
+    #[test]
+    fn connective_recycles_least_recent_when_pool_saturated() {
         let mut state = DiscourseState::new();
         let rel = DiscourseRelation::SameEntityDifferentAction;
 
-        // Exhaust all 3 connectives
-        state.select_connective(&rel);
-        state.select_connective(&rel);
-        state.select_connective(&rel);
+        assert_eq!(state.select_connective(&rel), Some("Additionally,"));
+        assert_eq!(state.select_connective(&rel), Some("Furthermore,"));
+        assert_eq!(state.select_connective(&rel), Some("It also"));
 
-        // All 3 are in the window — should return None
-        assert!(state.select_connective(&rel).is_none());
+        // Once the small pool is saturated, keep the discourse connected by
+        // recycling the least-recent choice rather than returning None forever.
+        assert_eq!(state.select_connective(&rel), Some("Additionally,"));
+        assert_eq!(state.select_connective(&rel), Some("Furthermore,"));
+        assert_eq!(state.select_connective(&rel), Some("It also"));
     }
 
     #[test]
@@ -994,6 +1143,31 @@ mod tests {
         let score_low = state.repetition_score("AuthGuard removed from the application entirely");
 
         assert!(score_high > score_low);
+    }
+
+    #[test]
+    fn sentence_rhythm_score_penalizes_recent_sentence_lengths() {
+        let mut state = DiscourseState::new();
+        state.record_sentence_rhythm("Alpha changed after validation passed.");
+
+        let repeated_cadence = state.sentence_rhythm_score("Beta changed after review passed");
+        let varied_cadence =
+            state.sentence_rhythm_score("Beta changed after review passed and deployment resumed");
+
+        assert!(
+            repeated_cadence > varied_cadence,
+            "same-length candidates should score worse than varied ones"
+        );
+    }
+
+    #[test]
+    fn sentence_rhythm_history_is_bounded() {
+        let mut state = DiscourseState::new();
+        state.record_sentence_rhythm(
+            "One changed. Two changed. Three changed. Four changed. Five changed. Six changed. Seven changed.",
+        );
+
+        assert_eq!(state.sentence_length_history.len(), SENTENCE_RHYTHM_WINDOW);
     }
 
     // --- Cb tracking tests (Phase 1) ---
@@ -1093,6 +1267,150 @@ mod tests {
         // Wraps around
         let s5 = state.next_list_style();
         assert_eq!(s5, ListStyle::Including);
+    }
+
+    // --- Paragraph-reset invariants (preserve narrative-level anti-repeat,
+    // clear paragraph-local pronoun/centering state) ---
+
+    #[test]
+    fn paragraph_reset_clears_focus_entity_so_no_pronoun_leak() {
+        let mut state = DiscourseState::new();
+        state.begin_render();
+        state.mention_entity("UserService", "class");
+
+        state.reset_for_paragraph();
+
+        // Without an entity table or focus carryover, the next paragraph's
+        // first reference must reintroduce the entity in full form rather
+        // than pronominalize a stale focus from the prior paragraph.
+        assert_eq!(state.reference_form("UserService"), ReferenceForm::Full);
+        assert_eq!(state.focus_entity, None);
+        assert!(!state.focus_is_plural);
+    }
+
+    #[test]
+    fn paragraph_reset_clears_centering_state() {
+        let mut state = DiscourseState::new();
+        state.begin_render();
+        state.mention_entity_ranked("Foo", "class", 0);
+        state.advance_cb();
+        state.begin_render();
+        state.mention_entity_ranked("Foo", "class", 0);
+        state.advance_cb();
+
+        state.reset_for_paragraph();
+
+        assert_eq!(state.cb(), None);
+        assert!(state.cf().is_empty());
+        assert!(state.previous_cf().is_empty());
+        assert_eq!(state.last_transition(), Transition::NoCb);
+    }
+
+    #[test]
+    fn paragraph_reset_suppresses_cross_paragraph_relation_inference() {
+        let mut state = DiscourseState::new();
+        state.begin_render();
+        state.last_template_key = Some("code.added".to_string());
+        state.last_entity_name = Some("Foo".to_string());
+
+        state.reset_for_paragraph();
+
+        // Same key + same entity in the next paragraph must not be classified
+        // as `Contrast`/`SameEntityDifferentAction` — those would emit a
+        // cross-paragraph "However,"/"Furthermore," that bridges over the
+        // intentional paragraph break.
+        assert_eq!(
+            state.detect_relation("code.deleted", Some("Foo")),
+            DiscourseRelation::None
+        );
+    }
+
+    #[test]
+    fn paragraph_reset_preserves_template_variant_history() {
+        let mut state = DiscourseState::new();
+        state.record_template_choice("code.renamed", 2);
+
+        state.reset_for_paragraph();
+
+        // Anti-repeat must survive the paragraph break so the next paragraph
+        // doesn't immediately replay the variant the prior paragraph just used.
+        assert_eq!(state.last_template_variant("code.renamed"), Some(2));
+    }
+
+    #[test]
+    fn paragraph_reset_preserves_word_repetition_penalty() {
+        let mut state = DiscourseState::new();
+        state.begin_render();
+        state.record_output_words("AuthGuard removed authentication entirely");
+
+        state.reset_for_paragraph();
+
+        // begin_render advances render_index for the next paragraph's first
+        // utterance; the repetition score must still penalize words that
+        // appeared in the prior paragraph.
+        state.begin_render();
+        let overlap_score = state.repetition_score("AuthGuard authentication entirely was removed");
+        let unrelated_score = state.repetition_score("Telemetry pipeline rebuilt cleanly");
+        assert!(
+            overlap_score > unrelated_score,
+            "expected overlap score {overlap_score} to exceed unrelated {unrelated_score}",
+        );
+        assert!(
+            overlap_score > 0.0,
+            "word_history must persist across paragraph reset"
+        );
+    }
+
+    #[test]
+    fn paragraph_reset_preserves_render_index_so_demonstrative_continues() {
+        let mut state = DiscourseState::new();
+        // Simulate paragraph 1 with one event.
+        state.begin_render();
+        state.mention_entity("Foo", "class");
+        state.advance_cb();
+
+        state.reset_for_paragraph();
+
+        // First render of paragraph 2.
+        state.begin_render();
+        // has_prior_render() drives `{noun|demonstrative}`'s "this X" vs
+        // "the X" decision. Inside a single narrative, "this" remains correct
+        // after the paragraph break — only a full session reset returns to
+        // the introductory "the".
+        assert!(state.has_prior_render());
+        assert!(!state.is_first_render());
+    }
+
+    #[test]
+    fn paragraph_reset_preserves_list_style_cycle() {
+        let mut state = DiscourseState::new();
+        let first = state.next_list_style();
+        let second_before = state.next_list_style();
+
+        state.reset_for_paragraph();
+        let next_after_reset = state.next_list_style();
+
+        // Cycle must NOT restart at the first style after a paragraph break.
+        assert_ne!(next_after_reset, first);
+        assert_ne!(next_after_reset, second_before);
+    }
+
+    #[test]
+    fn full_reset_clears_anti_repeat_state() {
+        // The full-narrative reset must still clear everything — anti-repeat
+        // continuity belongs to a narrative, not to the session as a whole.
+        let mut state = DiscourseState::new();
+        state.begin_render();
+        state.record_template_choice("k", 1);
+        state.record_output_words("alpha beta gamma");
+
+        state.reset();
+
+        assert_eq!(state.last_template_variant("k"), None);
+        // Newly-recorded non-overlapping words score zero against an empty
+        // word_history.
+        state.begin_render();
+        assert_eq!(state.repetition_score("alpha beta gamma"), 0.0);
     }
 
     // --- Cf and Transition tests (Phase 2 + Phase 3) ---

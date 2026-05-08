@@ -55,8 +55,8 @@ pub enum Strictness {
 /// `Fixed` and `RoundRobin` are literal: they honour the contract exactly
 /// (first alternative every time / strict rotation in registration order).
 /// `Seeded` and `Random` additionally layer discourse-aware choose-best
-/// scoring on top, so candidates that repeat words from recent output are
-/// penalised.
+/// scoring on top, so candidates that repeat recent words or flatten recent
+/// sentence cadence are penalised.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Variation {
     /// Always pick the first registered template, every render.
@@ -143,10 +143,10 @@ pub struct RenderExplanation {
     pub variant_source: String,
     /// Salience bucket used for filtering alternatives.
     pub salience: Salience,
-    /// Choose-best scores for each alternative that was considered (in
-    /// the same order as the filtered alternative set). `None` when
-    /// choose-best wasn't applicable (first render, or Fixed /
-    /// RoundRobin variation).
+    /// Choose-best discourse scores for each alternative that was considered
+    /// (in the same order as the filtered alternative set). `None` when
+    /// choose-best wasn't applicable (first render, or Fixed / RoundRobin
+    /// variation).
     pub candidate_scores: Option<Vec<f64>>,
     /// Reference form chosen by `{name|refer}` on the primary entity,
     /// if a refer pipe fired.
@@ -275,7 +275,8 @@ pub struct VariantScore {
     pub source: String,
     /// What the variant renders to with the given context.
     pub rendered: String,
-    /// Choose-best repetition score — lower is better.
+    /// Choose-best discourse score; combines repetition and cadence penalties.
+    /// Lower is better.
     pub score: f64,
     /// Salience bucket this variant was registered at.
     pub salience: Salience,
@@ -313,6 +314,11 @@ pub struct Engine {
     max_sentence_length: Option<usize>,
     #[cfg(feature = "polish")]
     smart_quotes: bool,
+    /// When `true`, choose-best scoring layers a sentence-rhythm cadence
+    /// penalty on top of word-repetition. Defaults to `true` so prose
+    /// generated under `Variation::Seeded`/`Random` exhibits human-like
+    /// burstiness rather than a flat mid-length cadence.
+    sentence_rhythm_enabled: bool,
     partials: HashMap<String, Template>,
     /// BCP-47 language code that variant selection should prefer when
     /// language-tagged variants are registered for a key. `None` means
@@ -481,6 +487,7 @@ impl<'e, 's> RenderCtx<'e, 's> {
 
         // Record output words for future repetition scoring
         self.session.discourse.record_output_words(&output);
+        self.session.discourse.record_sentence_rhythm(&output);
 
         // Advance Cb (backward-looking center) for the next render.
         // Must be the last mutation so failed renders don't advance Cb
@@ -488,6 +495,14 @@ impl<'e, 's> RenderCtx<'e, 's> {
         self.session.discourse.advance_cb();
 
         Ok(output)
+    }
+
+    fn candidate_discourse_score(&self, candidate: &str) -> f64 {
+        let mut score = self.session.discourse.repetition_score(candidate);
+        if self.engine.sentence_rhythm_enabled {
+            score += self.session.discourse.sentence_rhythm_score(candidate);
+        }
+        score
     }
 
     fn select_alternative_scored<'a>(
@@ -551,7 +566,7 @@ impl<'e, 's> RenderCtx<'e, 's> {
         let mut best_score = f64::MAX;
 
         for (i, candidate) in &candidates {
-            let score = self.session.discourse.repetition_score(candidate);
+            let score = self.candidate_discourse_score(candidate);
             if score < best_score {
                 best_score = score;
                 best_index = *i;
@@ -1459,7 +1474,7 @@ impl<'e, 's> RenderCtx<'e, 's> {
         }
 
         for s in scores.iter_mut() {
-            s.score = self.session.discourse.repetition_score(&s.rendered);
+            s.score = self.candidate_discourse_score(&s.rendered);
         }
 
         // Determine the selected variant
@@ -1540,6 +1555,7 @@ impl Engine {
             max_sentence_length: None,
             #[cfg(feature = "polish")]
             smart_quotes: false,
+            sentence_rhythm_enabled: true,
             partials: new_map(),
             language_preference: None,
             style_preference: None,
@@ -1787,6 +1803,20 @@ impl Engine {
     #[cfg(feature = "polish")]
     pub fn max_sentence_length(mut self, max_chars: usize) -> Self {
         self.max_sentence_length = Some(max_chars);
+        self
+    }
+
+    /// Toggle the sentence-rhythm cadence penalty layered on top of
+    /// choose-best scoring (`Variation::Seeded`/`Random`). Enabled by
+    /// default — the penalty discourages picking template variants whose
+    /// length closely matches recently emitted sentences, biasing prose
+    /// toward higher length variance / burstiness.
+    ///
+    /// Disable this when downstream tooling needs the historical scoring
+    /// behaviour (word-repetition only) — e.g. golden-output regressions
+    /// taken before the rhythm pass landed.
+    pub fn sentence_rhythm(mut self, enabled: bool) -> Self {
+        self.sentence_rhythm_enabled = enabled;
         self
     }
 
@@ -2567,7 +2597,12 @@ impl Engine {
                         &context,
                     ) {
                         Ok(()) => {
-                            let score = scoring_session.discourse.repetition_score(&scratch);
+                            let mut score =
+                                scoring_session.discourse.repetition_score(&scratch);
+                            if self.sentence_rhythm_enabled {
+                                score +=
+                                    scoring_session.discourse.sentence_rhythm_score(&scratch);
+                            }
                             scored.push(score);
                         }
                         Err(_) => {

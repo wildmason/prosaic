@@ -494,6 +494,361 @@ fn clause_reduction_accepts_full_np_repetition_end_to_end() {
     assert_eq!(out, "The class Gateway was renamed, modified, and moved.");
 }
 
+#[test]
+fn connective_variety_uses_longer_recency_window_in_rendered_prose() {
+    let mut engine = engine();
+    engine
+        .register_template("code.added", "{name|refer} was added")
+        .unwrap();
+    engine
+        .register_template("code.deleted", "{name|refer} was deleted")
+        .unwrap();
+    engine
+        .register_template("code.modified", "The class {name} was modified")
+        .unwrap();
+
+    fn ctx(name: &str) -> Context {
+        let mut c = Context::new();
+        c.insert("entity_type", Value::String("class".into()));
+        c.insert("name", Value::String(name.into()));
+        c
+    }
+
+    let mut session = Session::new();
+    let outputs = vec![
+        engine
+            .render(&mut session, "code.added", ctx("Alpha"))
+            .unwrap(),
+        engine
+            .render(&mut session, "code.deleted", ctx("Alpha"))
+            .unwrap(),
+        engine
+            .render(&mut session, "code.added", ctx("Beta"))
+            .unwrap(),
+        engine
+            .render(&mut session, "code.added", ctx("Gamma"))
+            .unwrap(),
+        engine
+            .render(&mut session, "code.deleted", ctx("Delta"))
+            .unwrap(),
+        engine
+            .render(&mut session, "code.modified", ctx("Delta"))
+            .unwrap(),
+    ];
+
+    assert_eq!(
+        outputs,
+        vec![
+            "The class Alpha was added.",
+            "Additionally, it was deleted.",
+            "Meanwhile, the class Beta was added.",
+            "Similarly, the class Gamma was added.",
+            "However, the class Delta was deleted.",
+            "Furthermore, the class Delta was modified.",
+        ]
+    );
+}
+
+#[test]
+fn sentence_rhythm_variance_prefers_varied_template_lengths() {
+    let mut engine = Engine::new(English::new())
+        .strictness(Strictness::Strict)
+        .variation(Variation::Seeded(2))
+        .max_sentence_length(90);
+    engine
+        .register_template("rhythm", "{item} changed safely")
+        .unwrap();
+    engine
+        .register_template("rhythm", "{item} changed after validation passed")
+        .unwrap();
+    engine
+        .register_template(
+            "rhythm",
+            "{item} changed after validation passed and retry handling stabilized before release",
+        )
+        .unwrap();
+
+    fn ctx(item: &str) -> Context {
+        let mut c = Context::new();
+        c.insert("item", Value::String(item.into()));
+        c
+    }
+
+    fn word_count(output: &str) -> usize {
+        output
+            .split_whitespace()
+            .filter(|word| word.chars().any(|c| c.is_alphanumeric()))
+            .count()
+    }
+
+    fn stdev(lengths: &[usize]) -> f64 {
+        let mean = lengths.iter().sum::<usize>() as f64 / lengths.len() as f64;
+        let variance = lengths
+            .iter()
+            .map(|len| {
+                let delta = *len as f64 - mean;
+                delta * delta
+            })
+            .sum::<f64>()
+            / lengths.len() as f64;
+        variance.sqrt()
+    }
+
+    let mut session = Session::new();
+    let outputs = ["Alpha", "Beta", "Gamma", "Delta", "Epsilon", "Zeta"]
+        .into_iter()
+        .map(|item| engine.render(&mut session, "rhythm", ctx(item)).unwrap())
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        outputs,
+        vec![
+            "Alpha changed after validation passed.",
+            "Beta changed safely.",
+            "Gamma changed after validation passed and retry handling stabilized before release.",
+            "Delta changed safely.",
+            "Epsilon changed after validation passed.",
+            "Zeta changed safely.",
+        ]
+    );
+
+    let lengths = outputs
+        .iter()
+        .map(|output| word_count(output))
+        .collect::<Vec<_>>();
+    assert!(
+        stdev(&lengths) >= 2.0,
+        "expected visible sentence-length variance, got lengths {lengths:?}"
+    );
+    assert!(
+        outputs.iter().all(|output| output.chars().count() <= 90),
+        "rhythm selection must not exceed max_sentence_length: {outputs:?}"
+    );
+    assert!(
+        outputs.iter().all(|output| !output.contains("..")
+            && !output.contains(",.")
+            && output.ends_with('.')),
+        "rhythm fixture should preserve punctuation sanity: {outputs:?}"
+    );
+}
+
+#[test]
+fn sentence_rhythm_increases_burstiness_versus_disabled_baseline() {
+    // Brown's Lane A acceptance asks for an explicit before/after on
+    // sentence-length distribution. With the rhythm penalty disabled, the
+    // engine still uses choose-best for word-repetition, but is free to
+    // pick the same template-length over and over because all candidates
+    // tie on cadence. Enabling the penalty must measurably raise stdev
+    // for the same seed and the same fixture inputs.
+    fn build_engine(rhythm_enabled: bool) -> Engine {
+        let mut engine = Engine::new(English::new())
+            .strictness(Strictness::Strict)
+            .variation(Variation::Seeded(11))
+            .max_sentence_length(120)
+            .sentence_rhythm(rhythm_enabled);
+        engine
+            .register_template("rhythm", "{item} shipped")
+            .unwrap();
+        engine
+            .register_template("rhythm", "{item} shipped after review concluded")
+            .unwrap();
+        engine
+            .register_template(
+                "rhythm",
+                "{item} shipped after review concluded and the rollout completed cleanly",
+            )
+            .unwrap();
+        engine
+    }
+
+    fn ctx(item: &str) -> Context {
+        let mut c = Context::new();
+        c.insert("item", Value::String(item.into()));
+        c
+    }
+
+    fn word_counts(outputs: &[String]) -> Vec<usize> {
+        outputs
+            .iter()
+            .map(|output| {
+                output
+                    .split_whitespace()
+                    .filter(|word| word.chars().any(|c| c.is_alphanumeric()))
+                    .count()
+            })
+            .collect()
+    }
+
+    fn stdev(lengths: &[usize]) -> f64 {
+        let mean = lengths.iter().sum::<usize>() as f64 / lengths.len() as f64;
+        let variance = lengths
+            .iter()
+            .map(|len| {
+                let delta = *len as f64 - mean;
+                delta * delta
+            })
+            .sum::<f64>()
+            / lengths.len() as f64;
+        variance.sqrt()
+    }
+
+    let items = [
+        "Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot", "Golf", "Hotel",
+    ];
+
+    let mut session_off = Session::new();
+    let engine_off = build_engine(false);
+    let outputs_off: Vec<String> = items
+        .iter()
+        .map(|item| engine_off.render(&mut session_off, "rhythm", ctx(item)).unwrap())
+        .collect();
+
+    let mut session_on = Session::new();
+    let engine_on = build_engine(true);
+    let outputs_on: Vec<String> = items
+        .iter()
+        .map(|item| engine_on.render(&mut session_on, "rhythm", ctx(item)).unwrap())
+        .collect();
+
+    let lengths_off = word_counts(&outputs_off);
+    let lengths_on = word_counts(&outputs_on);
+    let stdev_off = stdev(&lengths_off);
+    let stdev_on = stdev(&lengths_on);
+
+    assert!(
+        stdev_on > stdev_off,
+        "rhythm-on stdev ({stdev_on:.3}) must exceed rhythm-off ({stdev_off:.3}); \
+         off lengths {lengths_off:?}, on lengths {lengths_on:?}"
+    );
+    // Hard floor so a future regression that silently flattens cadence
+    // (e.g. tying on rhythm score) cannot pass by virtue of being merely
+    // marginally better than the baseline.
+    assert!(
+        stdev_on - stdev_off >= 1.0,
+        "rhythm-on must add at least one word of stdev over baseline; \
+         got delta {:.3} (off {:.3}, on {:.3}) lengths off {lengths_off:?} on {lengths_on:?}",
+        stdev_on - stdev_off,
+        stdev_off,
+        stdev_on,
+    );
+    // Both passes must still respect the configured max-length budget;
+    // burstiness is not allowed to come from runaway long sentences.
+    for output in outputs_off.iter().chain(outputs_on.iter()) {
+        assert!(
+            output.chars().count() <= 120,
+            "rhythm pass must not exceed max_sentence_length: {output}"
+        );
+    }
+}
+
+#[test]
+fn sentence_rhythm_preserves_event_count_and_entity_propositions() {
+    // Regression: rhythm scoring must not omit propositions or reorder
+    // the event chain. Every event's entity name has to appear in the
+    // rendered output, and the rendered narrative must contain exactly
+    // one sentence per event when no aggregation strategy applies.
+    let mut engine = Engine::new(English::new())
+        .strictness(Strictness::Strict)
+        .variation(Variation::Seeded(3))
+        .max_sentence_length(120);
+    // Three template variants of distinctly different lengths so the
+    // rhythm penalty has live choices to make. All variants lead with a
+    // determiner so the auto-connective path's lowercase-first transform
+    // composes correctly when prepending markers like `Similarly,`.
+    engine
+        .register_template("realism.touched", "The class {name} was touched")
+        .unwrap();
+    engine
+        .register_template(
+            "realism.touched",
+            "The class {name} was touched and revalidated against the current schema",
+        )
+        .unwrap();
+    engine
+        .register_template(
+            "realism.touched",
+            "The class {name} was touched after the routine sweep, \
+             revalidated against the current schema, and recorded in the engineering ledger",
+        )
+        .unwrap();
+
+    let entities = [
+        "Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot", "Golf", "Hotel", "India",
+        "Juliet",
+    ];
+
+    let mut session = Session::new();
+    let outputs: Vec<String> = entities
+        .iter()
+        .map(|name| {
+            let mut c = Context::new();
+            c.insert("entity_type", Value::String("class".into()));
+            c.insert("name", Value::String((*name).into()));
+            engine.render(&mut session, "realism.touched", &c).unwrap()
+        })
+        .collect();
+
+    // Event-chain integrity: one rendered sentence per event, in order,
+    // and every entity name surfaces exactly where the input placed it.
+    assert_eq!(outputs.len(), entities.len());
+    for (output, name) in outputs.iter().zip(entities.iter()) {
+        assert!(
+            output.contains(name),
+            "rhythm pass dropped entity `{name}` from output `{output}`"
+        );
+    }
+
+    // Punctuation sanity across the whole narrative — no doubled
+    // terminals, no broken comma adjacency, no malformed semicolon
+    // boundaries, every sentence terminates with `.`, `!`, or `?`.
+    let joined = outputs.join(" ");
+    assert!(
+        !joined.contains(".."),
+        "rhythm pass produced doubled terminal punctuation: {joined}"
+    );
+    assert!(
+        !joined.contains(",."),
+        "rhythm pass produced malformed comma/period adjacency: {joined}"
+    );
+    assert!(
+        !joined.contains(",,"),
+        "rhythm pass produced doubled commas: {joined}"
+    );
+    assert!(
+        !joined.contains(" ,"),
+        "rhythm pass produced floating commas: {joined}"
+    );
+    assert!(
+        !joined.contains(" ;"),
+        "rhythm pass produced floating semicolons: {joined}"
+    );
+    for output in &outputs {
+        let last = output.trim_end().chars().last().unwrap_or('?');
+        assert!(
+            matches!(last, '.' | '!' | '?'),
+            "rhythm pass left unterminated sentence: {output}"
+        );
+        assert!(
+            !output.contains("  "),
+            "rhythm pass introduced double spaces: {output}"
+        );
+    }
+
+    // Sentence count must equal event count: every input event maps to
+    // one — and only one — output sentence. Aggregation isn't triggered
+    // here (each event has a unique entity), so no clause-reduction or
+    // gapping is allowed to collapse the chain.
+    let sentence_terminator_count = joined
+        .chars()
+        .filter(|c| matches!(c, '.' | '!' | '?'))
+        .count();
+    assert_eq!(
+        sentence_terminator_count,
+        entities.len(),
+        "rhythm pass changed the proposition count; got `{joined}`"
+    );
+}
+
 // ── Rhetorical grouping in document plans ────────────────────────────────
 
 #[test]

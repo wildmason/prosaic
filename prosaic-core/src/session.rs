@@ -61,18 +61,24 @@ impl Session {
     }
 
     /// Reset paragraph-local discourse while keeping narrative-level style
-    /// continuity. Pronoun/centering/template-history state is cleared, but
-    /// the discourse list-style rotation and the temporal anchor are
-    /// preserved so consecutive paragraphs in the same narrative rotate
-    /// through `|join` phrasings and continue to support inter-paragraph
-    /// temporal references.
+    /// continuity. Pronoun, focus, and Centering Theory state are cleared so
+    /// anaphora cannot leak across the paragraph break, but every form of
+    /// stylistic anti-repeat — list-style rotation, template-variant history,
+    /// connective history, word-repetition scoring, and Round-Robin variant
+    /// counters — survives, along with the temporal anchor. Consecutive
+    /// paragraphs therefore rotate through `|join` phrasings, avoid replaying
+    /// the same template variant or connective, are penalized for repeating
+    /// recent vocabulary, and continue to support inter-paragraph temporal
+    /// references.
     ///
     /// This is the reset [`crate::DocumentPlan::render`] uses between
     /// paragraphs. Library consumers driving their own paragraph loop should
     /// prefer this over [`Session::reset`].
     pub fn reset_for_paragraph(&mut self) {
         self.discourse.reset_for_paragraph();
-        self.round_robin_counters.clear();
+        // round_robin_counters are intentionally retained: they back
+        // Variation::RoundRobin's variant cycling, and resetting them every
+        // paragraph would re-introduce the same opener after each break.
         // See `reset`: temporal anchors intentionally survive paragraph breaks.
     }
 
@@ -159,6 +165,37 @@ mod tests {
         let second = s.discourse.next_list_style();
 
         assert_ne!(first, second);
+    }
+
+    #[test]
+    fn paragraph_reset_preserves_round_robin_counter() {
+        // Variation::RoundRobin uses these counters to cycle through template
+        // variants. Resetting them every paragraph would replay the same
+        // opener after every break — the realism-leak we're closing.
+        let mut s = Session::new();
+        s.round_robin_counters
+            .insert("code.renamed".to_string(), AtomicUsize::new(2));
+
+        s.reset_for_paragraph();
+
+        let counter = s
+            .round_robin_counters
+            .get("code.renamed")
+            .expect("round_robin counter must survive paragraph reset");
+        assert_eq!(counter.load(Ordering::Relaxed), 2);
+    }
+
+    #[test]
+    fn full_reset_clears_round_robin_counters() {
+        // Full session resets DO restart the rotation — the counter belongs
+        // to the narrative, not the session as a whole.
+        let mut s = Session::new();
+        s.round_robin_counters
+            .insert("code.renamed".to_string(), AtomicUsize::new(2));
+
+        s.reset();
+
+        assert!(s.round_robin_counters.is_empty());
     }
 
     #[test]

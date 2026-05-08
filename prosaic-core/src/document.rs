@@ -680,6 +680,93 @@ mod tests {
         );
     }
 
+    #[test]
+    fn document_render_does_not_replay_round_robin_variant_after_paragraph_break() {
+        // RoundRobin variation cycles through registered variants by index.
+        // Before the paragraph-reset fix, `Session::reset_for_paragraph` wiped
+        // the per-key counter, so paragraph 2's first event always re-picked
+        // index 0 — replaying paragraph 1's opener verbatim.
+        let mut engine = Engine::new(TestLang)
+            .strictness(Strictness::Strict)
+            .variation(Variation::RoundRobin);
+        engine.register_template("t", "First {name}").unwrap();
+        engine.register_template("t", "Second {name}").unwrap();
+        engine.register_template("t", "Third {name}").unwrap();
+
+        let mut c1 = Context::new();
+        c1.insert("entity_type", Value::String("class".into()));
+        c1.insert("name", Value::String("Alpha".into()));
+        let mut c2 = Context::new();
+        c2.insert("entity_type", Value::String("class".into()));
+        c2.insert("name", Value::String("Beta".into()));
+
+        let events: Vec<(&str, Context)> = vec![("t", c1), ("t", c2)];
+        let plan = DocumentPlan::from_events(&events, &engine);
+        // Different entities → two paragraphs.
+        assert_eq!(plan.paragraphs.len(), 2);
+
+        let mut session = Session::new();
+        let rendered = plan.render(&engine, &mut session).unwrap();
+
+        // Paragraph 1 → "First Alpha"; paragraph 2 must rotate to the next
+        // variant, not restart at "First Beta".
+        assert!(
+            rendered.starts_with("First Alpha"),
+            "expected paragraph 1 to use variant 0: {rendered}"
+        );
+        assert!(
+            rendered.contains("\n\nSecond Beta"),
+            "expected paragraph 2 to advance to variant 1, not replay \"First\": {rendered}"
+        );
+        assert!(
+            !rendered.contains("First Beta"),
+            "round-robin counter must survive the paragraph reset: {rendered}"
+        );
+    }
+
+    #[test]
+    fn document_render_does_not_pronominalize_across_paragraph_break() {
+        // Paragraph 1 establishes Foo as the focus entity. After the
+        // paragraph break the entity table is cleared, so paragraph 2's
+        // reference to Foo must reintroduce it in full form rather than
+        // resolve as the lingering pronoun antecedent.
+        let mut engine = Engine::new(TestLang)
+            .strictness(Strictness::Strict)
+            .variation(Variation::Fixed);
+        engine
+            .register_template("p1", "{name} was modified")
+            .unwrap();
+        engine
+            .register_template("p2", "{other} also changed")
+            .unwrap();
+
+        let mut c1 = Context::new();
+        c1.insert("entity_type", Value::String("class".into()));
+        c1.insert("name", Value::String("Foo".into()));
+        let mut c2 = Context::new();
+        c2.insert("entity_type", Value::String("class".into()));
+        c2.insert("other", Value::String("Bar".into()));
+
+        // Two distinct entity contexts → two paragraphs.
+        let events: Vec<(&str, Context)> = vec![("p1", c1), ("p2", c2)];
+        let plan = DocumentPlan::from_events(&events, &engine);
+        assert_eq!(plan.paragraphs.len(), 2);
+
+        let mut session = Session::new();
+        let _ = plan.render(&engine, &mut session).unwrap();
+
+        // After the second paragraph renders, Foo's prior-paragraph mention
+        // must NOT survive in the entity table — querying the discourse
+        // state for Foo must return Full so any subsequent reference would
+        // reintroduce the entity rather than emit a stranded pronoun.
+        use crate::discourse::ReferenceForm;
+        assert_eq!(
+            session.discourse().reference_form("Foo"),
+            ReferenceForm::Full,
+            "paragraph reset must clear entity table to prevent anaphora leak",
+        );
+    }
+
     fn ctx_with_entity(name: &str, count: i64) -> Context {
         let mut c = Context::new();
         c.insert("entity_type", Value::String("class".into()));
