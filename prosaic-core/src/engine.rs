@@ -1059,6 +1059,9 @@ impl<'e, 's> RenderCtx<'e, 's> {
             Some(PipeArg::String(s)) if s == "including" => Some(ListStyle::Including),
             Some(PipeArg::String(s)) if s == "such_as" => Some(ListStyle::SuchAs),
             Some(PipeArg::String(s)) if s == "dash" => Some(ListStyle::Dash),
+            Some(PipeArg::String(s)) if s == "among_others" => Some(ListStyle::AmongOthers),
+            Some(PipeArg::String(s)) if s == "to_name_a_few" => Some(ListStyle::ToNameAFew),
+            Some(PipeArg::String(s)) if s == "plus_more" => Some(ListStyle::PlusMore),
             _ => None,
         };
 
@@ -3023,6 +3026,20 @@ fn format_truncated_list(
                 .collect();
             let all_joined = language.join_list(&refs, conjunction);
             format!("[{all_joined}]")
+        }
+        ListStyle::AmongOthers => {
+            // Postfix qualifier; remainder count is dropped to keep the
+            // phrasing natural ("…, among others" reads worse with a
+            // numeric quantifier appended).
+            format!("{joined}, among others")
+        }
+        ListStyle::ToNameAFew => {
+            format!("{joined}, to name a few")
+        }
+        ListStyle::PlusMore => {
+            // remainder is the "+N more" sentinel (e.g. "2 more"); use it
+            // as a numeric quantifier without the em-dash framing of Dash.
+            format!("{joined}, plus {remainder}")
         }
     }
 }

@@ -1920,12 +1920,15 @@ fn document_plan_rotates_list_style_across_paragraphs() {
 
 #[test]
 fn document_plan_list_rotation_wraps_after_full_cycle() {
-    // After the four canonical styles are exhausted, the cycle wraps back
+    // After the seven palette styles are exhausted, the cycle wraps back
     // to `Including` rather than getting stuck or going out of bounds.
+    // The deterministic anti-repeat walk visits every variant within a
+    // single palette pass; paragraph 8 is the first that re-enters the
+    // cycle from index 0.
     let mut engine = Engine::new(English::new())
         .strictness(Strictness::Strict)
         .variation(Variation::Fixed);
-    for key in ["p1", "p2", "p3", "p4", "p5"] {
+    for key in ["p1", "p2", "p3", "p4", "p5", "p6", "p7", "p8"] {
         engine
             .register_template(key, "Touched {items|truncate:2|join}.")
             .unwrap();
@@ -1942,14 +1945,33 @@ fn document_plan_list_rotation_wraps_after_full_cycle() {
         .push(list_paragraph("p4", &["D1", "D2", "D3", "D4"]));
     plan.paragraphs
         .push(list_paragraph("p5", &["E1", "E2", "E3", "E4"]));
+    plan.paragraphs
+        .push(list_paragraph("p6", &["F1", "F2", "F3", "F4"]));
+    plan.paragraphs
+        .push(list_paragraph("p7", &["G1", "G2", "G3", "G4"]));
+    plan.paragraphs
+        .push(list_paragraph("p8", &["H1", "H2", "H3", "H4"]));
 
     let mut session = Session::new();
     let rendered = plan.render(&engine, &mut session).unwrap();
 
-    // The 5th paragraph completes the cycle and uses `Including` again.
+    // Paragraphs 5–7 surface the new postfix variants; paragraph 8 wraps
+    // the cycle back to `Including`.
     assert!(
-        rendered.contains("including E1 and E2 among others"),
-        "5th paragraph should wrap to `including`, got:\n{rendered}"
+        rendered.contains("E1 and E2, among others"),
+        "5th paragraph should rotate to `among others` style, got:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("F1 and F2, to name a few"),
+        "6th paragraph should rotate to `to name a few` style, got:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("G1 and G2, plus 2 more"),
+        "7th paragraph should rotate to `plus more` style, got:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("including H1 and H2 among others"),
+        "8th paragraph should wrap to `including`, got:\n{rendered}"
     );
 }
 

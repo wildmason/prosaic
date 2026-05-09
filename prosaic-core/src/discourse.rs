@@ -115,8 +115,9 @@ pub struct DiscourseState {
     stopword_ids: HashSet<u32>,
 
     /// Monotonic cycle index used by [`Self::next_list_style`]. The selected
-    /// style is `LIST_STYLES[last_list_style % LIST_STYLES.len()]`, advanced
-    /// by one each time `|join` fires.
+    /// style is found by walking `LIST_STYLES` from this index forward,
+    /// skipping any style currently in `recent_list_styles`. The index is
+    /// advanced past the picked slot.
     ///
     /// Persists across paragraph-boundary resets so consecutive paragraphs
     /// rotate through the list-style pool instead of restarting at the same
@@ -124,6 +125,14 @@ pub struct DiscourseState {
     /// `Session::last_temporal_anchor`. Use [`Self::reset_list_cycle`] (or
     /// the [`DiscourseState::reset`] hard reset) to clear it.
     last_list_style: usize,
+
+    /// Trailing window of recently chosen list styles, capped at
+    /// [`LIST_STYLE_RECENT_WINDOW`]. Both auto-picked and explicitly forced
+    /// styles are recorded here so the next auto pick deterministically
+    /// avoids them. Persists across paragraph resets alongside
+    /// `last_list_style`; cleared by [`Self::reset_list_cycle`] and the
+    /// full [`Self::reset`].
+    recent_list_styles: VecDeque<ListStyle>,
 
     /// Whether the current focus is a compound/plural subject, so pronoun
     /// continuations should use "they/them" instead of "it".
@@ -215,7 +224,7 @@ pub enum DiscourseRelation {
 }
 
 /// List formatting style.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum ListStyle {
     /// "including A, B, and C among others"
@@ -226,6 +235,12 @@ pub enum ListStyle {
     Dash,
     /// "[A, B, and C, and N more]" (original format)
     Bracketed,
+    /// "A, B, and C, among others" — postfix qualifier, drops remainder count.
+    AmongOthers,
+    /// "A, B, and C, to name a few" — postfix qualifier, drops remainder count.
+    ToNameAFew,
+    /// "A, B, and C, plus N more" — postfix qualifier, uses remainder count.
+    PlusMore,
 }
 
 const CONNECTIVE_WINDOW: usize = 6;
@@ -247,7 +262,17 @@ const LIST_STYLES: &[ListStyle] = &[
     ListStyle::SuchAs,
     ListStyle::Dash,
     ListStyle::Bracketed,
+    ListStyle::AmongOthers,
+    ListStyle::ToNameAFew,
+    ListStyle::PlusMore,
 ];
+
+/// Number of recent list-style picks remembered for anti-repeat. Each call to
+/// [`DiscourseState::next_list_style`] (and explicit recordings via
+/// [`DiscourseState::record_list_style_used`]) skips any style that appears in
+/// the trailing window, so consecutive truncated lists never repeat phrasing
+/// even when a forced style and the auto-cycle would otherwise collide.
+const LIST_STYLE_RECENT_WINDOW: usize = 2;
 
 /// Connective pools by relationship type.
 const SAME_ENTITY_CONNECTIVES: &[&str] = &["Additionally,", "Furthermore,", "It also"];
@@ -275,6 +300,7 @@ impl DiscourseState {
             interner,
             stopword_ids,
             last_list_style: 0,
+            recent_list_styles: VecDeque::with_capacity(LIST_STYLE_RECENT_WINDOW),
             last_list_style_used: None,
             last_cleanup_stripped_tail: false,
             focus_is_plural: false,
@@ -311,7 +337,8 @@ impl DiscourseState {
     /// don't restart variant cycles, list-style rotation, word-repetition
     /// penalties, or sentence-rhythm memory on every paragraph break.
     ///
-    /// **Preserved (narrative-level):** `last_list_style` (list-style cycle),
+    /// **Preserved (narrative-level):** `last_list_style` and
+    /// `recent_list_styles` (list-style cycle plus anti-repeat window),
     /// `template_history` (variant anti-repeat), `connective_history`
     /// (connective anti-repeat), `word_history` plus `interner` (repetition
     /// scoring), `sentence_length_history` (cadence/rhythm scoring),
@@ -345,16 +372,17 @@ impl DiscourseState {
         // Per-render diagnostics.
         self.last_list_style_used = None;
         self.last_cleanup_stripped_tail = false;
-        // Intentionally retained: last_list_style, template_history,
-        // connective_history, word_history, sentence_length_history,
-        // interner, stopword_ids, render_index.
+        // Intentionally retained: last_list_style, recent_list_styles,
+        // template_history, connective_history, word_history,
+        // sentence_length_history, interner, stopword_ids, render_index.
     }
 
-    /// Clear only the list-style cycle counter. Mirrors
-    /// [`Session::reset_temporal`] for callers that want to start a fresh
-    /// list-style rotation without otherwise resetting discourse state.
+    /// Clear only the list-style cycle counter and its anti-repeat window.
+    /// Mirrors [`Session::reset_temporal`] for callers that want to start a
+    /// fresh list-style rotation without otherwise resetting discourse state.
     pub fn reset_list_cycle(&mut self) {
         self.last_list_style = 0;
+        self.recent_list_styles.clear();
     }
 
     /// Advance to the next render. Must be called at the start of each render.
@@ -725,19 +753,59 @@ impl DiscourseState {
         score
     }
 
-    /// Select the next list style, cycling to avoid repetition. Also records
-    /// the chosen style for the current render so [`RenderExplanation`] can
-    /// report which list style was applied.
+    /// Select the next list style. Walks `LIST_STYLES` deterministically from
+    /// `last_list_style` forward and returns the first style that is not in
+    /// the recent-window (`recent_list_styles`). The walk advances past the
+    /// chosen slot so subsequent calls progress through the palette rather
+    /// than locking onto the first non-recent slot.
+    ///
+    /// Anti-repeat is fully deterministic — no RNG dependency — and ensures
+    /// that an explicit forced style (e.g. `{|join:bracketed}` recorded via
+    /// [`Self::record_list_style_used`]) does not collide with the very next
+    /// auto-cycle pick. Falls back to the modulo slot if every style somehow
+    /// sits in the recent window (unreachable while
+    /// `LIST_STYLE_RECENT_WINDOW < LIST_STYLES.len()`, but kept defensive).
     pub fn next_list_style(&mut self) -> ListStyle {
-        let style = LIST_STYLES[self.last_list_style % LIST_STYLES.len()];
-        self.last_list_style += 1;
+        let len = LIST_STYLES.len();
+        let start = self.last_list_style % len;
+
+        let mut chosen_offset = 0;
+        for offset in 0..len {
+            let candidate = LIST_STYLES[(start + offset) % len];
+            if !self.recent_list_styles.contains(&candidate) {
+                chosen_offset = offset;
+                break;
+            }
+        }
+
+        let style = LIST_STYLES[(start + chosen_offset) % len];
+        // Advance past the picked slot so the cycle continues to make
+        // forward progress rather than re-evaluating from the same start
+        // on the next call.
+        self.last_list_style = self.last_list_style.wrapping_add(chosen_offset + 1);
+        self.push_recent_list_style(style);
         self.last_list_style_used = Some(style);
         style
     }
 
-    /// Record an explicit list style (e.g. `{|join:bracketed}`) for diagnostics.
+    /// Record an explicit list style (e.g. `{|join:bracketed}`) for
+    /// diagnostics AND anti-repeat. Forced styles count toward the recent
+    /// window so a subsequent auto-cycle pick won't immediately repeat the
+    /// forced phrasing.
     pub fn record_list_style_used(&mut self, style: ListStyle) {
+        self.push_recent_list_style(style);
         self.last_list_style_used = Some(style);
+    }
+
+    fn push_recent_list_style(&mut self, style: ListStyle) {
+        // Drop duplicates of `style` already in the window before we push,
+        // so the trailing slot is always "the most recent N *distinct*
+        // styles" rather than the same forced style filling the buffer.
+        self.recent_list_styles.retain(|&s| s != style);
+        if self.recent_list_styles.len() == LIST_STYLE_RECENT_WINDOW {
+            self.recent_list_styles.pop_front();
+        }
+        self.recent_list_styles.push_back(style);
     }
 
     /// List style applied by the most recent render's `|join` pipe (if any).
@@ -1259,14 +1327,86 @@ mod tests {
         let s3 = state.next_list_style();
         let s4 = state.next_list_style();
 
+        // The first four picks still match the original order so existing
+        // golden tests (e.g. document_render_preserves_list_style_cycle_across_paragraphs)
+        // remain stable.
         assert_eq!(s1, ListStyle::Including);
         assert_eq!(s2, ListStyle::SuchAs);
         assert_eq!(s3, ListStyle::Dash);
         assert_eq!(s4, ListStyle::Bracketed);
+    }
 
-        // Wraps around
-        let s5 = state.next_list_style();
-        assert_eq!(s5, ListStyle::Including);
+    #[test]
+    fn list_style_cycle_visits_every_variant_within_palette_length() {
+        // Anti-repeat plus deterministic walk should still surface every
+        // registered variant within LIST_STYLES.len() consecutive picks,
+        // otherwise the palette has dead variants users never see.
+        let mut state = DiscourseState::new();
+        let mut seen: std::collections::HashSet<ListStyle> = std::collections::HashSet::new();
+        for _ in 0..LIST_STYLES.len() {
+            seen.insert(state.next_list_style());
+        }
+        assert_eq!(
+            seen.len(),
+            LIST_STYLES.len(),
+            "anti-repeat cycle dropped a variant: visited {seen:?}"
+        );
+    }
+
+    #[test]
+    fn list_style_anti_repeat_skips_recent_window() {
+        // With LIST_STYLE_RECENT_WINDOW = 2, no style may repeat within 3
+        // consecutive picks. Walk a long horizon and assert the invariant.
+        let mut state = DiscourseState::new();
+        let mut history: Vec<ListStyle> = Vec::new();
+        for _ in 0..(LIST_STYLES.len() * 3) {
+            let style = state.next_list_style();
+            if history.len() >= LIST_STYLE_RECENT_WINDOW {
+                let recent = &history[history.len() - LIST_STYLE_RECENT_WINDOW..];
+                assert!(
+                    !recent.contains(&style),
+                    "style {style:?} repeated within recent window {recent:?} (history: {history:?})"
+                );
+            }
+            history.push(style);
+        }
+    }
+
+    #[test]
+    fn forced_list_style_blocks_immediate_auto_repeat() {
+        // record_list_style_used pushes onto the same recent window as
+        // next_list_style. After forcing Bracketed twice in a row, the
+        // next auto pick must NOT be Bracketed — the original failure
+        // mode was a pure-modulo cycle landing on the just-forced style.
+        let mut state = DiscourseState::new();
+        state.record_list_style_used(ListStyle::Bracketed);
+        state.record_list_style_used(ListStyle::Bracketed);
+
+        let auto = state.next_list_style();
+        assert_ne!(auto, ListStyle::Bracketed);
+    }
+
+    #[test]
+    fn forced_list_style_followed_by_auto_skips_window() {
+        // If the template forces Including at the same point the auto-cycle
+        // would have produced Including, the next auto pick must skip past
+        // the forced style rather than emit it again.
+        let mut state = DiscourseState::new();
+        // Auto cycle starts at LIST_STYLES[0] = Including. Pre-empt with
+        // a forced Including.
+        state.record_list_style_used(ListStyle::Including);
+        let auto = state.next_list_style();
+        assert_ne!(auto, ListStyle::Including);
+    }
+
+    #[test]
+    fn reset_list_cycle_clears_recent_window_so_first_style_returns() {
+        let mut state = DiscourseState::new();
+        let _ = state.next_list_style();
+        let _ = state.next_list_style();
+        state.reset_list_cycle();
+
+        assert_eq!(state.next_list_style(), ListStyle::Including);
     }
 
     // --- Paragraph-reset invariants (preserve narrative-level anti-repeat,
