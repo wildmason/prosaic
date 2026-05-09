@@ -549,6 +549,100 @@ fn connective_variety_uses_longer_recency_window_in_rendered_prose() {
     );
 }
 
+/// Regression for the service-shape prose Matt flagged: a lead "X was
+/// touched..." sentence followed by five different-entity follow-ons with
+/// the same template key was rendering
+///
+///     Similarly, ... Likewise, ... Similarly, ... Likewise, ... Similarly, ...
+///
+/// — a deterministic A/B/A/B/A pattern that the two-element similarity
+/// pool can no longer escape via plain LRU. The connector-family budget
+/// in `select_connective` caps the similarity family at two emissions
+/// inside its trailing window, so the rest of the run renders plain.
+#[test]
+fn service_shape_run_does_not_alternate_similarity_connectives() {
+    let mut engine = engine();
+    engine
+        .register_template("code.touched", "The service {name} was touched")
+        .unwrap();
+
+    fn ctx(name: &str) -> Context {
+        let mut c = Context::new();
+        c.insert("entity_type", Value::String("service".into()));
+        c.insert("name", Value::String(name.into()));
+        c
+    }
+
+    let mut session = Session::new();
+    let services = [
+        "BillingService",
+        "PaymentGateway",
+        "RefundProcessor",
+        "ReceiptDispatcher",
+        "InvoiceLedger",
+        "AuditTrail",
+    ];
+
+    let outputs: Vec<String> = services
+        .iter()
+        .map(|name| engine.render(&mut session, "code.touched", ctx(name)).unwrap())
+        .collect();
+
+    // Lead sentence is unconnected.
+    assert_eq!(outputs[0], "The service BillingService was touched.");
+
+    // Across the five follow-on sentences, the similarity family must
+    // contribute at most two leading connectives. The third onward
+    // render plain, dissolving the alternation Matt flagged.
+    let follow_ons = &outputs[1..];
+    let similarly = follow_ons
+        .iter()
+        .filter(|s| s.starts_with("Similarly,"))
+        .count();
+    let likewise = follow_ons
+        .iter()
+        .filter(|s| s.starts_with("Likewise,"))
+        .count();
+
+    assert!(
+        similarly <= 1,
+        "expected at most one `Similarly,` follow-on, got {similarly}: {follow_ons:?}"
+    );
+    assert!(
+        likewise <= 1,
+        "expected at most one `Likewise,` follow-on, got {likewise}: {follow_ons:?}"
+    );
+    assert!(
+        similarly + likewise <= 2,
+        "expected at most two similarity-family connectives across five \
+         follow-on sentences, got {} similarly + {} likewise: {follow_ons:?}",
+        similarly,
+        likewise
+    );
+
+    // No A/B/A pattern across consecutive follow-on lead phrases.
+    let leads: Vec<&str> = follow_ons
+        .iter()
+        .map(|s| {
+            if s.starts_with("Similarly,") {
+                "Similarly,"
+            } else if s.starts_with("Likewise,") {
+                "Likewise,"
+            } else {
+                ""
+            }
+        })
+        .collect();
+    for window in leads.windows(3) {
+        if !window[0].is_empty() && !window[1].is_empty() && !window[2].is_empty() {
+            assert_ne!(
+                window[0], window[2],
+                "A/B/A alternation slipped through the budget: {leads:?}"
+            );
+        }
+    }
+}
+
 #[test]
 fn sentence_rhythm_variance_prefers_varied_template_lengths() {
     let mut engine = Engine::new(English::new())

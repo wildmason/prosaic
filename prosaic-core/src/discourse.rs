@@ -91,6 +91,13 @@ pub struct DiscourseState {
     /// Recently used discourse connectives (ring buffer, max 6).
     connective_history: VecDeque<String>,
 
+    /// Per-decision family slot for connective selection: `Some(family)`
+    /// when a connective was emitted, `None` when the family budget
+    /// suppressed one so the sentence ran plain. Tracked alongside
+    /// `connective_history` but including null slots so dense
+    /// same-family runs can be detected even when exact strings differ.
+    connective_family_history: VecDeque<Option<ConnectorFamily>>,
+
     /// The template key used in the previous render (for relationship detection).
     last_template_key: Option<String>,
 
@@ -244,6 +251,24 @@ pub enum ListStyle {
 }
 
 const CONNECTIVE_WINDOW: usize = 6;
+
+/// Sliding-window length used by the connector-family budget. A family is
+/// allowed at most `pool.len()` emissions inside this window before
+/// `select_connective` starts returning `None` so the next follow-on
+/// sentence renders plain. Sized to give the surface text two or three
+/// null slots after a fully saturated pool, which is what dissolves the
+/// `Similarly,/Likewise,` style alternation Matt flagged in service-shape
+/// prose.
+const FAMILY_WINDOW: usize = 5;
+
+/// Score deduction applied when a candidate would form an A/B/A
+/// alternation with the immediately preceding two emissions. Distances
+/// for unused candidates sit at `CONNECTIVE_WINDOW + 1`, so the penalty
+/// is large enough to demote a recently-seen alternation partner below
+/// any unused option but small enough to leave the LRU recycle cycle
+/// (A,B,C → A,B,C) unchanged when the pool offers a third choice.
+const ALTERNATION_PENALTY: i64 = 2;
+
 const WORD_HISTORY_WINDOW: usize = 5;
 const SENTENCE_RHYTHM_WINDOW: usize = 6;
 const ENTITY_REINTRODUCE_DISTANCE: usize = 3;
@@ -309,6 +334,29 @@ const SAME_ACTION_CONNECTIVES: &[&str] = &["Similarly,", "Likewise,"];
 
 const CONTRAST_CONNECTIVES: &[&str] = &["Meanwhile,", "However,", "On the other hand,"];
 
+/// Lexical family a connector belongs to. The exact-string anti-repeat
+/// only sees individual connectors; the family lets the budget reason
+/// about whole categories ("similarity/continuation/contrast") so a
+/// two-element pool cannot lock the prose into an A/B/A/B alternation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ConnectorFamily {
+    /// Continuation/expansion: "Additionally,", "Furthermore,", "It also".
+    Continuation,
+    /// Similarity: "Similarly,", "Likewise,".
+    Similarity,
+    /// Contrast: "Meanwhile,", "However,", "On the other hand,".
+    Contrast,
+}
+
+fn family_for_relation(relation: &DiscourseRelation) -> Option<ConnectorFamily> {
+    match relation {
+        DiscourseRelation::SameEntityDifferentAction => Some(ConnectorFamily::Continuation),
+        DiscourseRelation::DifferentEntitySameAction => Some(ConnectorFamily::Similarity),
+        DiscourseRelation::Contrast => Some(ConnectorFamily::Contrast),
+        DiscourseRelation::None => None,
+    }
+}
+
 impl DiscourseState {
     pub fn new() -> Self {
         let mut interner = WordInterner::default();
@@ -321,6 +369,7 @@ impl DiscourseState {
             focus_entity: None,
             template_history: new_map(),
             connective_history: VecDeque::new(),
+            connective_family_history: VecDeque::new(),
             last_template_key: None,
             last_entity_name: None,
             word_history: VecDeque::new(),
@@ -401,7 +450,8 @@ impl DiscourseState {
         self.last_list_style_used = None;
         self.last_cleanup_stripped_tail = false;
         // Intentionally retained: last_list_style, recent_list_styles,
-        // template_history, connective_history, word_history,
+        // template_history, connective_history,
+        // connective_family_history, word_history,
         // sentence_length_history, interner, stopword_ids, render_index.
     }
 
@@ -595,9 +645,27 @@ impl DiscourseState {
     }
 
     /// Select a discourse connective for the given relation, preferring
-    /// candidates absent from recent history. When a small pool is saturated,
-    /// recycle the least-recently-used connective rather than starving the
-    /// discourse of transition cues.
+    /// candidates absent from recent history. Three deterministic
+    /// guardrails layer on top of the LRU pick:
+    ///
+    /// 1. **Connector-family budget.** Each pool maps to a lexical family
+    ///    (continuation, similarity, contrast). When the family already
+    ///    contributes `pool.len()` emissions inside the trailing
+    ///    `FAMILY_WINDOW`, return `None` so the next sentence renders
+    ///    plain. This is the lever that breaks the
+    ///    `Similarly,/Likewise,/Similarly,/Likewise,` pattern Matt flagged
+    ///    in service-shape prose: the two-element similarity pool is
+    ///    forced to alternate after two emissions, so the third call
+    ///    drops the connective entirely.
+    /// 2. **Exact-connector cooldown.** The immediately preceding
+    ///    connective is excluded from candidacy when the pool offers an
+    ///    alternative — preserves the existing back-to-back anti-repeat.
+    /// 3. **A/B alternation penalty.** Candidates equal to
+    ///    `connective_history[len-2]` take a score deduction so the LRU
+    ///    pick will not extend an A/B pattern into A/B/A when a fresh
+    ///    option exists. For three-element pools this preserves the
+    ///    A,B,C cycle; for two-element pools the family budget kicks in
+    ///    first and the penalty is moot.
     pub fn select_connective(&mut self, relation: &DiscourseRelation) -> Option<&'static str> {
         let pool = match relation {
             DiscourseRelation::SameEntityDifferentAction => SAME_ENTITY_CONNECTIVES,
@@ -605,10 +673,34 @@ impl DiscourseState {
             DiscourseRelation::Contrast => CONTRAST_CONNECTIVES,
             DiscourseRelation::None => return None,
         };
+        let family = family_for_relation(relation)
+            .expect("non-None relation always maps to a connector family");
+
+        // Family-budget gate: count this family's emissions inside the
+        // trailing window. Once they saturate the pool, suppress the
+        // connective so the prose continues without a transition cue.
+        let family_count = self
+            .connective_family_history
+            .iter()
+            .rev()
+            .take(FAMILY_WINDOW)
+            .filter(|slot| **slot == Some(family))
+            .count();
+        if family_count >= pool.len() {
+            self.record_family_slot(None);
+            return None;
+        }
 
         let immediate = self.connective_history.back().map(String::as_str);
-        let mut selected = None;
-        let mut selected_distance = 0usize;
+        let two_back = self
+            .connective_history
+            .iter()
+            .rev()
+            .nth(1)
+            .map(String::as_str);
+
+        let mut selected: Option<&'static str> = None;
+        let mut selected_score: i64 = i64::MIN;
 
         for &connective in pool {
             if pool.len() > 1 && immediate == Some(connective) {
@@ -620,11 +712,18 @@ impl DiscourseState {
                 .iter()
                 .rev()
                 .position(|history| history == connective)
-                .unwrap_or(CONNECTIVE_WINDOW + 1);
+                .unwrap_or(CONNECTIVE_WINDOW + 1) as i64;
 
-            if selected.is_none() || distance > selected_distance {
+            let alternation_penalty = if pool.len() > 1 && two_back == Some(connective) {
+                ALTERNATION_PENALTY
+            } else {
+                0
+            };
+            let score = distance - alternation_penalty;
+
+            if selected.is_none() || score > selected_score {
                 selected = Some(connective);
-                selected_distance = distance;
+                selected_score = score;
             }
         }
 
@@ -633,8 +732,19 @@ impl DiscourseState {
         if self.connective_history.len() > CONNECTIVE_WINDOW {
             self.connective_history.pop_front();
         }
+        self.record_family_slot(Some(family));
 
         Some(connective)
+    }
+
+    /// Push a per-decision family slot, capping the ring buffer at
+    /// `FAMILY_WINDOW + 2` so the budget check has the full window plus
+    /// a small lookahead margin without growing without bound.
+    fn record_family_slot(&mut self, slot: Option<ConnectorFamily>) {
+        self.connective_family_history.push_back(slot);
+        if self.connective_family_history.len() > FAMILY_WINDOW + 2 {
+            self.connective_family_history.pop_front();
+        }
     }
 
     /// Record the words from a rendered output for repetition scoring.
@@ -1169,19 +1279,71 @@ mod tests {
     }
 
     #[test]
-    fn connective_recycles_least_recent_when_pool_saturated() {
+    fn connective_family_budget_drops_to_null_when_pool_saturates() {
         let mut state = DiscourseState::new();
         let rel = DiscourseRelation::SameEntityDifferentAction;
 
+        // Three-element continuation pool drains uniquely.
         assert_eq!(state.select_connective(&rel), Some("Additionally,"));
         assert_eq!(state.select_connective(&rel), Some("Furthermore,"));
         assert_eq!(state.select_connective(&rel), Some("It also"));
 
-        // Once the small pool is saturated, keep the discourse connected by
-        // recycling the least-recent choice rather than returning None forever.
+        // Saturation: rather than recycling the LRU choice and producing
+        // an Additionally,/Furthermore,/It also,/Additionally,... cycle,
+        // the family budget suppresses the next emissions so the prose
+        // dissolves into plain follow-on sentences.
+        assert_eq!(state.select_connective(&rel), None);
+        assert_eq!(state.select_connective(&rel), None);
+        assert_eq!(state.select_connective(&rel), None);
+
+        // Once enough null slots accumulate inside the trailing window,
+        // the budget reopens and the LRU pick resumes — Additionally
+        // is the oldest emitted connector in `connective_history`.
         assert_eq!(state.select_connective(&rel), Some("Additionally,"));
-        assert_eq!(state.select_connective(&rel), Some("Furthermore,"));
-        assert_eq!(state.select_connective(&rel), Some("It also"));
+    }
+
+    /// Regression for the service-shape prose Matt flagged: five follow-on
+    /// sentences that all trigger DifferentEntitySameAction must NOT
+    /// produce a `Similarly,/Likewise,/Similarly,/Likewise,/Similarly,`
+    /// alternation. The two-element similarity pool can sustain at most
+    /// two emissions inside the family window before the budget forces
+    /// nulls so the pattern dissolves.
+    #[test]
+    fn similarity_family_budget_breaks_service_shape_alternation() {
+        let mut state = DiscourseState::new();
+        let rel = DiscourseRelation::DifferentEntitySameAction;
+
+        let emissions: Vec<Option<&'static str>> =
+            (0..5).map(|_| state.select_connective(&rel)).collect();
+
+        let connectors: Vec<&'static str> = emissions.iter().filter_map(|e| *e).collect();
+
+        assert!(
+            connectors.len() <= 2,
+            "expected at most two similarity-family connectives across five \
+             follow-on sentences, got {emissions:?}"
+        );
+
+        // No A/B/A pattern: the third emission (if any) must not match
+        // the connective two slots earlier.
+        for window in emissions.windows(3) {
+            if let (Some(a), Some(_), Some(c)) = (window[0], window[1], window[2]) {
+                assert_ne!(
+                    a, c,
+                    "A/B/A alternation slipped through the budget: {emissions:?}"
+                );
+            }
+        }
+
+        // Both members of the pool should appear at most once in the
+        // surfaced connector list — the budget caps usage at pool.len()
+        // = 2 distinct connectives, never two of the same.
+        let similarly = connectors.iter().filter(|c| **c == "Similarly,").count();
+        let likewise = connectors.iter().filter(|c| **c == "Likewise,").count();
+        assert!(
+            similarly <= 1 && likewise <= 1,
+            "no similarity connector should repeat inside the family window: {emissions:?}"
+        );
     }
 
     #[test]
