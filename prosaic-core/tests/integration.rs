@@ -2100,3 +2100,86 @@ fn full_session_reset_restarts_list_style_at_first_paragraph() {
         "full reset should restart cycle at `including`, got:\n{after_full_reset}"
     );
 }
+
+#[test]
+fn sentence_rhythm_burst_pivot_breaks_tied_candidate_into_pivot() {
+    // Focused integration regression for the burst-pivot extension to
+    // sentence_rhythm_score, additive to (not a replacement for) the
+    // off/on stdev gate in
+    // `sentence_rhythm_increases_burstiness_versus_disabled_baseline`.
+    //
+    // The penalty is a bounded tie-breaker: it influences selection only
+    // when closeness/mean-delta and repetition signals are roughly tied
+    // across candidates. To exercise that path end-to-end this fixture:
+    //
+    //   1. Records three priming sentences (lengths 5, 5, 3) so the
+    //      running mean lands at 4.33 and the last entry (3) classifies
+    //      as below-mean.
+    //   2. Scores a same-side continuation (length 3) and a pivot
+    //      continuation (length 5) through the public
+    //      `DiscourseState::sentence_rhythm_score` API — the same call
+    //      the engine consults during choose-best variant selection.
+    //
+    // Without the same-side penalty the same-side candidate would *win*
+    // (it has a lower mean-delta penalty and identical closeness), so a
+    // future change that removes or zero-weights the burst-pivot term
+    // will flip the verdict and trip this assertion.
+    let engine = Engine::new(English::new())
+        .strictness(Strictness::Strict)
+        .variation(Variation::Fixed)
+        .sentence_rhythm(true);
+
+    let mut session = Session::new();
+    // Manually prime the rhythm window with the lengths the assertion
+    // needs (5, 5, 3) without depending on engine template vocabulary or
+    // the auto-terminator. Using `record_sentence_rhythm` pumps lengths
+    // into `sentence_length_history` exactly the way `engine.render`
+    // does after committing a render.
+    session
+        .discourse_mut()
+        .record_sentence_rhythm("Alpha shipped after review concluded.");
+    session
+        .discourse_mut()
+        .record_sentence_rhythm("Bravo shipped after review concluded.");
+    session
+        .discourse_mut()
+        .record_sentence_rhythm("Charlie shipped today.");
+
+    // Two candidate continuations. Both are well-formed sentences with
+    // identical content-word coverage from the priming set — closeness
+    // ties — but differ in length (3 vs 5 words → opposite sides of the
+    // 4.33-word running mean).
+    let same_side_candidate = "Delta shipped today";
+    let pivot_candidate = "Delta shipped after review concluded";
+
+    let same_rhythm = session
+        .discourse()
+        .sentence_rhythm_score(same_side_candidate);
+    let pivot_rhythm = session
+        .discourse()
+        .sentence_rhythm_score(pivot_candidate);
+
+    assert!(
+        same_rhythm > pivot_rhythm,
+        "burst-pivot penalty must make the same-side continuation \
+         (`{same_side_candidate}` rhythm={same_rhythm}) score worse than \
+         the pivot continuation (`{pivot_candidate}` rhythm={pivot_rhythm}); \
+         without the same-side penalty the closeness/mean-delta terms \
+         alone would prefer the same-side candidate",
+    );
+
+    // And the engine must still render through happily with the rhythm
+    // pass enabled — proves the score path is reachable from the public
+    // surface without panicking on this state.
+    let mut engine = engine;
+    engine
+        .register_template("evt", "{name} shipped today")
+        .unwrap();
+    let mut c = Context::new();
+    c.insert("name", Value::String("Echo".into()));
+    let rendered = engine.render(&mut session, "evt", &c).unwrap();
+    assert!(
+        rendered.ends_with('.') || rendered.ends_with('!') || rendered.ends_with('?'),
+        "rhythm-on render produced an unterminated sentence: `{rendered}`",
+    );
+}

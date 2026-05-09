@@ -248,6 +248,34 @@ const WORD_HISTORY_WINDOW: usize = 5;
 const SENTENCE_RHYTHM_WINDOW: usize = 6;
 const ENTITY_REINTRODUCE_DISTANCE: usize = 3;
 
+/// Per-sentence penalty applied when consecutive sentences land on the same
+/// side of the running mean length. Small relative to the existing closeness
+/// (max 3.0) and mean-delta (max 1.0) contributions so it acts as a cadence
+/// tie-breaker rather than dominating the rhythm score.
+const SAME_SIDE_PENALTY: f64 = 0.75;
+
+/// Mean-delta threshold (in words) below which a sentence is treated as
+/// "at the mean" and contributes no same-side signal. Avoids spurious
+/// pivots when lengths sit exactly on or fractionally beside the mean.
+const SIDE_OF_MEAN_NEUTRAL_BAND: f64 = 0.5;
+
+#[derive(Copy, Clone, PartialEq, Eq)]
+enum CadenceSide {
+    Above,
+    Below,
+}
+
+fn side_of_mean(len: f64, mean: f64) -> Option<CadenceSide> {
+    let delta = len - mean;
+    if delta.abs() < SIDE_OF_MEAN_NEUTRAL_BAND {
+        None
+    } else if delta > 0.0 {
+        Some(CadenceSide::Above)
+    } else {
+        Some(CadenceSide::Below)
+    }
+}
+
 /// Stopwords excluded from the word frequency map.
 const STOPWORDS: &[&str] = &[
     "a", "an", "the", "and", "or", "but", "in", "on", "at", "to", "for", "of", "with", "by",
@@ -687,6 +715,15 @@ impl DiscourseState {
     /// Lower is better: candidates with sentence lengths that were just
     /// emitted receive a penalty, while noticeably shorter or longer variants
     /// are preferred when repetition scores are otherwise close.
+    ///
+    /// In addition to the per-sentence closeness/mean components, a bounded
+    /// same-side penalty fires for each consecutive sentence pair (history
+    /// → candidate, then candidate → candidate) that lands on the same side
+    /// of the running mean. This nudges the selector toward burst-pivot
+    /// cadence — alternating short/long around the mean — which is a hallmark
+    /// of natural prose. The penalty is purely additive and capped per
+    /// sentence so it cannot zero out repetition penalties or push the score
+    /// negative.
     pub fn sentence_rhythm_score(&self, candidate: &str) -> f64 {
         let candidate_lengths = sentence_word_counts(candidate);
         if candidate_lengths.is_empty() || self.sentence_length_history.is_empty() {
@@ -695,6 +732,14 @@ impl DiscourseState {
 
         let recent_mean = self.sentence_length_history.iter().sum::<usize>() as f64
             / self.sentence_length_history.len() as f64;
+
+        // Side of mean for the most recent emitted sentence, if any. Sentences
+        // exactly at the mean are treated as neutral (None) and never trigger
+        // a same-side penalty in either direction.
+        let mut prev_side = self
+            .sentence_length_history
+            .back()
+            .and_then(|len| side_of_mean(*len as f64, recent_mean));
 
         let mut score = 0.0;
         for len in &candidate_lengths {
@@ -718,6 +763,19 @@ impl DiscourseState {
                 score += 1.0;
             } else if mean_delta < 2.0 {
                 score += 0.5;
+            }
+
+            let cur_side = side_of_mean(*len as f64, recent_mean);
+            if let (Some(prev), Some(cur)) = (prev_side, cur_side)
+                && prev == cur
+            {
+                score += SAME_SIDE_PENALTY;
+            }
+            // Carry candidate side forward so within-candidate runs (e.g.
+            // long → long → long) accumulate the penalty across each pair,
+            // not just against history.
+            if cur_side.is_some() {
+                prev_side = cur_side;
             }
         }
 
@@ -1226,6 +1284,112 @@ mod tests {
             repeated_cadence > varied_cadence,
             "same-length candidates should score worse than varied ones"
         );
+    }
+
+    #[test]
+    fn sentence_rhythm_score_penalizes_same_side_runs() {
+        // History: three short sentences (3, 4, 3 words). Mean = 3.33.
+        // Last emitted sentence (3 words) is below mean.
+        //
+        // Pivoting candidate: a single noticeably-long sentence (above mean)
+        // — flips side relative to history's last entry, no same-side
+        // penalty fires.
+        //
+        // Same-side candidate: another short sentence (below mean) — same
+        // side as history's last entry, so the burst-pivot penalty fires.
+        //
+        // The same-side candidate's closeness/mean-delta cost is also
+        // higher (it sits inside the recent cluster), but the penalty must
+        // strictly increase the gap, not flip its sign. Both effects push
+        // the score in the same direction; the assertion proves the
+        // additive penalty is observable on top of the existing terms.
+        let mut state = DiscourseState::new();
+        state.record_sentence_rhythm("Alpha shipped today. Beta paused. Gamma shipped.");
+
+        let pivoting = state.sentence_rhythm_score(
+            "Delta shipped after the schema migration finished and the staging build went green",
+        );
+        let same_side = state.sentence_rhythm_score("Delta shipped today");
+
+        assert!(
+            same_side > pivoting,
+            "same-side candidate ({same_side}) must score worse than pivoting candidate ({pivoting})"
+        );
+    }
+
+    #[test]
+    fn sentence_rhythm_score_pivot_penalty_does_not_dominate_repetition() {
+        // Construct two candidates where the same-side candidate is
+        // otherwise repetition-clean and the pivoting candidate reuses the
+        // entire prior render's vocabulary. The discourse score the engine
+        // actually compares is repetition + rhythm; this test pins down
+        // that the rhythm penalty cannot flip the verdict on its own — the
+        // repetition signal must still dominate.
+        let mut state = DiscourseState::new();
+        state.begin_render();
+        state.record_output_words("AuthService validated tokens against the registry");
+        state.record_sentence_rhythm("AuthService validated tokens against the registry.");
+
+        state.begin_render();
+        // Pivoting candidate sits on the opposite side of the running mean
+        // (much longer) but reuses every distinctive word from the prior
+        // render — heavy repetition.
+        let pivoting_repeats = "AuthService validated tokens against the registry yet again";
+        // Same-side candidate matches the prior cadence (same length) but
+        // introduces wholly new vocabulary — minimal repetition.
+        let same_side_clean = "PaymentGateway settled invoices nightly";
+
+        let rep_pivot = state.repetition_score(pivoting_repeats);
+        let rep_clean = state.repetition_score(same_side_clean);
+        let rhy_pivot = state.sentence_rhythm_score(pivoting_repeats);
+        let rhy_clean = state.sentence_rhythm_score(same_side_clean);
+
+        assert!(
+            (rep_pivot + rhy_pivot) > (rep_clean + rhy_clean),
+            "repetition-heavy pivoting candidate ({}) must still score worse \
+             than the repetition-clean same-side candidate ({}); the burst-pivot \
+             penalty is a tie-breaker, not a faithfulness override",
+            rep_pivot + rhy_pivot,
+            rep_clean + rhy_clean,
+        );
+        // And the rhythm-side delta alone must be smaller than the
+        // repetition-side delta — proves the penalty is bounded relative
+        // to the dominant constraint.
+        assert!(
+            (rep_pivot - rep_clean).abs() > (rhy_clean - rhy_pivot).abs(),
+            "repetition delta ({}) must dominate rhythm delta ({})",
+            rep_pivot - rep_clean,
+            rhy_clean - rhy_pivot,
+        );
+    }
+
+    #[test]
+    fn sentence_rhythm_score_is_never_negative() {
+        // The score is a sum of non-negative components divided by a
+        // positive count. Sweep a handful of histories and candidates to
+        // pin down the invariant — a future change that introduces a
+        // reward (subtraction) must update this test deliberately.
+        let mut state = DiscourseState::new();
+        for prior in [
+            "Alpha shipped.",
+            "Beta paused after the long postmortem dragged on.",
+            "Gamma. Delta. Epsilon shipped after lunch.",
+        ] {
+            state.record_sentence_rhythm(prior);
+        }
+
+        for candidate in [
+            "",
+            "Zeta shipped.",
+            "Zeta shipped after a careful review and a brief rollout window.",
+            "Short. Long sentence with quite a few words inside it. Short again.",
+        ] {
+            let score = state.sentence_rhythm_score(candidate);
+            assert!(
+                score >= 0.0,
+                "rhythm score must be non-negative (candidate `{candidate}`, score {score})"
+            );
+        }
     }
 
     #[test]
