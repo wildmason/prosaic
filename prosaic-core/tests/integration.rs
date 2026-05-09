@@ -1954,6 +1954,95 @@ fn document_plan_list_rotation_wraps_after_full_cycle() {
 }
 
 #[test]
+fn paragraph_reset_preserves_list_cycle_but_not_pronoun_focus() {
+    // Focused regression for the reset/focus split. Two invariants must
+    // hold simultaneously across a paragraph boundary in
+    // `DocumentPlan::render`:
+    //
+    //   1. List-style cycle is *narrative-level* — it survives the reset,
+    //      so consecutive paragraphs rotate `|join` phrasings.
+    //   2. Pronoun/entity focus is *paragraph-local* — it is cleared at
+    //      the boundary, so the next paragraph reintroduces entities in
+    //      full form rather than pronominalizing a stale focus.
+    //
+    // Pre-fix (`DocumentPlan::render` called `Session::reset` between
+    // paragraphs) this fixture fails on the cycle assertion: the list
+    // style restarts at `Including` for paragraph 2. A naive "preserve
+    // everything across paragraphs" alternative would instead fail on
+    // the focus assertion: paragraph 2's intro would pronominalize the
+    // entity carried over from paragraph 1. Only the
+    // `reset_for_paragraph` split (preserve narrative anti-repeat,
+    // clear entity/centering state) satisfies both at once.
+    let mut engine = Engine::new(English::new())
+        .strictness(Strictness::Strict)
+        .variation(Variation::Fixed);
+    engine
+        .register_template("intro", "{name|refer} was deployed.")
+        .unwrap();
+    engine
+        .register_template("summary", "Touched {items|truncate:2|join}.")
+        .unwrap();
+
+    fn entity_paragraph(items: &[&str]) -> Paragraph {
+        let mut p = Paragraph::new();
+
+        let mut intro_ctx = Context::new();
+        intro_ctx.insert("name", Value::String("AuthService".into()));
+        intro_ctx.insert("entity_type", Value::String("service".into()));
+        p.push("intro".to_string(), intro_ctx, Salience::Medium);
+
+        let mut list_ctx = Context::new();
+        list_ctx.insert(
+            "items",
+            Value::List(items.iter().map(|s| (*s).to_string()).collect()),
+        );
+        p.push("summary".to_string(), list_ctx, Salience::Medium);
+
+        p
+    }
+
+    let mut plan = DocumentPlan::new();
+    plan.paragraphs
+        .push(entity_paragraph(&["Alpha", "Beta", "Gamma", "Delta"]));
+    plan.paragraphs
+        .push(entity_paragraph(&["Echo", "Foxtrot", "Golf", "Hotel"]));
+
+    let mut session = Session::new();
+    let rendered = plan.render(&engine, &mut session).unwrap();
+
+    let (p1, p2) = rendered
+        .split_once("\n\n")
+        .expect("expected two paragraphs separated by a blank line");
+
+    // (1) List-style cycle preserved across paragraph reset.
+    assert!(
+        p1.contains("including Alpha and Beta among others"),
+        "p1 should use the first cycle style (`including`), got:\n{p1}",
+    );
+    assert!(
+        p2.contains("such as Echo and Foxtrot"),
+        "p2 must rotate to the next cycle style (`such as`), got:\n{p2}",
+    );
+
+    // (2) Pronoun/entity focus cleared at the paragraph boundary. The
+    // intro sentence opens each paragraph, so a stale focus would
+    // surface as "It was deployed." at the start of p2.
+    let p2_intro = p2.split('.').next().unwrap_or("").trim();
+    assert!(
+        p2_intro.contains("AuthService"),
+        "p2 intro must reintroduce AuthService after paragraph reset, \
+         got: {p2_intro:?}",
+    );
+    assert!(
+        !p2_intro.starts_with("It")
+            && !p2_intro.starts_with("They")
+            && !p2_intro.starts_with("Its"),
+        "p2 intro must not pronominalize a focus that leaked across the \
+         paragraph reset, got: {p2_intro:?}",
+    );
+}
+
+#[test]
 fn full_session_reset_restarts_list_style_at_first_paragraph() {
     // Companion negative test: a full `Session::reset` (the documented
     // "fresh narrative" escape hatch) resets the cycle so the next first-
