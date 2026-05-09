@@ -2183,3 +2183,306 @@ fn sentence_rhythm_burst_pivot_breaks_tied_candidate_into_pivot() {
         "rhythm-on render produced an unterminated sentence: `{rendered}`",
     );
 }
+
+#[test]
+fn sentence_rhythm_renders_more_burst_pivots_than_disabled_baseline() {
+    // Lane 3 focused regression at the rendered-prose layer, additive to
+    // both the off/on stdev gate
+    // (`sentence_rhythm_increases_burstiness_versus_disabled_baseline`)
+    // and the score-level burst-pivot fixture
+    // (`sentence_rhythm_burst_pivot_breaks_tied_candidate_into_pivot`).
+    //
+    // Stdev measures dispersion but a future change that flattens cadence
+    // into a long-then-short bimodal rut could pass the stdev gate while
+    // producing unnatural prose. Plain "side-crossing" pivot counts won't
+    // catch the regression either: `select_alternative_scored`'s
+    // last-variant skip in `engine.rs` already mechanically guarantees
+    // adjacent sentences come from different variants, so plain pivot
+    // counts saturate at N-1 across both off and on (verified empirically
+    // with this template/seed family — pivot count is identical 11/11
+    // every seed). The signal that actually distinguishes rhythm-on from
+    // rhythm-off in rendered prose is the *amplitude* of those pivots:
+    // burst-pivot picks the long variant aggressively, producing wider
+    // swings around the mean.
+    //
+    // This fixture therefore counts **burst pivots** — side-crossings whose
+    // swing magnitude exceeds a fixed word-count threshold — and asserts
+    // rhythm-on produces strictly more of them. Pairs that with a
+    // longest-same-side-run non-regression guard so rhythm-on cannot buy
+    // amplitude by re-introducing same-side runs elsewhere in the prose.
+    //
+    // Bundles propositions/entity preservation, sentence-count integrity,
+    // max-length policy, and punctuation sanity in the same pass so a
+    // rhythm change that buys cadence at the cost of any of those tips
+    // this test rather than slipping past the stdev gate alone.
+    fn build_engine(rhythm_enabled: bool) -> Engine {
+        let mut engine = Engine::new(English::new())
+            .strictness(Strictness::Strict)
+            .variation(Variation::Seeded(11))
+            .max_sentence_length(160)
+            .sentence_rhythm(rhythm_enabled);
+        // Three template variants of distinctly different rendered
+        // lengths (~5/11/18 words) so the rhythm penalty has live
+        // choices to make. Mirrors the template family used by
+        // `sentence_rhythm_preserves_event_count_and_entity_propositions`
+        // and ensures every rendered output clears the engine's
+        // 3-word floor for auto-terminating sentence punctuation.
+        engine
+            .register_template("rhythm.touched", "The class {name} was touched")
+            .unwrap();
+        engine
+            .register_template(
+                "rhythm.touched",
+                "The class {name} was touched and revalidated against the current schema",
+            )
+            .unwrap();
+        engine
+            .register_template(
+                "rhythm.touched",
+                "The class {name} was touched after the routine sweep, \
+                 revalidated against the current schema, and recorded in the engineering ledger",
+            )
+            .unwrap();
+        engine
+    }
+
+    fn ctx(name: &str) -> Context {
+        let mut c = Context::new();
+        c.insert("entity_type", Value::String("class".into()));
+        c.insert("name", Value::String(name.into()));
+        c
+    }
+
+    fn sentence_lengths(outputs: &[String]) -> Vec<usize> {
+        // Decompose each rendered output into sentences by terminal
+        // punctuation, then count alphanumeric-bearing tokens per
+        // sentence. Mirrors how `record_sentence_rhythm` segments prose
+        // for cadence accounting.
+        let mut lens = Vec::new();
+        for output in outputs {
+            let mut current = 0usize;
+            for raw in output.split_whitespace() {
+                if raw.chars().any(|c| c.is_alphanumeric()) {
+                    current += 1;
+                }
+                if (raw.ends_with('.') || raw.ends_with('!') || raw.ends_with('?'))
+                    && current > 0
+                {
+                    lens.push(current);
+                    current = 0;
+                }
+            }
+            if current > 0 {
+                lens.push(current);
+            }
+        }
+        lens
+    }
+
+    // 0.5-word neutral band matches the SIDE_OF_MEAN_NEUTRAL_BAND policy
+    // the engine uses internally so a sentence sitting essentially on the
+    // mean does not register as a (spurious) pivot in either direction.
+    const NEUTRAL_BAND: f64 = 0.5;
+
+    fn classify(lens: &[usize]) -> Vec<Option<i8>> {
+        if lens.is_empty() {
+            return Vec::new();
+        }
+        let mean = lens.iter().sum::<usize>() as f64 / lens.len() as f64;
+        lens.iter()
+            .map(|len| {
+                let delta = *len as f64 - mean;
+                if delta.abs() < NEUTRAL_BAND {
+                    None
+                } else if delta > 0.0 {
+                    Some(1)
+                } else {
+                    Some(-1)
+                }
+            })
+            .collect()
+    }
+
+    // A "burst pivot" is a consecutive pair of sentences that lands on
+    // opposite sides of the overall mean AND whose word-length difference
+    // clears `BURST_PIVOT_MIN_SWING`. The threshold separates ordinary
+    // alternation (short ↔ medium) from genuine cadence bursts
+    // (short ↔ long), which is what burst-pivot scoring rewards.
+    const BURST_PIVOT_MIN_SWING: usize = 8;
+
+    fn burst_pivot_count(lens: &[usize]) -> usize {
+        let sides = classify(lens);
+        let mut bursts = 0usize;
+        let mut prev_side: Option<i8> = None;
+        let mut prev_len: Option<usize> = None;
+        for (i, side) in sides.iter().enumerate() {
+            if let (Some(p_side), Some(c_side), Some(p_len)) = (prev_side, *side, prev_len)
+                && p_side != c_side
+                && lens[i].abs_diff(p_len) >= BURST_PIVOT_MIN_SWING
+            {
+                bursts += 1;
+            }
+            if side.is_some() {
+                prev_side = *side;
+                prev_len = Some(lens[i]);
+            }
+        }
+        bursts
+    }
+
+    fn longest_same_side_run(lens: &[usize]) -> usize {
+        let sides = classify(lens);
+        let mut best = 0usize;
+        let mut current = 0usize;
+        let mut prev: Option<i8> = None;
+        for side in sides {
+            match (prev, side) {
+                (Some(p), Some(s)) if p == s => current += 1,
+                (_, Some(_)) => current = 1,
+                (_, None) => current = 0,
+            }
+            best = best.max(current);
+            if side.is_some() {
+                prev = side;
+            }
+        }
+        best
+    }
+
+    let entities = [
+        "Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot", "Golf", "Hotel", "India",
+        "Juliet", "Kilo", "Lima",
+    ];
+
+    let mut session_off = Session::new();
+    let engine_off = build_engine(false);
+    let outputs_off: Vec<String> = entities
+        .iter()
+        .map(|name| {
+            engine_off
+                .render(&mut session_off, "rhythm.touched", ctx(name))
+                .unwrap()
+        })
+        .collect();
+
+    let mut session_on = Session::new();
+    let engine_on = build_engine(true);
+    let outputs_on: Vec<String> = entities
+        .iter()
+        .map(|name| {
+            engine_on
+                .render(&mut session_on, "rhythm.touched", ctx(name))
+                .unwrap()
+        })
+        .collect();
+
+    let lens_off = sentence_lengths(&outputs_off);
+    let lens_on = sentence_lengths(&outputs_on);
+
+    // Sentence-count integrity: aggregation isn't triggered here (each
+    // event has a unique entity), so every input event must produce
+    // exactly one rendered sentence.
+    assert_eq!(
+        lens_off.len(),
+        entities.len(),
+        "rhythm-off changed proposition count; outputs={outputs_off:?}",
+    );
+    assert_eq!(
+        lens_on.len(),
+        entities.len(),
+        "rhythm-on changed proposition count; outputs={outputs_on:?}",
+    );
+
+    // Entity preservation: every input name must surface in its
+    // corresponding rendered sentence in both passes.
+    for (name, output) in entities.iter().zip(outputs_off.iter()) {
+        assert!(
+            output.contains(name),
+            "rhythm-off dropped entity `{name}` from `{output}`",
+        );
+    }
+    for (name, output) in entities.iter().zip(outputs_on.iter()) {
+        assert!(
+            output.contains(name),
+            "rhythm-on dropped entity `{name}` from `{output}`",
+        );
+    }
+
+    // Max-length policy: cadence variance must not be bought by allowing
+    // any rendered sentence to blow past the configured budget.
+    for output in outputs_off.iter().chain(outputs_on.iter()) {
+        assert!(
+            output.chars().count() <= 160,
+            "rhythm pass exceeded max_sentence_length budget: `{output}`",
+        );
+    }
+
+    // Punctuation sanity: same guards that ride along with the cadence
+    // change in `sentence_rhythm_preserves_event_count_and_entity_propositions`,
+    // applied to both passes so a regression that introduces a punctuation
+    // hazard while changing cadence trips this fixture too.
+    for label_outputs in [("rhythm-off", &outputs_off), ("rhythm-on", &outputs_on)] {
+        let (label, outputs) = label_outputs;
+        let joined = outputs.join(" ");
+        assert!(
+            !joined.contains(".."),
+            "{label} produced doubled terminal punctuation: {joined}",
+        );
+        assert!(
+            !joined.contains(",."),
+            "{label} produced malformed comma/period adjacency: {joined}",
+        );
+        assert!(
+            !joined.contains(",,"),
+            "{label} produced doubled commas: {joined}",
+        );
+        assert!(
+            !joined.contains(" ,"),
+            "{label} produced floating commas: {joined}",
+        );
+        assert!(
+            !joined.contains(" ;"),
+            "{label} produced floating semicolons: {joined}",
+        );
+        for output in outputs.iter() {
+            let last = output.trim_end().chars().last().unwrap_or('?');
+            assert!(
+                matches!(last, '.' | '!' | '?'),
+                "{label} left unterminated sentence: {output}",
+            );
+            assert!(
+                !output.contains("  "),
+                "{label} introduced double spaces: {output}",
+            );
+        }
+    }
+
+    // Cadence metric: rhythm-on must produce strictly more *burst* pivots
+    // than rhythm-off across the same fixture inputs. Plain pivots are
+    // structurally saturated by `select_alternative_scored`'s last-variant
+    // skip and so don't differentiate; burst pivots — side crossings with
+    // a swing magnitude clearing `BURST_PIVOT_MIN_SWING` words — only fire
+    // when the engine commits to the long variant rather than ratcheting
+    // through the medium one.
+    let burst_pivots_off = burst_pivot_count(&lens_off);
+    let burst_pivots_on = burst_pivot_count(&lens_on);
+    assert!(
+        burst_pivots_on > burst_pivots_off,
+        "rhythm-on must produce more burst pivots (≥{BURST_PIVOT_MIN_SWING}-word \
+         swings across the mean) than rhythm-off; got burst_on={burst_pivots_on} \
+         burst_off={burst_pivots_off}, lens_off={lens_off:?}, lens_on={lens_on:?}",
+    );
+
+    // Non-regression on the dual signal: if rhythm-on bought burst
+    // amplitude by creating an even longer same-side run somewhere else (a
+    // degenerate bimodal cadence), this guard catches it. Allowed to tie
+    // — we only forbid regression.
+    let run_off = longest_same_side_run(&lens_off);
+    let run_on = longest_same_side_run(&lens_on);
+    assert!(
+        run_on <= run_off,
+        "rhythm-on must not lengthen the worst same-side run; got \
+         run_on={run_on} run_off={run_off}, lens_off={lens_off:?}, \
+         lens_on={lens_on:?}",
+    );
+}
