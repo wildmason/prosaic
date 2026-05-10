@@ -6,6 +6,7 @@
 //! projects into portable JSON or generated Rust source for runtime loading.
 
 mod bundle;
+pub mod catalog;
 mod error;
 mod fixture;
 mod manifest;
@@ -14,6 +15,7 @@ mod project;
 mod runner;
 mod scaffold;
 mod scenario;
+mod style;
 mod template;
 
 pub use bundle::{BuildOutput, BuildTarget, build_bundle};
@@ -25,4 +27,8 @@ pub use project::{Project, ValidationIssue, ValidationLevel};
 pub use runner::{ScenarioOutcome, ScenarioRunner, ScenarioVerdict};
 pub use scaffold::{Starter, scaffold_project};
 pub use scenario::{Expected, ExpectedDiscourse, Scenario, ScenarioEngineOverride, ScenarioEvent};
+pub use style::{
+    ConnectivePreferencesConfig, HedgingCalibrationConfig, LengthDistributionConfig,
+    StyleProfileConfig,
+};
 pub use template::{TemplateFile, Variant};

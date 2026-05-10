@@ -2,6 +2,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::style::StyleProfileConfig;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Manifest {
     pub name: String,
@@ -11,6 +13,11 @@ pub struct Manifest {
     pub engine: EngineSettings,
     #[serde(default)]
     pub dependencies: Vec<VocabDependency>,
+    /// Optional declarative voice profile applied to the materialized
+    /// engine. Missing or all-default fields render byte-equivalent to
+    /// `StyleProfile::neutral()`.
+    #[serde(default)]
+    pub style_profile: Option<StyleProfileConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -120,6 +127,71 @@ mod tests {
         let toml_str = r#"version = "0.1.0""#;
         let res = toml::from_str::<Manifest>(toml_str);
         assert!(res.is_err(), "expected error for missing `name` field");
+    }
+
+    #[test]
+    fn parse_manifest_with_style_profile_section() {
+        let toml_str = r#"
+            name = "demo"
+            version = "0.1.0"
+            language = "en"
+
+            [style_profile]
+            name = "concise-professional"
+            verbosity = "terse"
+            list_style_bias = "bracketed"
+            pronoun_density = "high"
+
+            [style_profile.connectives.allowed]
+            elaboration = ["Furthermore,", "Additionally,"]
+            contrast = ["However,"]
+
+            [style_profile.hedging]
+            offset = -10
+            forbid = ["perhaps"]
+        "#;
+        let m: Manifest = toml::from_str(toml_str).unwrap();
+        let p = m.style_profile.unwrap();
+        assert_eq!(p.name.as_deref(), Some("concise-professional"));
+        assert_eq!(p.verbosity.as_deref(), Some("terse"));
+        assert_eq!(p.list_style_bias.as_deref(), Some("bracketed"));
+        let connectives = p.connectives.unwrap();
+        let allowed = connectives.allowed.unwrap();
+        assert_eq!(allowed.get("elaboration").map(Vec::len), Some(2));
+        assert_eq!(allowed.get("contrast").map(Vec::len), Some(1));
+        let hedging = p.hedging.unwrap();
+        assert_eq!(hedging.offset, Some(-10));
+        assert_eq!(hedging.forbid.as_ref().map(Vec::len), Some(1));
+    }
+
+    #[test]
+    fn parse_manifest_with_style_profile_extends_only() {
+        let toml_str = r#"
+            name = "demo"
+            version = "0.1.0"
+            language = "en"
+
+            [style_profile]
+            extends = "profiles/concise-professional.toml"
+        "#;
+        let m: Manifest = toml::from_str(toml_str).unwrap();
+        let p = m.style_profile.unwrap();
+        assert_eq!(
+            p.extends.as_deref(),
+            Some("profiles/concise-professional.toml")
+        );
+        assert!(p.name.is_none());
+    }
+
+    #[test]
+    fn manifest_without_style_profile_section_omits_field() {
+        let toml_str = r#"
+            name = "demo"
+            version = "0.1.0"
+            language = "en"
+        "#;
+        let m: Manifest = toml::from_str(toml_str).unwrap();
+        assert!(m.style_profile.is_none());
     }
 
     #[test]

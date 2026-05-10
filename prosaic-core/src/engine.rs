@@ -334,6 +334,15 @@ pub struct Engine {
     /// pass the threshold or polarity mismatches, the render returns
     /// `ProsaicError::FaithfulnessRejection` and session state is restored.
     faithfulness_threshold: Option<f32>,
+    /// Declarative voice profile that biases the engine's existing rendering
+    /// choices. `StyleProfile::neutral()` is the byte-for-byte-equivalent
+    /// baseline: an engine with the neutral profile produces identical
+    /// output to one with no profile applied.
+    style_profile: crate::style::StyleProfile,
+    /// Retrospective-pass configuration. `RefineConfig::off()` (the
+    /// default) is a no-op; `DocumentPlan::render` produces byte-identical
+    /// output to its non-refined form.
+    refine_config: crate::refine::RefineConfig,
 }
 
 /// Per-call render options used by internal paths that need to suppress
@@ -398,12 +407,48 @@ impl<'e, 's> RenderCtx<'e, 's> {
                 .session
                 .discourse
                 .detect_relation(key, entity_name.as_deref());
-            self.session.discourse.select_connective(&relation)
+            let prefs = &self.engine.style_profile.connectives;
+            let rst_key = rst_for_discourse(&relation);
+            // Profile's `allowed` is a soft filter (empty → fall back to
+            // base pool); the refine-pass blacklist is a strict
+            // subtractive filter (empty → emit None). Pass them as
+            // separate parameters so the discourse layer applies the
+            // correct semantics to each.
+            let allow_owned: Option<Vec<&str>> = rst_key
+                .and_then(|rst| prefs.allowed.get(&rst))
+                .map(|v| v.iter().map(String::as_str).collect());
+            let prefer_owned: Option<Vec<(&str, f32)>> = rst_key
+                .and_then(|rst| prefs.preferred.get(&rst))
+                .map(|v| v.iter().map(|(s, w)| (s.as_str(), *w)).collect());
+            let forbid_owned: Option<Vec<&str>> = if self
+                .session
+                .refine_blacklist_connectives
+                .is_empty()
+            {
+                None
+            } else {
+                Some(
+                    self.session
+                        .refine_blacklist_connectives
+                        .iter()
+                        .map(String::as_str)
+                        .collect(),
+                )
+            };
+            self.session.discourse.select_connective_filtered(
+                &relation,
+                allow_owned.as_deref(),
+                prefer_owned.as_deref(),
+                forbid_owned.as_deref(),
+            )
         };
 
         // Filter templates by salience level matching the context magnitude,
         // honouring the engine's language preference.
-        let target_salience = self.engine.context_salience(context);
+        let target_salience = apply_verbosity_bias(
+            self.engine.context_salience(context),
+            self.engine.style_profile.verbosity,
+        );
         let alternatives = filter_alternatives(
             all_alternatives,
             target_salience,
@@ -502,6 +547,11 @@ impl<'e, 's> RenderCtx<'e, 's> {
         if self.engine.sentence_rhythm_enabled {
             score += self.session.discourse.sentence_rhythm_score(candidate);
         }
+        score += profile_length_bias_score(
+            candidate,
+            &self.session.discourse,
+            &self.engine.style_profile.sentence_length,
+        );
         score
     }
 
@@ -838,7 +888,11 @@ impl<'e, 's> RenderCtx<'e, 's> {
                 .unwrap_or_default(),
         };
 
-        let form = self.session.discourse.reference_form(&name);
+        let form = self.session.discourse.reference_form_with_density(
+            &name,
+            matches!(self.engine.style_profile.pronoun_density, crate::style::PronounDensity::Low),
+            matches!(self.engine.style_profile.pronoun_density, crate::style::PronounDensity::High),
+        );
 
         let rendered = match form {
             ReferenceForm::Full => self.engine.render_full_reference(&name, &entity_type),
@@ -860,7 +914,11 @@ impl<'e, 's> RenderCtx<'e, 's> {
 
     fn pipe_possessive_single(&self, value: &Value) -> Result<Value, ProsaicError> {
         let name = value.as_display();
-        let form = self.session.discourse.reference_form(&name);
+        let form = self.session.discourse.reference_form_with_density(
+            &name,
+            matches!(self.engine.style_profile.pronoun_density, crate::style::PronounDensity::Low),
+            matches!(self.engine.style_profile.pronoun_density, crate::style::PronounDensity::High),
+        );
         let rendered = match form {
             ReferenceForm::Pronoun | ReferenceForm::Demonstrative | ReferenceForm::Zero => {
                 let features = reference_features(value, self.session.discourse.focus_is_plural());
@@ -1077,7 +1135,48 @@ impl<'e, 's> RenderCtx<'e, 's> {
                 self.session.discourse.record_list_style_used(s);
                 s
             }
-            None => self.session.discourse.next_list_style(),
+            None => {
+                let mut bias_target = list_style_bias_target(self.engine.style_profile.list_style_bias);
+                // If a refine blacklist is active and includes the bias
+                // target, drop the bias for this render so the cycle's
+                // anti-repeat naturally lands on something else.
+                if let Some(target) = bias_target
+                    && self
+                        .session
+                        .refine_blacklist_list_styles
+                        .iter()
+                        .any(|s| *s == target)
+                {
+                    bias_target = None;
+                }
+                let chosen = self.session.discourse.next_list_style_with_bias(bias_target);
+                // If anti-repeat picked a blacklisted style anyway (e.g.,
+                // the recent window forced its hand), advance the cycle
+                // until we find a non-blacklisted slot. Worst case the
+                // cycle exhausts and we accept the original pick.
+                if self
+                    .session
+                    .refine_blacklist_list_styles
+                    .iter()
+                    .any(|s| *s == chosen)
+                {
+                    let mut next = chosen;
+                    for _ in 0..crate::discourse::list_styles_count() {
+                        next = self.session.discourse.next_list_style_with_bias(None);
+                        if !self
+                            .session
+                            .refine_blacklist_list_styles
+                            .iter()
+                            .any(|s| *s == next)
+                        {
+                            break;
+                        }
+                    }
+                    next
+                } else {
+                    chosen
+                }
+            }
         };
 
         let refs: Vec<&str> = items.iter().map(|s| s.as_str()).collect();
@@ -1250,7 +1349,9 @@ impl<'e, 's> RenderCtx<'e, 's> {
             }
         };
 
-        Ok(Value::String(hedge_fn(score, mode).to_string()))
+        Ok(Value::String(
+            hedge_with_calibration(score, mode, &self.engine.style_profile.hedging).to_string(),
+        ))
     }
 
     fn pipe_proportion(
@@ -1563,6 +1664,8 @@ impl Engine {
             language_preference: None,
             style_preference: None,
             faithfulness_threshold: None,
+            style_profile: crate::style::StyleProfile::neutral(),
+            refine_config: crate::refine::RefineConfig::off(),
         }
     }
 
@@ -1615,6 +1718,37 @@ impl Engine {
     pub fn salience_thresholds(mut self, thresholds: SalienceThresholds) -> Self {
         self.salience_thresholds = thresholds;
         self
+    }
+
+    /// Apply a [`StyleProfile`](crate::StyleProfile) — a declarative voice
+    /// configuration that biases the engine's existing rendering decisions
+    /// toward a target register without breaking determinism. Setting the
+    /// neutral profile (`StyleProfile::neutral()`) is byte-for-byte
+    /// equivalent to never calling this method.
+    pub fn style_profile(mut self, profile: crate::style::StyleProfile) -> Self {
+        self.style_profile = profile;
+        self
+    }
+
+    /// Read the currently-applied [`StyleProfile`](crate::StyleProfile).
+    /// Returns the neutral profile if none was explicitly set.
+    pub fn current_style_profile(&self) -> &crate::style::StyleProfile {
+        &self.style_profile
+    }
+
+    /// Apply a [`RefineConfig`](crate::RefineConfig) — opts the engine
+    /// into the retrospective refine pass on `DocumentPlan::render`.
+    /// `RefineConfig::off()` (the default) is a no-op; the render path
+    /// produces byte-identical output to its non-refined form when the
+    /// config is off.
+    pub fn refine(mut self, config: crate::refine::RefineConfig) -> Self {
+        self.refine_config = config;
+        self
+    }
+
+    /// Read the currently-applied [`RefineConfig`](crate::RefineConfig).
+    pub fn current_refine_config(&self) -> &crate::refine::RefineConfig {
+        &self.refine_config
     }
 
     /// Register an entity descriptor for referring-expression generation
@@ -2181,7 +2315,8 @@ impl Engine {
 
     /// Compute the salience for a context using this engine's thresholds.
     pub fn context_salience(&self, ctx: &Context) -> Salience {
-        Salience::from_context(ctx, self.salience_thresholds)
+        let thresholds = apply_salience_bias(self.salience_thresholds, self.style_profile.salience);
+        Salience::from_context(ctx, thresholds)
     }
 
     /// Render a registered template with the given context.
@@ -2624,9 +2759,13 @@ impl Engine {
             .get("name")
             .or_else(|| context.get("old_name"))
             .map(|v| v.as_display());
-        let reference_form = entity_name
-            .as_ref()
-            .map(|n| session.discourse.reference_form(n));
+        let reference_form = entity_name.as_ref().map(|n| {
+            session.discourse.reference_form_with_density(
+                n,
+                matches!(self.style_profile.pronoun_density, crate::style::PronounDensity::Low),
+                matches!(self.style_profile.pronoun_density, crate::style::PronounDensity::High),
+            )
+        });
 
         // Run the real render. Discourse state advances normally.
         let output = self.render(session, key, &context)?;
@@ -3847,6 +3986,189 @@ fn prepend_replacing_subject_in_place(
 /// Three-stage filter: language preference first, style preference second,
 /// then salience. Language and style are intersected, not ORed: style is
 /// resolved only inside the selected language bucket.
+/// Apply a `HedgingCalibration` to the bare hedge mapping. The offset
+/// shifts the input confidence (clamped to `0..=100`) before the bucket
+/// lookup; the `forbid` list, if it would otherwise emit a forbidden
+/// hedge, walks the buckets *upward* toward firmer phrasing per the
+/// resolved decision in the design spec — falling back to the original
+/// hedge only when every higher bucket is also forbidden.
+fn hedge_with_calibration(
+    score: i64,
+    mode: HedgeMode,
+    calibration: &crate::style::HedgingCalibration,
+) -> &'static str {
+    let calibrated = (score + calibration.offset as i64).clamp(0, 100);
+    let initial = hedge_fn(calibrated, mode);
+    if !is_forbidden(initial, &calibration.forbid) {
+        return initial;
+    }
+    // Walk upward through bucket centers toward more confident phrasing.
+    const BUCKET_CENTERS: [i64; 5] = [10, 40, 60, 80, 95];
+    let start_idx = BUCKET_CENTERS
+        .iter()
+        .position(|&c| c >= calibrated)
+        .unwrap_or(0);
+    for &c in BUCKET_CENTERS.iter().skip(start_idx + 1) {
+        let candidate = hedge_fn(c, mode);
+        if !is_forbidden(candidate, &calibration.forbid) {
+            return candidate;
+        }
+    }
+    initial
+}
+
+fn is_forbidden(candidate: &str, forbid: &[String]) -> bool {
+    forbid
+        .iter()
+        .any(|f| f.eq_ignore_ascii_case(candidate))
+}
+
+/// Map a `ListStyleBias` dial onto a concrete `ListStyle` target, or
+/// `None` for `Auto` (the no-bias default that preserves the existing
+/// rotation). Used by the join pipe to nudge the anti-repeat cycle without
+/// breaking determinism.
+fn list_style_bias_target(bias: crate::style::ListStyleBias) -> Option<ListStyle> {
+    match bias {
+        crate::style::ListStyleBias::Auto => None,
+        crate::style::ListStyleBias::Including => Some(ListStyle::Including),
+        crate::style::ListStyleBias::SuchAs => Some(ListStyle::SuchAs),
+        crate::style::ListStyleBias::Dash => Some(ListStyle::Dash),
+        crate::style::ListStyleBias::Bracketed => Some(ListStyle::Bracketed),
+    }
+}
+
+/// Map an internal `DiscourseRelation` to the closest `RstRelation` for
+/// `StyleProfile.connectives` lookup. The internal relation taxonomy
+/// (continuation / similarity / contrast) is coarser than the RST
+/// taxonomy; this is the canonical bridge between them.
+fn rst_for_discourse(relation: &crate::discourse::DiscourseRelation) -> Option<crate::rst::RstRelation> {
+    match relation {
+        crate::discourse::DiscourseRelation::SameEntityDifferentAction => {
+            Some(crate::rst::RstRelation::Elaboration)
+        }
+        crate::discourse::DiscourseRelation::DifferentEntitySameAction => {
+            Some(crate::rst::RstRelation::Sequence)
+        }
+        crate::discourse::DiscourseRelation::Contrast => Some(crate::rst::RstRelation::Contrast),
+        crate::discourse::DiscourseRelation::None => None,
+    }
+}
+
+/// Profile-aware sentence-length bias score. Buckets observed (history +
+/// candidate) sentences into short/medium/long, computes the resulting
+/// distribution as proportions, and returns the L1 distance to the
+/// profile's normalized target distribution scaled by a weight chosen to
+/// be in the same ballpark as the existing rhythm penalty.
+///
+/// Returns `0.0` when the target distribution is the neutral default —
+/// the profile-aware path is then a no-op, preserving byte equality with
+/// no-profile renders.
+fn profile_length_bias_score(
+    candidate: &str,
+    discourse: &crate::discourse::DiscourseState,
+    target: &crate::style::LengthDistribution,
+) -> f64 {
+    if target.is_neutral() {
+        return 0.0;
+    }
+
+    let candidate_lengths = crate::discourse::sentence_word_counts(candidate);
+
+    // Aggregate bucket counts over (history + candidate).
+    let mut counts = [0usize; 3]; // [short, medium, long]
+    let bucket_for = |len: usize| -> usize {
+        if len <= target.short_max_words as usize {
+            0
+        } else if len <= target.medium_max_words as usize {
+            1
+        } else {
+            2
+        }
+    };
+    for len in discourse.sentence_length_iter() {
+        counts[bucket_for(len)] += 1;
+    }
+    for &len in &candidate_lengths {
+        counts[bucket_for(len)] += 1;
+    }
+
+    let total: usize = counts.iter().sum();
+    if total == 0 {
+        return 0.0;
+    }
+    let observed = [
+        counts[0] as f32 / total as f32,
+        counts[1] as f32 / total as f32,
+        counts[2] as f32 / total as f32,
+    ];
+
+    let target_sum = target.short + target.medium + target.long;
+    if target_sum <= 0.0 || !target_sum.is_finite() {
+        return 0.0;
+    }
+    let target_norm = [
+        target.short / target_sum,
+        target.medium / target_sum,
+        target.long / target_sum,
+    ];
+
+    let distance = (observed[0] - target_norm[0]).abs()
+        + (observed[1] - target_norm[1]).abs()
+        + (observed[2] - target_norm[2]).abs();
+
+    // Weight chosen so the L1 distance (≤ 2.0) lands roughly inside the
+    // working range of the rhythm scorer, which already produces values in
+    // the single-digit ones for moderate violations.
+    const PROFILE_LENGTH_WEIGHT: f64 = 3.0;
+    PROFILE_LENGTH_WEIGHT * distance as f64
+}
+
+/// Shift the salience-classification thresholds per the active
+/// `SalienceBias` dial. `Lower` bias shrinks the bands so the same numeric
+/// `consumer_count` lands in *higher* tiers (more impactful framing);
+/// `Higher` bias widens them so inputs land in *lower* tiers (more conservative
+/// framing). The deltas are chosen so a typical mid-range `consumer_count`
+/// crosses one tier under either direction.
+///
+/// Composition order: this runs *first* (in `Engine::context_salience`),
+/// then [`apply_verbosity_bias`] runs on the resulting tier. Both are
+/// preferences — the `filter_alternatives` cascade smoothly falls back if
+/// no variant exists in the biased tier.
+fn apply_salience_bias(
+    thresholds: SalienceThresholds,
+    bias: crate::style::SalienceBias,
+) -> SalienceThresholds {
+    match bias {
+        crate::style::SalienceBias::Auto => thresholds,
+        crate::style::SalienceBias::Lower => {
+            let low_max = (thresholds.low_max - 1).max(0);
+            let high_min = (thresholds.high_min - 5).max(low_max + 1);
+            SalienceThresholds { low_max, high_min }
+        }
+        crate::style::SalienceBias::Higher => {
+            let low_max = thresholds.low_max + 2;
+            let high_min = thresholds.high_min + 10;
+            SalienceThresholds { low_max, high_min }
+        }
+    }
+}
+
+/// Shift the target salience tier per the active `Verbosity` dial. The
+/// existing `filter_alternatives` cascade (exact tier → Medium → any)
+/// gracefully degrades when the shifted tier has no registered variants,
+/// so the bias is a preference rather than a hard constraint.
+fn apply_verbosity_bias(target: Salience, verbosity: crate::style::Verbosity) -> Salience {
+    match (verbosity, target) {
+        (crate::style::Verbosity::Neutral, t) => t,
+        (crate::style::Verbosity::Terse, Salience::High) => Salience::Medium,
+        (crate::style::Verbosity::Terse, Salience::Medium) => Salience::Low,
+        (crate::style::Verbosity::Terse, Salience::Low) => Salience::Low,
+        (crate::style::Verbosity::Verbose, Salience::Low) => Salience::Medium,
+        (crate::style::Verbosity::Verbose, Salience::Medium) => Salience::High,
+        (crate::style::Verbosity::Verbose, Salience::High) => Salience::High,
+    }
+}
+
 fn filter_alternatives<'a>(
     alternatives: &'a [SalientTemplate],
     target: Salience,

@@ -307,6 +307,10 @@ impl Project {
         if let Some(style) = &s.style {
             engine = engine.style_preference(style);
         }
+        if let Some(profile_cfg) = &self.manifest.style_profile {
+            let profile = profile_cfg.clone().into_style_profile(&self.root)?;
+            engine = engine.style_profile(profile);
+        }
         engine = engine.language_preference(&self.manifest.language);
 
         for (name, partial) in &self.partials {

@@ -440,7 +440,95 @@ impl DocumentPlan {
     /// discourse markers ("Furthermore, ", "However, ", etc.) between events.
     /// Paragraphs whose relations are all `None` fall back to the standard
     /// [`Engine::render_batch`] path so aggregation still applies.
+    /// Render this plan into a [`RenderedDocument`] — the structured
+    /// intermediate consumed by retrospective-pass diagnosers and the
+    /// composite scorer.
+    ///
+    /// Behaviorally identical to [`Self::render`] for the **flat text**:
+    /// `render_structured(engine, session)?.text == render(engine, session)?`
+    /// holds when no inter-event gapping (forward conjunction reduction)
+    /// applies inside any paragraph. When gapping does apply, this method
+    /// produces sentence-by-sentence text without the gapped form, which
+    /// is what diagnosers want — they reason at sentence granularity, not
+    /// at the gapped-clause level. Callers that need the gapped flat
+    /// string should keep using `render`.
+    pub fn render_structured(
+        &self,
+        engine: &Engine,
+        session: &mut Session,
+    ) -> Result<crate::refine::RenderedDocument, ProsaicError> {
+        use crate::refine::{EventMeta, ParagraphRender};
+        let mut paragraphs = Vec::with_capacity(self.paragraphs.len());
+
+        for (idx, p) in self.paragraphs.iter().enumerate() {
+            if idx > 0 {
+                session.reset_for_paragraph();
+            }
+            let mut paragraph_text = String::new();
+            let mut events = Vec::with_capacity(p.events.len());
+            for (event_idx, (key, ctx)) in p.events.iter().enumerate() {
+                if event_idx > 0 {
+                    paragraph_text.push(' ');
+                }
+                let exp = engine.render_explained(session, key, ctx)?;
+                paragraph_text.push_str(&exp.output);
+                events.push(EventMeta {
+                    connective: exp.connective.map(|s| s.to_string()),
+                    list_style: exp.list_style,
+                });
+            }
+            paragraphs.push(ParagraphRender {
+                text: paragraph_text,
+                events,
+            });
+        }
+
+        Ok(crate::refine::RenderedDocument::from_paragraphs(paragraphs))
+    }
+
+    /// Run the retrospective refine loop over this plan. Equivalent to
+    /// [`Self::render`] when the engine's [`crate::RefineConfig`] is off,
+    /// otherwise iterates with structural diagnosers per the loop spec.
+    /// Always produces a complete output; faithfulness-failing iterations
+    /// are silently rejected and the loop falls back to the previous best.
+    pub fn render_refined(
+        &self,
+        engine: &Engine,
+        session: &mut Session,
+    ) -> Result<crate::refine::RefineOutcome, ProsaicError> {
+        let config = engine.current_refine_config();
+        let initial_session = session.clone();
+        let initial = self.render_structured(engine, session)?;
+        if config.is_off() {
+            let final_score = crate::refine_score::score_document(
+                &initial,
+                &config.weights,
+                Some(engine.current_style_profile()).filter(|p| !p.is_neutral()),
+            );
+            return Ok(crate::refine::RefineOutcome {
+                text: initial.text,
+                iterations_run: 0,
+                final_score,
+                converged_clean: true,
+            });
+        }
+        let profile_ref = Some(engine.current_style_profile()).filter(|p| !p.is_neutral());
+        crate::refine::run_refine_loop(
+            config,
+            profile_ref,
+            initial,
+            initial_session,
+            session,
+            |s| self.render_structured(engine, s),
+        )
+    }
+
     pub fn render(&self, engine: &Engine, session: &mut Session) -> Result<String, ProsaicError> {
+        if !engine.current_refine_config().is_off() {
+            return self
+                .render_refined(engine, session)
+                .map(|outcome| outcome.text);
+        }
         let mut paragraphs = Vec::new();
 
         for (idx, p) in self.paragraphs.iter().enumerate() {

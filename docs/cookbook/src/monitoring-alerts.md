@@ -9,9 +9,9 @@ sites.
 
 ```toml
 [dependencies]
-prosaic-core = "0.2"
-prosaic-grammar-en = "0.2"
-prosaic-tracing = "0.2"
+prosaic-core = "0.6"
+prosaic-grammar-en = "0.6"
+prosaic-tracing = "0.6"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["registry"] }
 ```

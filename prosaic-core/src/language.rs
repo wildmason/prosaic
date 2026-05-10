@@ -310,6 +310,42 @@ pub trait Language: Send + Sync {
     ///
     /// The default implementation encodes English markers. Non-English grammars
     /// override with locale-appropriate markers.
+    /// Return `true` when `text` is a known sentence-leading connective
+    /// in this language. Used by retrospective-pass diagnosers (e.g.
+    /// `ParagraphOpenerMonotony`) that need to recognize when a paragraph
+    /// opens with a continuation/contrast/sequencing cue rather than
+    /// fresh content.
+    ///
+    /// The default impl recognizes the English connective set the engine
+    /// itself emits: discourse-relation auto-connectives plus the
+    /// `discourse_marker` outputs. Non-English grammars override with
+    /// their own opener lexicon. Match is case-sensitive and includes
+    /// the trailing comma — operators should pass the raw connective
+    /// text the engine emits, not its lowercased form.
+    fn is_connective_opener(&self, text: &str) -> bool {
+        const ENGLISH_OPENERS: &[&str] = &[
+            // Same-entity continuation (SAME_ENTITY_CONNECTIVES).
+            "Additionally,",
+            "Furthermore,",
+            "It also",
+            // Same-action similarity (SAME_ACTION_CONNECTIVES).
+            "Similarly,",
+            "Likewise,",
+            // Contrast (CONTRAST_CONNECTIVES).
+            "Meanwhile,",
+            "However,",
+            "On the other hand,",
+            // RST-relation discourse markers (default Language impl).
+            "Because of this,",
+            "As a result,",
+            "Nevertheless,",
+            "Then,",
+            "If this happens,",
+            "In summary,",
+        ];
+        ENGLISH_OPENERS.iter().any(|opener| text.starts_with(opener))
+    }
+
     fn discourse_marker(&self, relation: crate::rst::RstRelation) -> Option<&'static str> {
         use crate::rst::RstRelation::*;
         Some(match relation {

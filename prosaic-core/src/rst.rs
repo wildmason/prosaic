@@ -7,7 +7,7 @@
 /// is attached to an event in a [`crate::DocumentPlan`], the renderer uses
 /// the relation to pick a discourse marker ("Furthermore", "However",
 /// "As a result", etc.) instead of the default inter-sentence space.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum RstRelation {
     /// This unit adds detail to the previous unit.

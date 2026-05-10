@@ -41,6 +41,9 @@ pub enum ProjectError {
     #[error("io error reading `{path}`: {cause}")]
     Io { path: String, cause: String },
 
+    #[error("style profile invalid: {reason}")]
+    ManifestStyle { reason: String },
+
     #[error("engine error: {0}")]
     Engine(#[from] prosaic_core::ProsaicError),
 }

@@ -113,11 +113,15 @@ mod proportion;
 #[cfg(feature = "polish")]
 mod punctuation;
 mod quantify;
+mod refine;
+mod refine_diagnosers;
+mod refine_score;
 #[cfg(feature = "reg")]
 mod reg;
 pub mod rst;
 mod salience;
 mod session;
+mod style;
 mod synonyms;
 mod template;
 #[cfg(feature = "time")]
@@ -149,6 +153,15 @@ pub use hedge::{HedgeMode, hedge};
 #[cfg(feature = "polish")]
 pub use length::split_long;
 pub use proportion::english_proportion;
+pub use refine::{
+    Diagnoser, Diagnostic, RefineConfig, RefineConstraint, RefineOutcome, RefineWeights,
+    RenderedDocument, RenderedParagraph, RenderedSentence, UsedConnective, UsedListStyle,
+};
+pub use refine_diagnosers::{
+    ConnectiveFamilySaturation, DocumentScopeRhythm, ListStyleFatigue, ParagraphOpenerMonotony,
+    ProfileDistributionDrift, RstRelationImbalance,
+};
+pub use refine_score::score_document;
 pub use prosaic_common::{ValueType, pipe_spec, schema_lookup, types_compatible};
 #[cfg(feature = "polish")]
 pub use punctuation::{em_dash_nested_parentheticals, smart_quotes};
@@ -167,6 +180,10 @@ pub use prosaic_common::{PIPE_SPECS, PipeSpec};
 pub use rst::RstRelation;
 pub use salience::{Salience, SalienceThresholds};
 pub use session::Session;
+pub use style::{
+    ConnectivePreferences, HedgingCalibration, LengthDistribution, ListStyleBias, PronounDensity,
+    SalienceBias, StyleProfile, StyleProfileBuilder, StyleProfileError, Verbosity,
+};
 pub use synonyms::SynonymRegistry;
 pub use template::{BareSegment, Pipe, PipeArg, Template};
 #[cfg(feature = "time")]

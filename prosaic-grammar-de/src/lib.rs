@@ -168,6 +168,25 @@ impl Language for German {
         })
     }
 
+    fn is_connective_opener(&self, text: &str) -> bool {
+        const GERMAN_OPENERS: &[&str] = &[
+            "Außerdem",
+            "Darüber hinaus",
+            "Zudem",
+            "Ebenso",
+            "Allerdings",
+            "Andererseits",
+            "Inzwischen",
+            "Deshalb",
+            "Folglich",
+            "Dennoch",
+            "Dann",
+            "Wenn dies geschieht,",
+            "Zusammenfassend",
+        ];
+        GERMAN_OPENERS.iter().any(|opener| text.starts_with(opener))
+    }
+
     #[cfg(feature = "time")]
     fn since_last_marker(&self, diff_secs: i64) -> String {
         const MINUTE: i64 = 60;

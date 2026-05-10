@@ -1,0 +1,5 @@
+The domain class UserService was modified.
+UserService was modified.
+Additionally, userService was renamed to AccountService.
+The infra class AuthService was modified.
+Similarly, the class OrderService was modified.

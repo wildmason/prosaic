@@ -231,7 +231,7 @@ pub enum DiscourseRelation {
 }
 
 /// List formatting style.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum ListStyle {
     /// "including A, B, and C among others"
@@ -333,6 +333,12 @@ const SAME_ENTITY_CONNECTIVES: &[&str] = &["Additionally,", "Furthermore,", "It 
 const SAME_ACTION_CONNECTIVES: &[&str] = &["Similarly,", "Likewise,"];
 
 const CONTRAST_CONNECTIVES: &[&str] = &["Meanwhile,", "However,", "On the other hand,"];
+
+/// Number of distinct list styles in the cycle.
+pub(crate) fn list_styles_count() -> usize {
+    LIST_STYLES.len()
+}
+
 
 /// Lexical family a connector belongs to. The exact-string anti-repeat
 /// only sees individual connectors; the family lets the budget reason
@@ -537,6 +543,47 @@ impl DiscourseState {
         }
     }
 
+    /// Profile-aware variant of [`Self::reference_form`].
+    ///
+    /// `PronounDensity::Default` is identical to `reference_form`. `Low`
+    /// demotes any computed `Pronoun` to `ShortName`, biasing toward
+    /// formal register that keeps full names visible longer. `High`
+    /// promotes a `ShortName` to `Pronoun` when the entity is recent
+    /// enough (distance ≤ 2) and not in an ambiguity context — biasing
+    /// toward conversational register.
+    pub fn reference_form_with_density(
+        &self,
+        name: &str,
+        density_low: bool,
+        density_high: bool,
+    ) -> ReferenceForm {
+        let raw = self.reference_form(name);
+        if density_low {
+            return match raw {
+                ReferenceForm::Pronoun => ReferenceForm::ShortName,
+                other => other,
+            };
+        }
+        if density_high && raw == ReferenceForm::ShortName && self.is_pronoun_eligible_relaxed(name) {
+            return ReferenceForm::Pronoun;
+        }
+        raw
+    }
+
+    fn is_pronoun_eligible_relaxed(&self, name: &str) -> bool {
+        let Some(mention) = self.entities.get(name) else {
+            return false;
+        };
+        let distance = self.render_index.saturating_sub(mention.last_mentioned);
+        if distance == 0 || distance > 2 {
+            return false;
+        }
+        if self.has_ambiguity(name) {
+            return false;
+        }
+        true
+    }
+
     /// Determine how to refer to an entity given discourse history.
     pub fn reference_form(&self, name: &str) -> ReferenceForm {
         let mention = match self.entities.get(name) {
@@ -667,7 +714,36 @@ impl DiscourseState {
     ///    A,B,C cycle; for two-element pools the family budget kicks in
     ///    first and the penalty is moot.
     pub fn select_connective(&mut self, relation: &DiscourseRelation) -> Option<&'static str> {
-        let pool = match relation {
+        self.select_connective_filtered(relation, None, None, None)
+    }
+
+    /// Profile-aware variant of [`Self::select_connective`].
+    ///
+    /// `allowed` (when `Some`) restricts the candidate pool to connectives
+    /// also present in the slice. If the resulting pool is empty (every
+    /// allowed entry was filtered by the existing anti-repeat or family
+    /// budget logic, OR no allowed entries match the base pool at all),
+    /// the engine falls back to the unfiltered base pool — profile
+    /// preferences are biases, never hard constraints.
+    ///
+    /// `preferred` (when `Some`) adds a per-connective tie-breaker bonus
+    /// to the existing distance/alternation score. Weights are interpreted
+    /// in `0.0..=1.0` and scaled by 10 to land in the same rough magnitude
+    /// as the existing scoring terms.
+    ///
+    /// `forbidden` (when `Some`) is a strict subtractive filter applied
+    /// *after* the allowed/fallback computation — used by the
+    /// retrospective refine pass for `BlacklistConnective` constraints.
+    /// Unlike `allowed`, an empty post-`forbidden` pool emits `None`
+    /// rather than falling back: that's the whole point of a blacklist.
+    pub fn select_connective_filtered(
+        &mut self,
+        relation: &DiscourseRelation,
+        allowed: Option<&[&str]>,
+        preferred: Option<&[(&str, f32)]>,
+        forbidden: Option<&[&str]>,
+    ) -> Option<&'static str> {
+        let base_pool: &[&'static str] = match relation {
             DiscourseRelation::SameEntityDifferentAction => SAME_ENTITY_CONNECTIVES,
             DiscourseRelation::DifferentEntitySameAction => SAME_ACTION_CONNECTIVES,
             DiscourseRelation::Contrast => CONTRAST_CONNECTIVES,
@@ -676,9 +752,49 @@ impl DiscourseState {
         let family = family_for_relation(relation)
             .expect("non-None relation always maps to a connector family");
 
+        // Apply the profile-allowed filter when one is supplied. An empty
+        // post-filter pool falls through to the base pool — profile
+        // preferences are biases, not hard constraints.
+        let filtered: Option<Vec<&'static str>> = allowed.map(|allow| {
+            base_pool
+                .iter()
+                .copied()
+                .filter(|c| allow.iter().any(|s| *s == *c))
+                .collect()
+        });
+        let after_allowed: &[&'static str] = match &filtered {
+            Some(v) if !v.is_empty() => v.as_slice(),
+            _ => base_pool,
+        };
+
+        // Apply the strict-forbidden filter (refine-pass blacklist) on
+        // top of `after_allowed`. Empty post-forbidden pool → no
+        // connective emitted (None). This is the intentional asymmetry
+        // with `allowed`: blacklist is a hard constraint.
+        let strictly_filtered: Option<Vec<&'static str>> = forbidden.map(|forbid| {
+            after_allowed
+                .iter()
+                .copied()
+                .filter(|c| !forbid.iter().any(|f| *f == *c))
+                .collect()
+        });
+        let pool_owned: Vec<&'static str>;
+        let pool: &[&'static str] = match &strictly_filtered {
+            Some(v) => {
+                if v.is_empty() {
+                    self.record_family_slot(None);
+                    return None;
+                }
+                pool_owned = v.clone();
+                pool_owned.as_slice()
+            }
+            None => after_allowed,
+        };
+
         // Family-budget gate: count this family's emissions inside the
-        // trailing window. Once they saturate the pool, suppress the
-        // connective so the prose continues without a transition cue.
+        // trailing window. Once they saturate the (effective) pool,
+        // suppress the connective so the prose continues without a
+        // transition cue.
         let family_count = self
             .connective_family_history
             .iter()
@@ -698,6 +814,17 @@ impl DiscourseState {
             .rev()
             .nth(1)
             .map(String::as_str);
+
+        let prefer_bonus = |connective: &str| -> i64 {
+            let Some(prefs) = preferred else {
+                return 0;
+            };
+            prefs
+                .iter()
+                .find_map(|(s, w)| if *s == connective { Some(*w) } else { None })
+                .map(|w| (w * 10.0) as i64)
+                .unwrap_or(0)
+        };
 
         let mut selected: Option<&'static str> = None;
         let mut selected_score: i64 = i64::MIN;
@@ -719,7 +846,7 @@ impl DiscourseState {
             } else {
                 0
             };
-            let score = distance - alternation_penalty;
+            let score = distance - alternation_penalty + prefer_bonus(connective);
 
             if selected.is_none() || score > selected_score {
                 selected = Some(connective);
@@ -770,6 +897,15 @@ impl DiscourseState {
         while self.word_history.len() > WORD_HISTORY_WINDOW {
             self.word_history.pop_front();
         }
+    }
+
+    /// Iterate over the recent sentence-length history (newest last).
+    /// Each value is the word count of one emitted sentence inside the
+    /// rhythm-tracking window. Exposed for profile-aware scorers that
+    /// need to read the cadence buffer without snapshotting the whole
+    /// session — the buffer is short and read-only from outside.
+    pub fn sentence_length_iter(&self) -> impl Iterator<Item = usize> + '_ {
+        self.sentence_length_history.iter().copied()
     }
 
     /// Record word counts for the sentences emitted by the committed render.
@@ -934,6 +1070,32 @@ impl DiscourseState {
     /// sits in the recent window (unreachable while
     /// `LIST_STYLE_RECENT_WINDOW < LIST_STYLES.len()`, but kept defensive).
     pub fn next_list_style(&mut self) -> ListStyle {
+        self.next_list_style_with_bias(None)
+    }
+
+    /// Profile-aware variant of [`Self::next_list_style`].
+    ///
+    /// When `bias` is `Some(target)` and `target` is not currently inside
+    /// the anti-repeat window, the cycle advances to the slot just past
+    /// `target` and emits it. When `bias` is `None` (i.e., the profile's
+    /// `ListStyleBias::Auto` default), or when the bias target is in the
+    /// recent window, the natural cycle picks as in `next_list_style`.
+    /// The bias is a preference, not an override — anti-repeat always wins.
+    pub fn next_list_style_with_bias(&mut self, bias: Option<ListStyle>) -> ListStyle {
+        if let Some(target) = bias {
+            if !self.recent_list_styles.contains(&target)
+                && let Some(target_idx) = LIST_STYLES.iter().position(|s| *s == target)
+            {
+                // Advance the cycle to the slot just past the bias target so
+                // the natural rotation continues coherently afterward, then
+                // emit the target.
+                self.last_list_style = target_idx.wrapping_add(1);
+                self.push_recent_list_style(target);
+                self.last_list_style_used = Some(target);
+                return target;
+            }
+        }
+
         let len = LIST_STYLES.len();
         let start = self.last_list_style % len;
 
@@ -1137,7 +1299,7 @@ impl Default for DiscourseState {
     }
 }
 
-fn sentence_word_counts(text: &str) -> Vec<usize> {
+pub(crate) fn sentence_word_counts(text: &str) -> Vec<usize> {
     let mut counts = Vec::new();
     let mut current = 0usize;
 

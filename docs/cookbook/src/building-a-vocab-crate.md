@@ -21,10 +21,10 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-prosaic-core = "0.2"
+prosaic-core = "0.6"
 
 [dev-dependencies]
-prosaic-grammar-en = "0.2"
+prosaic-grammar-en = "0.6"
 ```
 
 ## Public API

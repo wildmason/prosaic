@@ -1,0 +1,5 @@
+The domain class UserService was modified across consumers.
+It was modified across consumers.
+Additionally, it was renamed to AccountService which impacts 5 consumers including A, B, and C among others.
+The infra class AuthService was modified.
+Similarly, the class OrderService was modified.

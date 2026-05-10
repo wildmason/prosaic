@@ -173,6 +173,25 @@ impl Language for Spanish {
         })
     }
 
+    fn is_connective_opener(&self, text: &str) -> bool {
+        const SPANISH_OPENERS: &[&str] = &[
+            "Además,",
+            "Asimismo,",
+            "También,",
+            "Igualmente,",
+            "Sin embargo,",
+            "No obstante,",
+            "Por otro lado,",
+            "Mientras tanto,",
+            "Debido a esto,",
+            "Como resultado,",
+            "Luego,",
+            "Si esto ocurre,",
+            "En resumen,",
+        ];
+        SPANISH_OPENERS.iter().any(|opener| text.starts_with(opener))
+    }
+
     #[cfg(feature = "time")]
     fn since_last_marker(&self, diff_secs: i64) -> String {
         const MINUTE: i64 = 60;

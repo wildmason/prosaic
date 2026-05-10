@@ -7,9 +7,9 @@
 
 ---
 
-## Implementation Status (updated 2026-04-15)
+## Implementation Status (last updated 2026-05-09)
 
-> All v1 items shipped in a single session. Project renamed from `nlg` to `prosaic` and published at `github.com/wildmason/prosaic`.
+> v1 + v1.5 shipped 2026-04. Tier 2 (v2) all items shipped or partially shipped as of v0.5.0 (May 2026). Tier 3 LLM-polish item explicitly rejected per the no-LLM rule that now governs Prosaic. Project renamed from `nlg` to `prosaic` and published at `github.com/wildmason/prosaic`.
 
 ### Shared infrastructure — ALL SHIPPED
 
@@ -53,22 +53,24 @@ Additional v1 completions beyond the original plan:
 - [x] Cookbook mdBook site — 9 recipe chapters
 - [x] Vocab crate `templates::en::MODULE` namespace enforcement — all 4 crates restructured
 
-### Tier 2 (v2) — NOT STARTED
+### Tier 2 (v2) — STATUS UPDATED 2026-05-09 (v0.5.0)
 
-- [ ] `prosaic-grammar-de` (case declension axis)
-- [ ] `prosaic-vocab-code-es` + Spanish vocab siblings
-- [ ] RST-labeled DocumentPlan extension
-- [ ] Temporal anchoring across paragraphs
-- [ ] Full ELLEIPO with gapping
-- [ ] Full Centering Theory (Cb/Cf with transition classification)
-- [ ] `#[prosaic_template_compiled]` monomorphized render fn
-- [ ] `parallel` Cargo feature (rayon at paragraph level, batch-only)
-- [ ] `no_std + alloc` path
-- [ ] `prosaic-wasm` member crate
+Verified against current workspace; original list was from 2026-04-15 and has substantially aged.
+
+- [x] `prosaic-grammar-de` (case declension axis) — shipped; `prosaic-grammar-de` crate live with 4-case article declension, weak/strong verbs, German-compound number-words
+- [x] `prosaic-vocab-code-es` + Spanish vocab siblings — shipped; all four vocab crates (`prosaic-vocab-{code,git,pr,release}`) carry `en` + `es` siblings
+- [x] RST-labeled DocumentPlan extension — shipped; `Engine::render_batch_with_relations` accepts explicit RST labels, `prosaic-core/src/rst.rs` defines the relation enum, connective family budgets fire off relation classification
+- [x] Temporal anchoring across paragraphs — shipped; `{ts|relative}` and `{ts|since_last}` pipes in `prosaic-core/src/time.rs` plus `engine.reference_time()` (gated on `time` feature)
+- [x] Full Centering Theory (Cb/Cf with transition classification) — shipped; `Transition` enum and Cb/Cf tracking live across `discourse.rs` and `engine.rs`
+- [x] `#[prosaic_template_compiled]` monomorphized render fn — shipped; documented in README's Crate Structure table
+- [x] `parallel` Cargo feature (rayon at paragraph level, batch-only) — shipped; `DocumentPlan::render_parallel` gated on `parallel` feature
+- [x] `no_std + alloc` path — shipped; `#![cfg_attr(not(feature = "std"), no_std)]` in `prosaic-core/src/lib.rs:94`
+- [x] `prosaic-wasm` member crate — shipped; member crate lives in workspace
+- [~] Full ELLEIPO with gapping — partial; safe subset of forward conjunction reduction shipped, "full ELLEIPO" gapping (arbitrary mid-clause gaps) still deferred per the swarm doc's original framing
 
 ### Tier 3 — NOT STARTED / DEFERRED
 
-- [ ] `prosaic-polish-llm` (hybrid LLM paraphrase, type-enforced Paraphraser + Verifier)
+- [x] ~~`prosaic-polish-llm` (hybrid LLM paraphrase, type-enforced Paraphraser + Verifier)~~ **REJECTED 2026-05-09** — no LLM dependency in Prosaic, runtime or otherwise. See `docs/related-work.md` § "Approaches considered and rejected" and the no-LLM feedback memory for the full reasoning.
 - [ ] `prosaic-vocab-alerts`, `prosaic-vocab-db` (demand-gated)
 - [ ] `prosaic-vocab-finance` (deferred until paying pilot)
 - [ ] LSP server (deferred)

@@ -13,6 +13,8 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 
 #[cfg(not(feature = "std"))]
 use alloc::string::String;
+#[cfg(not(feature = "std"))]
+use alloc::vec::Vec;
 
 use crate::collections::{HashMap, map_with_capacity, new_map};
 
@@ -33,6 +35,14 @@ pub struct Session {
     /// `None`; set automatically whenever an event's context contains a
     /// `timestamp` slot. Call [`Session::reset_temporal`] to clear it.
     pub(crate) last_temporal_anchor: Option<i64>,
+    /// Connectives the engine must skip during the next render(s). Used by
+    /// the retrospective refine pass to apply `BlacklistConnective`
+    /// constraints without mutating the engine. Empty in normal use.
+    pub(crate) refine_blacklist_connectives: Vec<String>,
+    /// List styles the engine must skip during the next render(s). Used by
+    /// the retrospective refine pass to apply `BlacklistListStyle`
+    /// constraints without mutating the engine. Empty in normal use.
+    pub(crate) refine_blacklist_list_styles: Vec<crate::discourse::ListStyle>,
 }
 
 impl Session {
@@ -41,7 +51,27 @@ impl Session {
             discourse: DiscourseState::new(),
             round_robin_counters: new_map(),
             last_temporal_anchor: None,
+            refine_blacklist_connectives: Vec::new(),
+            refine_blacklist_list_styles: Vec::new(),
         }
+    }
+
+    /// Set the connectives + list styles the next render(s) must skip.
+    /// Called by the retrospective refine pass before each iteration; not
+    /// part of the public engine API.
+    pub(crate) fn set_refine_blacklists(
+        &mut self,
+        connectives: Vec<String>,
+        list_styles: Vec<crate::discourse::ListStyle>,
+    ) {
+        self.refine_blacklist_connectives = connectives;
+        self.refine_blacklist_list_styles = list_styles;
+    }
+
+    /// Clear any active refine-pass overrides.
+    pub(crate) fn clear_refine_overrides(&mut self) {
+        self.refine_blacklist_connectives.clear();
+        self.refine_blacklist_list_styles.clear();
     }
 
     /// Clear all session state. Equivalent to replacing with `Session::new()`
@@ -134,6 +164,8 @@ impl Clone for Session {
             discourse: self.discourse.clone(),
             round_robin_counters: counters,
             last_temporal_anchor: self.last_temporal_anchor,
+            refine_blacklist_connectives: self.refine_blacklist_connectives.clone(),
+            refine_blacklist_list_styles: self.refine_blacklist_list_styles.clone(),
         }
     }
 }

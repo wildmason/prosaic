@@ -686,6 +686,58 @@ let sentence = engine.render(&mut session, "code.renamed", event)?;
 
 Supported field types: `String`, `&str` (cloned into the context), integer types (`i8`…`i64`, `u8`…`u64`, `usize`, `isize`), `Vec<String>`, and `Option<T>` wrapping any of those (skipped when `None`). Unsupported field types produce a compile-time error — no silent drops — so template slots can't disappear from a struct without being noticed.
 
+### Compile-time template validation
+
+The `prosaic_template!` macro parses a template at compile time and rejects unknown pipes and slot references that aren't declared. With the optional `context:` argument, it also asserts that each slot's pipe-inferred type is compatible with the matching field on a `HasProsaicSchema` type:
+
+```rust
+use prosaic_derive::{prosaic_template, IntoContext};
+
+#[derive(IntoContext)]
+struct RenameEvent {
+    old_name: String,
+    new_name: String,
+    consumer_count: i64,
+}
+
+// Validates at compile time:
+//   - every `{slot}` reference is in the declared `slots` list
+//   - every pipe name is a known engine pipe
+//   - with `context:`, each slot's pipe-inferred type matches its field on
+//     RenameEvent (e.g. `{count|pluralize:item}` requires Number)
+let tpl: &'static str = prosaic_template! {
+    template: "{old_name|refer} was renamed to {new_name}, \
+               affecting {consumer_count} {consumer_count|pluralize:consumer}",
+    slots: [old_name, new_name, consumer_count],
+    context: RenameEvent,
+};
+```
+
+A typo in a slot name, an unknown pipe, or a slot used as a number when the struct declares it as a list all become **compile errors**, not runtime errors. Templates that fail to compile don't ship.
+
+For monomorphized rendering of bare-slot templates (no pipes, no conditionals), `prosaic_template_compiled!` emits a generated render function that skips template parsing at runtime entirely.
+
+### Runtime template validation
+
+When templates are loaded dynamically — from disk, JSON manifests, a database, a UI editor — `Engine::register_template_with_schema<T>` performs the same cross-check at registration time:
+
+```rust
+use prosaic_core::{Engine, Strictness};
+use prosaic_grammar_en::English;
+
+let mut engine = Engine::new(English::new()).strictness(Strictness::Strict);
+
+// Loaded from disk; not known at compile time.
+let source = std::fs::read_to_string("templates/code.renamed.tmpl")?;
+
+// Cross-checks template-inferred slot types against RenameEvent's schema.
+// Returns ProsaicError::TemplateParseError if a slot is missing from the
+// struct, or if its inferred type doesn't match the struct's field type.
+engine.register_template_with_schema::<RenameEvent>("code.renamed", &source)?;
+```
+
+This is the runtime mirror of the compile-time macro: same guarantees, same error vocabulary, but for templates that aren't known until process start. Useful for hot-reloadable template sets, vocab modules loaded from data, and Prosaic Studio.
+
 ## Vocabulary Modules
 
 Pre-built domain vocabularies register a family of templates in one call:
@@ -941,9 +993,47 @@ style = "executive"
 body = "Executive note: {name} materially changed"
 ```
 
+### StyleProfile (v0.6) — Declarative Voice Configuration
+
+A `StyleProfile` is a deterministic dial layer that biases the engine's existing rendering choices toward a target voice. Seven orthogonal dials — `verbosity`, `sentence_length`, `connectives`, `list_style_bias`, `pronoun_density`, `hedging`, and `salience` — compose with the existing builders without breaking determinism. `StyleProfile::neutral()` is byte-for-byte equivalent to no profile, so applying a profile is always opt-in and non-breaking.
+
+```rust
+use prosaic_core::{Engine, StyleProfile, Verbosity, ListStyleBias, PronounDensity};
+
+let profile = StyleProfile::builder("concise-professional")
+    .verbosity(Verbosity::Terse)
+    .list_style_bias(ListStyleBias::Bracketed)
+    .pronoun_density(PronounDensity::Low)
+    .hedging_offset(5)
+    .build()?;
+
+let engine = Engine::new(English::new()).style_profile(profile);
+```
+
+A small **catalog of reference profiles** (`neutral`, `concise-professional`, `verbose-narrative`, `regulatory-formal`) ships with `prosaic-project::catalog` for projects that want a curated starting point. Profiles can also be declared in `prosaic.toml` under `[style_profile]`, optionally extending a sibling profile via `extends = "path"`. See [`docs/superpowers/specs/2026-05-09-style-profile-design.md`](docs/superpowers/specs/2026-05-09-style-profile-design.md) for the full design.
+
+### Retrospective Refine Pass (v0.6) — Self-Refine for Deterministic NLG
+
+Some failure modes (every paragraph opening with the same connective, list-style fatigue, RST-relation imbalance, document-scope cadence drift) only surface after the whole document is rendered. The retrospective pass detects these post-hoc, derives constraints, re-renders, and iterates until the composite score converges. The loop is deterministic, document-scope, opt-in, and never weakens faithfulness.
+
+```rust
+use prosaic_core::{DocumentPlan, Engine, RefineConfig};
+
+let engine = Engine::new(English::new())
+    .refine(RefineConfig::balanced().with_max_iterations(3));
+
+let outcome = plan.render_refined(&engine, &mut session)?;
+println!("{}", outcome.text);
+println!("iterations: {}", outcome.iterations_run);
+```
+
+Six built-in diagnosers ship with the default config (`ParagraphOpenerMonotony`, `ListStyleFatigue`, `RstRelationImbalance`, `DocumentScopeRhythm`, `ConnectiveFamilySaturation`, `ProfileDistributionDrift`). Custom diagnosers register via `RefineConfig::with_diagnoser`. See [`docs/superpowers/specs/2026-05-09-self-refine-retro-pass-design.md`](docs/superpowers/specs/2026-05-09-self-refine-retro-pass-design.md) for the design rationale and the pluggable `Diagnoser` / `RefineConstraint` surface.
+
 ## Design Philosophy
 
-Deterministic, rule-based NLG — no LLM dependencies, no non-deterministic behavior by default. The goal is **natural-sounding output that is fully reproducible and testable**. Research informed by Reiter's NLG pipeline (content planning → microplanning → realisation), RosaeNLG's choosebest and referring expression systems, SimpleNLG's aggregation patterns, and Dale & Reiter's REG work.
+Deterministic, rule-based NLG — no LLM dependencies, no non-deterministic behavior by default. The goal is **natural-sounding output that is fully reproducible and testable**. Research informed by Reiter's NLG pipeline (content planning → microplanning → realisation), RosaeNLG's choosebest and referring expression systems, SimpleNLG's aggregation patterns, Dale & Reiter's REG work, and (for the v0.6 retro-pass) Madaan et al.'s Self-Refine pattern adapted onto deterministic diagnosers.
+
+For a category-by-category defense of the "no hallucination" claim, mapped onto Huang et al.'s LLM hallucination taxonomy, see [`docs/hallucination-by-construction.md`](docs/hallucination-by-construction.md).
 
 ## License
 
