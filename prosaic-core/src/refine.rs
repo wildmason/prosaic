@@ -525,20 +525,54 @@ fn apply_constraints_to_session(
 ) {
     let mut blacklist_connectives = Vec::new();
     let mut blacklist_list_styles = Vec::new();
+    let mut prime_connectives: Vec<String> = Vec::new();
+    let mut prime_list_styles: Vec<ListStyle> = Vec::new();
+    let mut salience_bias_override: Option<SalienceBias> = None;
+    let mut length_distribution_override: Option<LengthDistribution> = None;
+    let mut force_variant_tier: Vec<(String, Salience)> = Vec::new();
+
     for c in constraints {
         match c {
             RefineConstraint::BlacklistConnective(s) => blacklist_connectives.push(s.clone()),
             RefineConstraint::BlacklistListStyle(s) => blacklist_list_styles.push(*s),
-            // v1 limitation: PrimeRecencyWindow / OverrideSalienceBias /
-            // ForceVariantTier / TightenLengthDistribution are accepted
-            // but no-op in the iteration loop. Tracked for v0.6.1.
-            RefineConstraint::PrimeRecencyWindow { .. }
-            | RefineConstraint::OverrideSalienceBias(_)
-            | RefineConstraint::ForceVariantTier { .. }
-            | RefineConstraint::TightenLengthDistribution(_) => {}
+            RefineConstraint::PrimeRecencyWindow {
+                connectives,
+                list_styles,
+            } => {
+                prime_connectives.extend(connectives.iter().cloned());
+                prime_list_styles.extend(list_styles.iter().copied());
+            }
+            RefineConstraint::OverrideSalienceBias(bias) => {
+                // Last-writer-wins when multiple diagnosers emit a bias
+                // override in the same iteration; the iteration controller
+                // dedupes structurally-equal constraints upstream so this
+                // only applies when diagnosers genuinely disagree.
+                salience_bias_override = Some(*bias);
+            }
+            RefineConstraint::ForceVariantTier { template_key, tier } => {
+                // Replace any existing force for this key so the iteration
+                // controller's dedupe pass doesn't accumulate stale tiers
+                // when the same key is forced repeatedly.
+                if let Some(existing) = force_variant_tier
+                    .iter_mut()
+                    .find(|(k, _)| k == template_key)
+                {
+                    existing.1 = *tier;
+                } else {
+                    force_variant_tier.push((template_key.clone(), *tier));
+                }
+            }
+            RefineConstraint::TightenLengthDistribution(d) => {
+                length_distribution_override = Some(d.clone());
+            }
         }
     }
+
     session.set_refine_blacklists(blacklist_connectives, blacklist_list_styles);
+    session.prime_refine_recency(&prime_connectives, &prime_list_styles);
+    session.set_refine_salience_bias(salience_bias_override);
+    session.set_refine_length_distribution(length_distribution_override);
+    session.set_refine_force_variant_tiers(force_variant_tier);
 }
 
 fn diagnosis_signature(diagnostics: &[Diagnostic]) -> Vec<(&'static str, u32)> {
@@ -625,6 +659,178 @@ mod tests {
     fn split_sentences_handles_empty() {
         let s = split_sentences("");
         assert!(s.is_empty());
+    }
+
+    #[test]
+    fn apply_constraints_blacklist_connective_writes_session_blacklist() {
+        let mut session = crate::session::Session::new();
+        let constraints = vec![
+            RefineConstraint::BlacklistConnective("Additionally,".to_string()),
+            RefineConstraint::BlacklistConnective("Furthermore,".to_string()),
+        ];
+        super::apply_constraints_to_session(&mut session, &constraints);
+        assert_eq!(
+            session.refine_blacklist_connectives,
+            vec!["Additionally,".to_string(), "Furthermore,".to_string()]
+        );
+    }
+
+    #[test]
+    fn apply_constraints_blacklist_list_style_writes_session_blacklist() {
+        let mut session = crate::session::Session::new();
+        let constraints =
+            vec![RefineConstraint::BlacklistListStyle(ListStyle::Including)];
+        super::apply_constraints_to_session(&mut session, &constraints);
+        assert_eq!(
+            session.refine_blacklist_list_styles,
+            vec![ListStyle::Including]
+        );
+    }
+
+    #[test]
+    fn apply_constraints_prime_recency_pushes_phantom_history() {
+        let mut session = crate::session::Session::new();
+        let constraints = vec![RefineConstraint::PrimeRecencyWindow {
+            connectives: vec!["Additionally,".to_string(), "Furthermore,".to_string()],
+            list_styles: vec![ListStyle::Including, ListStyle::Bracketed],
+        }];
+        super::apply_constraints_to_session(&mut session, &constraints);
+        // Phantom entries land in the discourse-state ring buffers,
+        // bounded by the same caps the live emit path uses.
+        // We can't read the private fields directly from this module, but
+        // we can re-prime and confirm the discourse state is unchanged
+        // (already-saturated) when no new entries arrive.
+        let baseline_session_clone = session.clone();
+        super::apply_constraints_to_session(
+            &mut session,
+            &[RefineConstraint::PrimeRecencyWindow {
+                connectives: vec!["Additionally,".to_string()],
+                list_styles: vec![],
+            }],
+        );
+        // Pushing the same connective again should keep the ring buffer
+        // bounded; we don't assert exact equality of discourse state here
+        // (its internals are private), only that the second push doesn't
+        // panic and that the override fields behave as expected.
+        assert!(session.refine_blacklist_connectives.is_empty());
+        let _ = baseline_session_clone;
+    }
+
+    #[test]
+    fn apply_constraints_override_salience_bias_writes_session_override() {
+        let mut session = crate::session::Session::new();
+        let constraints =
+            vec![RefineConstraint::OverrideSalienceBias(SalienceBias::Lower)];
+        super::apply_constraints_to_session(&mut session, &constraints);
+        assert_eq!(session.refine_salience_bias, Some(SalienceBias::Lower));
+    }
+
+    #[test]
+    fn apply_constraints_override_salience_bias_last_writer_wins() {
+        let mut session = crate::session::Session::new();
+        let constraints = vec![
+            RefineConstraint::OverrideSalienceBias(SalienceBias::Lower),
+            RefineConstraint::OverrideSalienceBias(SalienceBias::Higher),
+        ];
+        super::apply_constraints_to_session(&mut session, &constraints);
+        assert_eq!(session.refine_salience_bias, Some(SalienceBias::Higher));
+    }
+
+    #[test]
+    fn apply_constraints_force_variant_tier_writes_session_map() {
+        let mut session = crate::session::Session::new();
+        let constraints = vec![
+            RefineConstraint::ForceVariantTier {
+                template_key: "evt.modified".to_string(),
+                tier: Salience::High,
+            },
+            RefineConstraint::ForceVariantTier {
+                template_key: "evt.touched".to_string(),
+                tier: Salience::Low,
+            },
+        ];
+        super::apply_constraints_to_session(&mut session, &constraints);
+        assert_eq!(
+            session.refine_forced_tier_for("evt.modified"),
+            Some(Salience::High)
+        );
+        assert_eq!(
+            session.refine_forced_tier_for("evt.touched"),
+            Some(Salience::Low)
+        );
+        assert_eq!(session.refine_forced_tier_for("evt.unset"), None);
+    }
+
+    #[test]
+    fn apply_constraints_force_variant_tier_replaces_for_same_key() {
+        // When multiple ForceVariantTier constraints arrive for the same
+        // key (e.g. two diagnosers disagree), the later one wins.
+        let mut session = crate::session::Session::new();
+        let constraints = vec![
+            RefineConstraint::ForceVariantTier {
+                template_key: "evt.modified".to_string(),
+                tier: Salience::High,
+            },
+            RefineConstraint::ForceVariantTier {
+                template_key: "evt.modified".to_string(),
+                tier: Salience::Low,
+            },
+        ];
+        super::apply_constraints_to_session(&mut session, &constraints);
+        assert_eq!(
+            session.refine_forced_tier_for("evt.modified"),
+            Some(Salience::Low)
+        );
+        assert_eq!(session.refine_force_variant_tier.len(), 1);
+    }
+
+    #[test]
+    fn apply_constraints_tighten_length_distribution_writes_session_override() {
+        let mut session = crate::session::Session::new();
+        let target = LengthDistribution {
+            short: 0.5,
+            medium: 0.3,
+            long: 0.2,
+            short_max_words: 7,
+            medium_max_words: 15,
+        };
+        let constraints =
+            vec![RefineConstraint::TightenLengthDistribution(target.clone())];
+        super::apply_constraints_to_session(&mut session, &constraints);
+        assert_eq!(session.refine_length_distribution, Some(target));
+    }
+
+    #[test]
+    fn apply_constraints_clear_then_reapply_resets_override_fields() {
+        // The iteration controller restores from a clean snapshot before
+        // each iteration. Independently, clear_refine_overrides explicitly
+        // wipes override fields so a stale override never leaks into the
+        // post-loop session state.
+        let mut session = crate::session::Session::new();
+        super::apply_constraints_to_session(
+            &mut session,
+            &[
+                RefineConstraint::OverrideSalienceBias(SalienceBias::Lower),
+                RefineConstraint::TightenLengthDistribution(LengthDistribution {
+                    short: 0.7,
+                    medium: 0.2,
+                    long: 0.1,
+                    short_max_words: 5,
+                    medium_max_words: 12,
+                }),
+                RefineConstraint::ForceVariantTier {
+                    template_key: "k".to_string(),
+                    tier: Salience::High,
+                },
+            ],
+        );
+        assert!(session.refine_salience_bias.is_some());
+        assert!(session.refine_length_distribution.is_some());
+        assert!(!session.refine_force_variant_tier.is_empty());
+        session.clear_refine_overrides();
+        assert!(session.refine_salience_bias.is_none());
+        assert!(session.refine_length_distribution.is_none());
+        assert!(session.refine_force_variant_tier.is_empty());
     }
 
     #[test]

@@ -1027,7 +1027,7 @@ println!("{}", outcome.text);
 println!("iterations: {}", outcome.iterations_run);
 ```
 
-Six built-in diagnosers ship with the default config (`ParagraphOpenerMonotony`, `ListStyleFatigue`, `RstRelationImbalance`, `DocumentScopeRhythm`, `ConnectiveFamilySaturation`, `ProfileDistributionDrift`). Custom diagnosers register via `RefineConfig::with_diagnoser`. See [`docs/superpowers/specs/2026-05-09-self-refine-retro-pass-design.md`](docs/superpowers/specs/2026-05-09-self-refine-retro-pass-design.md) for the design rationale and the pluggable `Diagnoser` / `RefineConstraint` surface.
+Six built-in diagnosers ship with the default config (`ParagraphOpenerMonotony`, `ListStyleFatigue`, `RstRelationImbalance`, `DocumentScopeRhythm`, `ConnectiveFamilySaturation`, `ProfileDistributionDrift`). Custom diagnosers register via `RefineConfig::with_diagnoser`. All six `RefineConstraint` variants (`BlacklistConnective`, `BlacklistListStyle`, `PrimeRecencyWindow`, `OverrideSalienceBias`, `ForceVariantTier`, `TightenLengthDistribution`) are honored by the iteration loop and applied to the next render via session-side overrides — including phantom recency-window pushes that engage the family-budget gate without mutating the engine. See [`docs/superpowers/specs/2026-05-09-self-refine-retro-pass-design.md`](docs/superpowers/specs/2026-05-09-self-refine-retro-pass-design.md) for the design rationale and the pluggable `Diagnoser` / `RefineConstraint` surface.
 
 ## Design Philosophy
 

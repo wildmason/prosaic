@@ -444,11 +444,13 @@ impl<'e, 's> RenderCtx<'e, 's> {
         };
 
         // Filter templates by salience level matching the context magnitude,
-        // honouring the engine's language preference.
-        let target_salience = apply_verbosity_bias(
-            self.engine.context_salience(context),
-            self.engine.style_profile.verbosity,
-        );
+        // honouring the engine's language preference. The retrospective
+        // refine pass can override the bias path two ways: a
+        // `ForceVariantTier` override short-circuits the calculation
+        // entirely for the matched template key, and an
+        // `OverrideSalienceBias` override is consulted in place of the
+        // active style profile's bias dial.
+        let target_salience = self.resolve_target_salience(key, context);
         let alternatives = filter_alternatives(
             all_alternatives,
             target_salience,
@@ -542,15 +544,33 @@ impl<'e, 's> RenderCtx<'e, 's> {
         Ok(output)
     }
 
+    /// Resolve the target salience tier for a render. Honors refine-pass
+    /// overrides — `ForceVariantTier` short-circuits the calculation for
+    /// the matched key, otherwise the salience bias is sourced from the
+    /// `OverrideSalienceBias` override when present, falling through to
+    /// the active style profile's bias. Delegates to the free function
+    /// so the explain path stays in lockstep.
+    fn resolve_target_salience(&self, key: &str, context: &Context) -> Salience {
+        resolve_target_salience_for(self.engine, self.session, key, context)
+    }
+
     fn candidate_discourse_score(&self, candidate: &str) -> f64 {
         let mut score = self.session.discourse.repetition_score(candidate);
         if self.engine.sentence_rhythm_enabled {
             score += self.session.discourse.sentence_rhythm_score(candidate);
         }
+        // Refine-pass `TightenLengthDistribution` overrides the active
+        // profile's distribution for this iteration; otherwise fall
+        // through to the profile's bias target.
+        let target_distribution = self
+            .session
+            .refine_length_distribution
+            .as_ref()
+            .unwrap_or(&self.engine.style_profile.sentence_length);
         score += profile_length_bias_score(
             candidate,
             &self.session.discourse,
-            &self.engine.style_profile.sentence_length,
+            target_distribution,
         );
         score
     }
@@ -1141,11 +1161,7 @@ impl<'e, 's> RenderCtx<'e, 's> {
                 // target, drop the bias for this render so the cycle's
                 // anti-repeat naturally lands on something else.
                 if let Some(target) = bias_target
-                    && self
-                        .session
-                        .refine_blacklist_list_styles
-                        .iter()
-                        .any(|s| *s == target)
+                    && self.session.refine_blacklist_list_styles.contains(&target)
                 {
                     bias_target = None;
                 }
@@ -1154,21 +1170,11 @@ impl<'e, 's> RenderCtx<'e, 's> {
                 // the recent window forced its hand), advance the cycle
                 // until we find a non-blacklisted slot. Worst case the
                 // cycle exhausts and we accept the original pick.
-                if self
-                    .session
-                    .refine_blacklist_list_styles
-                    .iter()
-                    .any(|s| *s == chosen)
-                {
+                if self.session.refine_blacklist_list_styles.contains(&chosen) {
                     let mut next = chosen;
                     for _ in 0..crate::discourse::list_styles_count() {
                         next = self.session.discourse.next_list_style_with_bias(None);
-                        if !self
-                            .session
-                            .refine_blacklist_list_styles
-                            .iter()
-                            .any(|s| *s == next)
-                        {
+                        if !self.session.refine_blacklist_list_styles.contains(&next) {
                             break;
                         }
                     }
@@ -1542,7 +1548,7 @@ impl<'e, 's> RenderCtx<'e, 's> {
         all: &[SalientTemplate],
         ctx: &Context,
     ) -> Result<Vec<VariantScore>, ProsaicError> {
-        let target_salience = self.engine.context_salience(ctx);
+        let target_salience = self.resolve_target_salience(key, ctx);
         let alternatives = filter_alternatives(
             all,
             target_salience,
@@ -2703,7 +2709,7 @@ impl Engine {
             .ok_or_else(|| ProsaicError::UnknownTemplate(key.to_string()))?;
 
         let context = context.into_context();
-        let target_salience = self.context_salience(&context);
+        let target_salience = resolve_target_salience_for(self, session, key, &context);
         let alternatives = filter_alternatives(
             all_alternatives,
             target_salience,
@@ -4151,6 +4157,28 @@ fn apply_salience_bias(
             SalienceThresholds { low_max, high_min }
         }
     }
+}
+
+/// Resolve the target salience tier honoring active refine-pass overrides
+/// (`ForceVariantTier`, `OverrideSalienceBias`). Free function so the
+/// render and explain paths reuse the exact same resolution logic.
+fn resolve_target_salience_for(
+    engine: &Engine,
+    session: &Session,
+    key: &str,
+    context: &Context,
+) -> Salience {
+    if let Some(forced) = session.refine_forced_tier_for(key) {
+        return forced;
+    }
+    let salience_bias = session
+        .refine_salience_bias
+        .unwrap_or(engine.style_profile.salience);
+    let thresholds = apply_salience_bias(engine.salience_thresholds, salience_bias);
+    apply_verbosity_bias(
+        Salience::from_context(context, thresholds),
+        engine.style_profile.verbosity,
+    )
 }
 
 /// Shift the target salience tier per the active `Verbosity` dial. The

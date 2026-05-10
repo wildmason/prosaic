@@ -363,6 +363,22 @@ fn family_for_relation(relation: &DiscourseRelation) -> Option<ConnectorFamily> 
     }
 }
 
+/// Map a connective string to its lexical family by membership in the
+/// per-relation pools. Returns `None` for strings outside the known set
+/// (e.g. discourse markers from `Default-Language`); those don't count
+/// toward the family-budget gate, matching the engine's accounting.
+fn family_for_connective(connective: &str) -> Option<ConnectorFamily> {
+    if SAME_ENTITY_CONNECTIVES.contains(&connective) {
+        Some(ConnectorFamily::Continuation)
+    } else if SAME_ACTION_CONNECTIVES.contains(&connective) {
+        Some(ConnectorFamily::Similarity)
+    } else if CONTRAST_CONNECTIVES.contains(&connective) {
+        Some(ConnectorFamily::Contrast)
+    } else {
+        None
+    }
+}
+
 impl DiscourseState {
     pub fn new() -> Self {
         let mut interner = WordInterner::default();
@@ -759,7 +775,7 @@ impl DiscourseState {
             base_pool
                 .iter()
                 .copied()
-                .filter(|c| allow.iter().any(|s| *s == *c))
+                .filter(|c| allow.contains(c))
                 .collect()
         });
         let after_allowed: &[&'static str] = match &filtered {
@@ -775,7 +791,7 @@ impl DiscourseState {
             after_allowed
                 .iter()
                 .copied()
-                .filter(|c| !forbid.iter().any(|f| *f == *c))
+                .filter(|c| !forbid.contains(c))
                 .collect()
         });
         let pool_owned: Vec<&'static str>;
@@ -1082,18 +1098,17 @@ impl DiscourseState {
     /// recent window, the natural cycle picks as in `next_list_style`.
     /// The bias is a preference, not an override — anti-repeat always wins.
     pub fn next_list_style_with_bias(&mut self, bias: Option<ListStyle>) -> ListStyle {
-        if let Some(target) = bias {
-            if !self.recent_list_styles.contains(&target)
-                && let Some(target_idx) = LIST_STYLES.iter().position(|s| *s == target)
-            {
-                // Advance the cycle to the slot just past the bias target so
-                // the natural rotation continues coherently afterward, then
-                // emit the target.
-                self.last_list_style = target_idx.wrapping_add(1);
-                self.push_recent_list_style(target);
-                self.last_list_style_used = Some(target);
-                return target;
-            }
+        if let Some(target) = bias
+            && !self.recent_list_styles.contains(&target)
+            && let Some(target_idx) = LIST_STYLES.iter().position(|s| *s == target)
+        {
+            // Advance the cycle to the slot just past the bias target so
+            // the natural rotation continues coherently afterward, then
+            // emit the target.
+            self.last_list_style = target_idx.wrapping_add(1);
+            self.push_recent_list_style(target);
+            self.last_list_style_used = Some(target);
+            return target;
         }
 
         let len = LIST_STYLES.len();
@@ -1141,6 +1156,39 @@ impl DiscourseState {
     /// List style applied by the most recent render's `|join` pipe (if any).
     pub fn last_list_style_used(&self) -> Option<ListStyle> {
         self.last_list_style_used
+    }
+
+    /// Push phantom entries onto `connective_history` AND
+    /// `connective_family_history` so the next connective selection treats
+    /// these as recently used by both the exact-cooldown rule and the
+    /// family-budget gate. Each connective is mapped to its lexical family
+    /// (Continuation / Similarity / Contrast) by membership in the
+    /// per-relation pools; unknown strings push a `None` family slot so
+    /// the budget gate is unaffected. Pushes are bounded by the same
+    /// window caps the live emit path uses; phantom entries decay
+    /// naturally as new emissions arrive. Used by the retrospective
+    /// refine pass to apply `PrimeRecencyWindow` constraints.
+    pub(crate) fn prime_connective_history(&mut self, connectives: &[String]) {
+        for c in connectives {
+            self.connective_history.push_back(c.clone());
+            if self.connective_history.len() > CONNECTIVE_WINDOW {
+                self.connective_history.pop_front();
+            }
+            let family = family_for_connective(c.as_str());
+            self.record_family_slot(family);
+        }
+    }
+
+    /// Push phantom entries onto `recent_list_styles` so the next
+    /// auto-cycle pick treats these styles as recently used. Mirrors the
+    /// dedup-and-cap semantics of [`Self::push_recent_list_style`]: an
+    /// already-recent style is moved to the trailing slot rather than
+    /// duplicated. Used by the retrospective refine pass to apply
+    /// `PrimeRecencyWindow` constraints.
+    pub(crate) fn prime_list_style_history(&mut self, list_styles: &[ListStyle]) {
+        for &style in list_styles {
+            self.push_recent_list_style(style);
+        }
     }
 
     /// Record whether Silent-mode cleanup stripped any trailing orphan words

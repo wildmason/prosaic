@@ -6,8 +6,9 @@
 //! so regressions in any layer surface here.
 
 use prosaic_core::{
-    Context, DocumentPlan, Engine, ParagraphOpenerMonotony, RefineConfig, Salience, Session,
-    Strictness, Value, Variation,
+    Context, Diagnoser, Diagnostic, DocumentPlan, Engine, LengthDistribution,
+    ParagraphOpenerMonotony, RefineConfig, RefineConstraint, RenderedDocument, Salience,
+    SalienceBias, Session, StyleProfile, Strictness, Value, Variation,
 };
 use prosaic_grammar_en::English;
 use std::sync::Arc;
@@ -181,4 +182,286 @@ fn refine_outcome_score_is_non_negative_and_finite() {
     let outcome = plan.render_refined(&engine, &mut Session::new()).unwrap();
     assert!(outcome.final_score.is_finite());
     assert!(outcome.final_score >= 0.0);
+}
+
+// ── Custom-diagnoser scaffolding for v0.6.1 constraint tests ──────────
+
+/// Single-shot diagnoser: emits the supplied constraints exactly once,
+/// with high enough severity that the iteration controller applies them.
+/// After the first call, the diagnoser returns nothing so the loop can
+/// converge cleanly. This is the test scaffolding that lets each
+/// constraint variant drive a real iteration without requiring a
+/// real-world failure condition the built-in diagnosers would catch.
+struct OneShotDiagnoser {
+    name: &'static str,
+    constraints: std::sync::Mutex<Option<Vec<RefineConstraint>>>,
+}
+
+impl OneShotDiagnoser {
+    fn new(name: &'static str, constraints: Vec<RefineConstraint>) -> Self {
+        Self {
+            name,
+            constraints: std::sync::Mutex::new(Some(constraints)),
+        }
+    }
+}
+
+impl Diagnoser for OneShotDiagnoser {
+    fn name(&self) -> &'static str {
+        self.name
+    }
+
+    fn diagnose(
+        &self,
+        _document: &RenderedDocument,
+        _profile: Option<&StyleProfile>,
+    ) -> Vec<Diagnostic> {
+        let Some(c) = self.constraints.lock().unwrap().take() else {
+            return Vec::new();
+        };
+        vec![Diagnostic {
+            diagnoser: self.name,
+            severity: 1.0,
+            constraints: c,
+        }]
+    }
+}
+
+fn refine_with_only(diagnoser: Arc<dyn Diagnoser>) -> RefineConfig {
+    // `with_min_improvement(-100.0)` forces the iteration controller to
+    // accept any candidate regardless of score change, so the constraint
+    // application path is exercised even when the rendered output's
+    // composite score doesn't strictly improve. The tests assert the
+    // candidate's output content directly, which is what's under test.
+    let mut c = RefineConfig::balanced()
+        .with_max_iterations(2)
+        .with_min_improvement(-100.0);
+    c.diagnosers.clear();
+    c.diagnosers.push(diagnoser);
+    c
+}
+
+// ── PrimeRecencyWindow ────────────────────────────────────────────────
+
+#[test]
+fn prime_recency_window_suppresses_primed_connective_on_next_iteration() {
+    let mut e = Engine::new(English::new())
+        .strictness(Strictness::Strict)
+        .variation(Variation::Fixed)
+        .refine(refine_with_only(Arc::new(OneShotDiagnoser::new(
+            "prime_test",
+            vec![RefineConstraint::PrimeRecencyWindow {
+                connectives: vec![
+                    "Additionally,".to_string(),
+                    "Furthermore,".to_string(),
+                    "It also".to_string(),
+                ],
+                list_styles: vec![],
+            }],
+        ))));
+    e.register_template("evt.modified", "{name|refer} was modified")
+        .unwrap();
+    e.register_template("evt.touched", "{name|refer} was touched")
+        .unwrap();
+
+    let events: Vec<(&str, Context)> = vec![
+        ("evt.modified", ctx_named("Alpha")),
+        ("evt.touched", ctx_named("Alpha")),
+        ("evt.modified", ctx_named("Bravo")),
+        ("evt.touched", ctx_named("Bravo")),
+    ];
+    let plan = DocumentPlan::from_events(&events, &e);
+    let outcome = plan.render_refined(&e, &mut Session::new()).unwrap();
+
+    // The continuation pool ("Additionally,", "Furthermore,", "It also")
+    // is fully primed, so the family-budget gate inside
+    // `select_connective_filtered` immediately suppresses any
+    // continuation connective on the next iteration's renders.
+    assert!(
+        !outcome.text.contains("Additionally,")
+            && !outcome.text.contains("Furthermore,")
+            && !outcome.text.contains("It also"),
+        "primed continuation pool must not emit on the next iteration. \
+         text:\n{}",
+        outcome.text
+    );
+    assert!(outcome.iterations_run >= 1);
+}
+
+// ── OverrideSalienceBias ──────────────────────────────────────────────
+
+#[test]
+fn override_salience_bias_changes_tier_selection_in_next_iteration() {
+    let mut e = Engine::new(English::new())
+        .strictness(Strictness::Strict)
+        .variation(Variation::Fixed)
+        .refine(refine_with_only(Arc::new(OneShotDiagnoser::new(
+            "salience_test",
+            // SalienceBias::Lower shrinks the bands so the same
+            // consumer_count lands in a *higher* tier — Medium → High in
+            // typical mid-range cases.
+            vec![RefineConstraint::OverrideSalienceBias(SalienceBias::Lower)],
+        ))));
+    e.register_template_at(
+        "evt.modified",
+        "{name|refer} was lightly tweaked",
+        Salience::Low,
+    )
+    .unwrap();
+    e.register_template_at(
+        "evt.modified",
+        "{name|refer} was modified",
+        Salience::Medium,
+    )
+    .unwrap();
+    e.register_template_at(
+        "evt.modified",
+        "{name|refer} was extensively overhauled across consumers",
+        Salience::High,
+    )
+    .unwrap();
+
+    let mut ctx = ctx_named("UserService");
+    // consumer_count=18 lands in Medium under default thresholds
+    // (low_max=2, high_min=20). With SalienceBias::Lower the bands
+    // shrink (low_max=1, high_min=15) so the same value lands in High.
+    ctx.insert("consumer_count", Value::Number(18));
+
+    let events = vec![("evt.modified", ctx)];
+    let plan = DocumentPlan::from_events(&events, &e);
+    let outcome = plan.render_refined(&e, &mut Session::new()).unwrap();
+    assert!(
+        outcome.text.contains("extensively overhauled"),
+        "SalienceBias::Lower should promote the variant tier from Medium \
+         to High, picking the 'extensively overhauled' template. text:\n{}",
+        outcome.text
+    );
+}
+
+// ── ForceVariantTier ──────────────────────────────────────────────────
+
+#[test]
+fn force_variant_tier_short_circuits_to_specified_tier() {
+    let mut e = Engine::new(English::new())
+        .strictness(Strictness::Strict)
+        .variation(Variation::Fixed)
+        .refine(refine_with_only(Arc::new(OneShotDiagnoser::new(
+            "force_tier_test",
+            vec![RefineConstraint::ForceVariantTier {
+                template_key: "evt.modified".to_string(),
+                tier: Salience::High,
+            }],
+        ))));
+    e.register_template_at(
+        "evt.modified",
+        "{name|refer} was lightly tweaked",
+        Salience::Low,
+    )
+    .unwrap();
+    e.register_template_at(
+        "evt.modified",
+        "{name|refer} was modified",
+        Salience::Medium,
+    )
+    .unwrap();
+    e.register_template_at(
+        "evt.modified",
+        "{name|refer} was extensively overhauled across consumers",
+        Salience::High,
+    )
+    .unwrap();
+
+    // Salience::Low context (no consumer_count, default 0). Under normal
+    // resolution the engine picks the Low variant. ForceVariantTier
+    // short-circuits the tier resolution to High regardless.
+    let events = vec![("evt.modified", ctx_named("UserService"))];
+    let plan = DocumentPlan::from_events(&events, &e);
+    let outcome = plan.render_refined(&e, &mut Session::new()).unwrap();
+    assert!(
+        outcome.text.contains("extensively overhauled"),
+        "ForceVariantTier{{tier=High}} must select the High variant \
+         independent of context salience. text:\n{}",
+        outcome.text
+    );
+}
+
+// ── TightenLengthDistribution ─────────────────────────────────────────
+
+#[test]
+fn tighten_length_distribution_changes_candidate_scoring() {
+    // Register two Medium variants so the choose-best path runs and the
+    // candidate-discourse score actually informs the pick.
+    let target = LengthDistribution {
+        // Strongly biased toward long sentences — should make the longer
+        // variant score better than the shorter.
+        short: 0.0,
+        medium: 0.0,
+        long: 1.0,
+        short_max_words: 6,
+        medium_max_words: 12,
+    };
+
+    struct LengthDiagnoser {
+        target: LengthDistribution,
+        consumed: std::sync::Mutex<bool>,
+    }
+    impl Diagnoser for LengthDiagnoser {
+        fn name(&self) -> &'static str {
+            "length_test"
+        }
+        fn diagnose(
+            &self,
+            _document: &RenderedDocument,
+            _profile: Option<&StyleProfile>,
+        ) -> Vec<Diagnostic> {
+            let mut c = self.consumed.lock().unwrap();
+            if *c {
+                return Vec::new();
+            }
+            *c = true;
+            vec![Diagnostic {
+                diagnoser: "length_test",
+                severity: 1.0,
+                constraints: vec![RefineConstraint::TightenLengthDistribution(
+                    self.target.clone(),
+                )],
+            }]
+        }
+    }
+
+    let mut e = Engine::new(English::new())
+        .strictness(Strictness::Strict)
+        .variation(Variation::Seeded(7))
+        .refine(refine_with_only(Arc::new(LengthDiagnoser {
+            target,
+            consumed: std::sync::Mutex::new(false),
+        })));
+    e.register_template_at(
+        "evt.modified",
+        "{name|refer} was tweaked",
+        Salience::Medium,
+    )
+    .unwrap();
+    e.register_template_at(
+        "evt.modified",
+        "{name|refer} was extensively overhauled across many consumers and dependencies",
+        Salience::Medium,
+    )
+    .unwrap();
+
+    // Two events to trigger choose-best (first render is unconditional).
+    let events = vec![
+        ("evt.modified", ctx_named("Alpha")),
+        ("evt.modified", ctx_named("Bravo")),
+    ];
+    let plan = DocumentPlan::from_events(&events, &e);
+    let outcome = plan.render_refined(&e, &mut Session::new()).unwrap();
+    // Under the long-leaning override, the second event's choose-best
+    // pass should prefer the longer variant.
+    assert!(
+        outcome.text.contains("extensively overhauled"),
+        "TightenLengthDistribution(long-leaning) should bias choose-best \
+         toward the longer variant. text:\n{}",
+        outcome.text
+    );
 }

@@ -19,6 +19,8 @@ use alloc::vec::Vec;
 use crate::collections::{HashMap, map_with_capacity, new_map};
 
 use crate::discourse::DiscourseState;
+use crate::salience::Salience;
+use crate::style::{LengthDistribution, SalienceBias};
 
 /// Mutable state for a render sequence. See module docs.
 #[derive(Debug)]
@@ -43,6 +45,22 @@ pub struct Session {
     /// the retrospective refine pass to apply `BlacklistListStyle`
     /// constraints without mutating the engine. Empty in normal use.
     pub(crate) refine_blacklist_list_styles: Vec<crate::discourse::ListStyle>,
+    /// Refine-pass override for the active `SalienceBias`. When `Some`,
+    /// the engine ignores the active style profile's salience bias and
+    /// applies this one instead for the duration of the iteration.
+    /// Carries `OverrideSalienceBias` constraints. `None` in normal use.
+    pub(crate) refine_salience_bias: Option<SalienceBias>,
+    /// Refine-pass override for the active sentence-length distribution.
+    /// When `Some`, the candidate-scoring path uses this distribution as
+    /// the bias target instead of the active style profile's. Carries
+    /// `TightenLengthDistribution` constraints. `None` in normal use.
+    pub(crate) refine_length_distribution: Option<LengthDistribution>,
+    /// Refine-pass override forcing a specific variant tier per template
+    /// key. When a render's template key is present, the engine
+    /// short-circuits the salience+verbosity calculation and uses the
+    /// listed tier directly. Carries `ForceVariantTier` constraints.
+    /// Empty in normal use.
+    pub(crate) refine_force_variant_tier: Vec<(String, Salience)>,
 }
 
 impl Session {
@@ -53,6 +71,9 @@ impl Session {
             last_temporal_anchor: None,
             refine_blacklist_connectives: Vec::new(),
             refine_blacklist_list_styles: Vec::new(),
+            refine_salience_bias: None,
+            refine_length_distribution: None,
+            refine_force_variant_tier: Vec::new(),
         }
     }
 
@@ -68,10 +89,65 @@ impl Session {
         self.refine_blacklist_list_styles = list_styles;
     }
 
-    /// Clear any active refine-pass overrides.
+    /// Push phantom history entries onto the discourse ring buffers so the
+    /// next render's anti-repeat treats these connectives / list styles as
+    /// recently used. Called by the retrospective refine pass to apply
+    /// `PrimeRecencyWindow` constraints. Pushes are bounded by the same
+    /// window caps the live emit path uses.
+    pub(crate) fn prime_refine_recency(
+        &mut self,
+        connectives: &[String],
+        list_styles: &[crate::discourse::ListStyle],
+    ) {
+        self.discourse
+            .prime_connective_history(connectives);
+        self.discourse
+            .prime_list_style_history(list_styles);
+    }
+
+    /// Set the refine-pass salience-bias override. `None` clears it.
+    pub(crate) fn set_refine_salience_bias(&mut self, bias: Option<SalienceBias>) {
+        self.refine_salience_bias = bias;
+    }
+
+    /// Set the refine-pass sentence-length-distribution override.
+    /// `None` clears it.
+    pub(crate) fn set_refine_length_distribution(
+        &mut self,
+        distribution: Option<LengthDistribution>,
+    ) {
+        self.refine_length_distribution = distribution;
+    }
+
+    /// Set the refine-pass forced-variant-tier mapping. Replaces any
+    /// existing mapping wholesale.
+    pub(crate) fn set_refine_force_variant_tiers(
+        &mut self,
+        tiers: Vec<(String, Salience)>,
+    ) {
+        self.refine_force_variant_tier = tiers;
+    }
+
+    /// Look up a forced variant tier for the given template key, if any.
+    pub(crate) fn refine_forced_tier_for(&self, key: &str) -> Option<Salience> {
+        self.refine_force_variant_tier
+            .iter()
+            .find(|(k, _)| k == key)
+            .map(|(_, t)| *t)
+    }
+
+    /// Clear any active refine-pass overrides. Note: phantom entries
+    /// pushed onto discourse ring buffers via `prime_refine_recency` are
+    /// not undone — they're indistinguishable from real history once
+    /// pushed and decay naturally as new entries arrive. The iteration
+    /// controller restores from a clean snapshot before each iteration,
+    /// so primes never accumulate across iterations.
     pub(crate) fn clear_refine_overrides(&mut self) {
         self.refine_blacklist_connectives.clear();
         self.refine_blacklist_list_styles.clear();
+        self.refine_salience_bias = None;
+        self.refine_length_distribution = None;
+        self.refine_force_variant_tier.clear();
     }
 
     /// Clear all session state. Equivalent to replacing with `Session::new()`
@@ -166,6 +242,9 @@ impl Clone for Session {
             last_temporal_anchor: self.last_temporal_anchor,
             refine_blacklist_connectives: self.refine_blacklist_connectives.clone(),
             refine_blacklist_list_styles: self.refine_blacklist_list_styles.clone(),
+            refine_salience_bias: self.refine_salience_bias,
+            refine_length_distribution: self.refine_length_distribution.clone(),
+            refine_force_variant_tier: self.refine_force_variant_tier.clone(),
         }
     }
 }
