@@ -93,19 +93,100 @@ prosaic-wasm
 prosaic
 ```
 
-Before publishing, run:
+The automation scripts use this order. Keep it in sync with
+`scripts/ProsaicRelease.ps1` when adding or removing public crates.
+
+## Release Automation
+
+Run the release gate before publishing:
+
+```powershell
+.\scripts\release-check.ps1
+```
+
+That runs:
 
 ```sh
 cargo fmt --all -- --check
 cargo test --workspace --locked
 cargo clippy --workspace --all-targets --locked -- -D warnings
-cargo publish -p prosaic-common --dry-run --locked
 ```
 
-Repeat the dry-run for each crate in the publish order, then publish with:
+For already-published versions, or for selected crates whose internal
+dependencies are already live on crates.io, add `-PublishDryRun`:
+
+```powershell
+.\scripts\release-check.ps1 -PublishDryRun
+```
+
+That runs `cargo publish --dry-run --locked` in publish order. Use
+`-Crates prosaic-common,prosaic-core` to limit the dry-run to a subset while
+iterating.
+
+For a future unpublished lockstep version, dependent crates may not be
+registry-resolvable until their internal dependencies have been uploaded. The
+publish script handles that by dry-running each crate immediately before its
+live upload, after the prior crates in the dependency order have become visible
+in the crates.io API.
+
+Publish the workspace with:
+
+```powershell
+.\scripts\publish-workspace.ps1 -Yes
+```
+
+By default the script reads the version from root `[workspace.package]`, requires
+a clean git worktree, skips crate versions that are already live on crates.io,
+dry-runs each crate immediately before upload, and publishes the remaining
+crates in dependency order:
 
 ```sh
+cargo publish -p <crate> --locked --dry-run
 cargo publish -p <crate> --locked
 ```
 
-After the last crate is live, tag the exact commit and create a GitHub release.
+If crates.io rate-limits the release, the script parses Cargo's retry timestamp,
+sleeps until the requested time with a small safety pad, then resumes on the same
+crate. It also waits for each just-published crate to appear in the crates.io API
+before attempting dependents.
+
+Use `-SkipPerCrateDryRun` only when the exact dry-run has already been performed
+for the same clean release commit.
+
+For a no-upload rehearsal:
+
+```powershell
+.\scripts\publish-workspace.ps1 -DryRun -SkipGitChecks
+```
+
+After publishing, tag the exact commit and create a GitHub release:
+
+```sh
+git tag v0.6.2
+git push origin v0.6.2
+```
+
+Then verify the release:
+
+```powershell
+.\scripts\verify-release.ps1 -Version 0.6.2
+```
+
+The verification script checks every exact crate version through the crates.io
+API, checks docs.rs, runs `cargo search` and `cargo info`, installs the published
+`prosaic` CLI into `target/prosaic-install-smoke`, and runs a real JSON-lines
+render through the installed binary.
+
+## CI
+
+GitHub Actions runs the normal Rust gate on every push to `main`, every pull
+request, and manual dispatch:
+
+```sh
+cargo fmt --all -- --check
+cargo test --workspace --locked
+cargo clippy --workspace --all-targets --locked -- -D warnings
+```
+
+Tests run on Ubuntu, Windows, and macOS. Formatting and clippy run on Ubuntu to
+avoid redundant lint work across operating systems.

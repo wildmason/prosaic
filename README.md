@@ -38,7 +38,7 @@ internal dependencies carry both a local `path` and the matching crates.io
 is named `prosaic` on crates.io and installs the `prosaic` binary; the source
 directory remains `prosaic-cli`. See
 [`docs/cookbook/src/versioning-and-packaging.md`](docs/cookbook/src/versioning-and-packaging.md)
-for the full versioning and packaging scheme.
+for the full versioning, packaging, release automation, and verification scheme.
 
 ### Rust API
 
