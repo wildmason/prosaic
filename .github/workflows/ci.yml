@@ -31,6 +31,8 @@ jobs:
 
       - name: Cache Rust build
         uses: Swatinem/rust-cache@v2
+        with:
+          cache-targets: false
 
       - name: Check formatting
         if: matrix.os == 'ubuntu-latest'

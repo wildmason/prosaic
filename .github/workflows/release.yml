@@ -44,6 +44,8 @@ jobs:
 
       - name: Cache Rust build
         uses: Swatinem/rust-cache@v2
+        with:
+          cache-targets: false
 
       - name: Package binary
         shell: pwsh
@@ -53,7 +55,7 @@ jobs:
           ./scripts/package-binary.ps1 -Version $version -TargetTriple "${{ matrix.target }}"
 
       - name: Upload packaged binary
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: prosaic-${{ matrix.target }}
           path: target/dist/prosaic-*
@@ -66,7 +68,7 @@ jobs:
 
     steps:
       - name: Download packaged binaries
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: target/dist
           merge-multiple: true
