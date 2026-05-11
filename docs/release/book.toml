@@ -1,0 +1,10 @@
+[book]
+title = "Prosaic Release Book"
+description = "Operator runbook for shipping Prosaic crates and binaries"
+authors = ["Matthew MacKinnon"]
+language = "en"
+src = "src"
+
+[output.html]
+default-theme = "rust"
+git-repository-url = "https://github.com/wildmason/prosaic"

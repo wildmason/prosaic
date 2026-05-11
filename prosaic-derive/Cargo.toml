@@ -13,4 +13,4 @@ proc-macro = true
 syn = { version = "2", features = ["full"] }
 quote = "1"
 proc-macro2 = "1"
-prosaic-core = { version = "0.6.1", path = "../prosaic-core", default-features = false }
+prosaic-core = { version = "0.6.2", path = "../prosaic-core", default-features = false }

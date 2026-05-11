@@ -7,8 +7,8 @@ repository.workspace = true
 description = "Bridge tracing events to natural language prose via the prosaic engine"
 
 [dependencies]
-prosaic-core = { version = "0.6.1", path = "../prosaic-core" }
-prosaic-grammar-en = { version = "0.6.1", path = "../prosaic-grammar-en" }
+prosaic-core = { version = "0.6.2", path = "../prosaic-core" }
+prosaic-grammar-en = { version = "0.6.2", path = "../prosaic-grammar-en" }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["registry"] }
 

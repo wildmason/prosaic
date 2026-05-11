@@ -8,7 +8,7 @@ a local `path` and the matching crates.io `version`.
 That shape is intentional:
 
 ```toml
-prosaic-core = { version = "0.6.1", path = "../prosaic-core" }
+prosaic-core = { version = "0.6.2", path = "../prosaic-core" }
 ```
 
 Local development uses the path. Published crates use the version, so the same
@@ -69,7 +69,7 @@ The current public set is:
 - One workspace version is the source of truth.
 - Patch releases are for fixes, docs, and non-breaking additions.
 - While the line is `0.x`, minor releases may include breaking API changes.
-- A release tag uses `vMAJOR.MINOR.PATCH`, for example `v0.6.1`.
+- A release tag uses `vMAJOR.MINOR.PATCH`, for example `v0.6.2`.
 - Crates.io versions are immutable; a bad publish requires a new patch version.
 
 ## Publish Order
@@ -97,6 +97,10 @@ The automation scripts use this order. Keep it in sync with
 `scripts/ProsaicRelease.ps1` when adding or removing public crates.
 
 ## Release Automation
+
+The operator runbook lives in `docs/release`. Use this cookbook page for the
+packaging model; use the release book for the exact ship sequence, recovery
+steps, and binary asset verification.
 
 Run the release gate before publishing:
 
@@ -159,23 +163,72 @@ For a no-upload rehearsal:
 .\scripts\publish-workspace.ps1 -DryRun -SkipGitChecks
 ```
 
-After publishing, tag the exact commit and create a GitHub release:
+Before publishing, tag the exact clean release commit:
 
 ```sh
 git tag v0.6.2
+```
+
+Then publish from that tagged commit:
+
+```powershell
+.\scripts\publish-workspace.ps1 -Yes -RequireHeadTag
+```
+
+Push the release commit and tag after the crates.io publish succeeds:
+
+```sh
+git push origin main
 git push origin v0.6.2
 ```
+
+Pushing the tag starts the binary release workflow. It builds Windows and Linux
+CLI archives, writes SHA-256 sidecars, verifies those sidecars, and creates or
+updates the GitHub release for the tag. macOS archives are intentionally paused
+until Wildmason has a self-hosted macOS runner; do not use GitHub-hosted macOS
+runners for routine Prosaic releases.
 
 Then verify the release:
 
 ```powershell
 .\scripts\verify-release.ps1 -Version 0.6.2
+.\scripts\verify-binary-release.ps1 -Version 0.6.2
 ```
 
-The verification script checks every exact crate version through the crates.io
-API, checks docs.rs, runs `cargo search` and `cargo info`, installs the published
-`prosaic` CLI into `target/prosaic-install-smoke`, and runs a real JSON-lines
-render through the installed binary.
+The crates verification script checks every exact crate version through the
+crates.io API, checks docs.rs, runs `cargo search` and `cargo info`, installs
+the published `prosaic` CLI into `target/prosaic-install-smoke`, and runs a real
+JSON-lines render through the installed binary. The binary verification script
+downloads GitHub release assets, verifies all configured SHA-256 sidecars, and
+smoke-runs the archive matching the local host.
+
+## Binary Release Assets
+
+The `prosaic` command is also packaged as GitHub Release assets:
+
+```text
+prosaic-v0.6.2-x86_64-unknown-linux-gnu.tar.gz
+prosaic-v0.6.2-x86_64-unknown-linux-gnu.tar.gz.sha256
+prosaic-v0.6.2-x86_64-pc-windows-msvc.zip
+prosaic-v0.6.2-x86_64-pc-windows-msvc.zip.sha256
+```
+
+Package a local target with:
+
+```powershell
+.\scripts\package-binary.ps1
+```
+
+or an explicit target with:
+
+```powershell
+.\scripts\package-binary.ps1 -Version 0.6.2 -TargetTriple x86_64-pc-windows-msvc
+```
+
+The package script builds `cargo build --release --locked -p prosaic --target
+<triple>`, stages the binary with README and license files, smoke-tests the
+staged binary, writes the archive under `target/dist/`, and writes a
+`sha256sum -c` compatible sidecar.
 
 ## CI
 
@@ -188,6 +241,7 @@ cargo test --workspace --locked
 cargo clippy --workspace --all-targets --locked -- -D warnings
 ```
 
-Tests run on Ubuntu, Windows, and macOS. Formatting and clippy run on Ubuntu to
-avoid redundant lint work across operating systems. The workspace tracks
-`Cargo.lock` so `--locked` gates are reproducible on fresh CI runners.
+Tests run on Ubuntu and Windows. macOS is intentionally paused until Wildmason
+has a self-hosted macOS runner. Formatting and clippy run on Ubuntu to avoid
+redundant lint work across operating systems. The workspace tracks `Cargo.lock`
+so `--locked` gates are reproducible on fresh CI runners.

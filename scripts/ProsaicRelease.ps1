@@ -48,6 +48,108 @@ function Get-ProsaicWorkspaceVersion {
     throw "Could not find [workspace.package] version in $cargoTomlPath"
 }
 
+function Test-ProsaicWindowsPlatform {
+    return [System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT
+}
+
+function Get-ProsaicHostTriple {
+    $result = Invoke-ProsaicCapturedCommand -FilePath "rustc" -ArgumentList @("-vV")
+    if ($result.ExitCode -ne 0) {
+        throw "rustc -vV failed: $($result.Output)"
+    }
+
+    foreach ($line in ($result.Output -split "`r?`n")) {
+        if ($line -match '^host:\s*(.+)$') {
+            return $matches[1].Trim()
+        }
+    }
+
+    throw "Could not determine Rust host triple from rustc -vV output."
+}
+
+function Get-ProsaicBinaryFileName {
+    param(
+        [Parameter(Mandatory = $true)] [string] $TargetTriple
+    )
+
+    if ($TargetTriple -match 'windows') {
+        return "prosaic.exe"
+    }
+
+    return "prosaic"
+}
+
+function Get-ProsaicBinaryArchiveExtension {
+    param(
+        [Parameter(Mandatory = $true)] [string] $TargetTriple
+    )
+
+    if ($TargetTriple -match 'windows') {
+        return "zip"
+    }
+
+    return "tar.gz"
+}
+
+function Get-ProsaicReleasePackageName {
+    param(
+        [Parameter(Mandatory = $true)] [string] $Version,
+        [Parameter(Mandatory = $true)] [string] $TargetTriple
+    )
+
+    return "prosaic-v$Version-$TargetTriple"
+}
+
+function Get-ProsaicReleaseArchiveName {
+    param(
+        [Parameter(Mandatory = $true)] [string] $Version,
+        [Parameter(Mandatory = $true)] [string] $TargetTriple
+    )
+
+    $packageName = Get-ProsaicReleasePackageName -Version $Version -TargetTriple $TargetTriple
+    $extension = Get-ProsaicBinaryArchiveExtension -TargetTriple $TargetTriple
+    return "$packageName.$extension"
+}
+
+function ConvertTo-ProsaicAbsolutePath {
+    param(
+        [Parameter(Mandatory = $true)] [string] $Path,
+        [string] $BasePath = (Get-ProsaicRepoRoot)
+    )
+
+    if ([System.IO.Path]::IsPathRooted($Path)) {
+        return [System.IO.Path]::GetFullPath($Path)
+    }
+
+    return [System.IO.Path]::GetFullPath((Join-Path $BasePath $Path))
+}
+
+function Assert-ProsaicPathInside {
+    param(
+        [Parameter(Mandatory = $true)] [string] $Path,
+        [Parameter(Mandatory = $true)] [string] $ParentPath
+    )
+
+    $fullPath = [System.IO.Path]::GetFullPath($Path)
+    $fullParent = [System.IO.Path]::GetFullPath($ParentPath)
+    $comparison = [System.StringComparison]::Ordinal
+    if (Test-ProsaicWindowsPlatform) {
+        $comparison = [System.StringComparison]::OrdinalIgnoreCase
+    }
+
+    $separators = [char[]] @(
+        [System.IO.Path]::DirectorySeparatorChar,
+        [System.IO.Path]::AltDirectorySeparatorChar
+    )
+    $parentWithSeparator = $fullParent.TrimEnd($separators) + [System.IO.Path]::DirectorySeparatorChar
+
+    if (-not ($fullPath.Equals($fullParent, $comparison) -or $fullPath.StartsWith($parentWithSeparator, $comparison))) {
+        throw "Refusing to operate on path outside expected parent. Path: $fullPath Parent: $fullParent"
+    }
+
+    return $fullPath
+}
+
 function Resolve-ProsaicCrateSelection {
     param(
         [string[]] $Crates = @()
@@ -201,7 +303,7 @@ function Wait-ProsaicCrateVersionPublished {
 }
 
 function Assert-ProsaicGitClean {
-    $status = & git status --porcelain
+    $status = @(& git status --porcelain)
     if ($LASTEXITCODE -ne 0) {
         throw "git status failed."
     }
@@ -216,7 +318,7 @@ function Assert-ProsaicGitTagAtHead {
         [Parameter(Mandatory = $true)] [string] $Tag
     )
 
-    $tags = & git tag --points-at HEAD
+    $tags = @(& git tag --points-at HEAD)
     if ($LASTEXITCODE -ne 0) {
         throw "git tag --points-at HEAD failed."
     }

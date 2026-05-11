@@ -7,8 +7,8 @@ repository.workspace = true
 description = "Pull-request narrative vocabulary templates for the prosaic engine"
 
 [dependencies]
-prosaic-core = { version = "0.6.1", path = "../prosaic-core", default-features = false }
+prosaic-core = { version = "0.6.2", path = "../prosaic-core", default-features = false }
 
 [dev-dependencies]
-prosaic-grammar-en = { version = "0.6.1", path = "../prosaic-grammar-en" }
-prosaic-grammar-es = { version = "0.6.1", path = "../prosaic-grammar-es" }
+prosaic-grammar-en = { version = "0.6.2", path = "../prosaic-grammar-en" }
+prosaic-grammar-es = { version = "0.6.2", path = "../prosaic-grammar-es" }

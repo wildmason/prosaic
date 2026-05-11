@@ -17,7 +17,8 @@ jobs:
         os:
           - ubuntu-latest
           - windows-latest
-          - macos-latest
+          # macOS is intentionally paused until Wildmason has a self-hosted
+          # runner. GitHub-hosted mac minutes are too expensive for routine CI.
 
     steps:
       - name: Checkout

@@ -22,8 +22,8 @@ For library use, add the engine plus at least one grammar crate:
 
 ```toml
 [dependencies]
-prosaic-core = "0.6.1"
-prosaic-grammar-en = "0.6.1"
+prosaic-core = "0.6.2"
+prosaic-grammar-en = "0.6.2"
 ```
 
 For the command-line tool:
@@ -32,13 +32,19 @@ For the command-line tool:
 cargo install prosaic
 ```
 
+Prebuilt CLI archives for Windows and Linux are attached to GitHub Releases.
+Download the archive matching your target, verify the adjacent `.sha256`
+sidecar, then put the extracted `prosaic` binary on your `PATH`. macOS archives
+will be added after Wildmason has a self-hosted macOS release runner.
+
 The published crates in this workspace share one lockstep version. Regular
 internal dependencies carry both a local `path` and the matching crates.io
 `version`; bootstrap-only dev-dependencies may stay path-only. The CLI package
 is named `prosaic` on crates.io and installs the `prosaic` binary; the source
 directory remains `prosaic-cli`. See
 [`docs/cookbook/src/versioning-and-packaging.md`](docs/cookbook/src/versioning-and-packaging.md)
-for the full versioning, packaging, release automation, and verification scheme.
+for the versioning and packaging scheme, and
+[`docs/release`](docs/release) for the release operator book.
 
 ### Rust API
 
