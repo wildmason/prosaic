@@ -4,8 +4,8 @@ Add the core engine and English grammar module to your project:
 
 ```toml
 [dependencies]
-prosaic-core = "0.6"
-prosaic-grammar-en = "0.6"
+prosaic-core = "1.0.0"
+prosaic-grammar-en = "1.0.0"
 ```
 
 ## Your first render

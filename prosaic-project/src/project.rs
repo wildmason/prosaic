@@ -107,30 +107,8 @@ where
     Ok(out)
 }
 
-use prosaic_core::{Engine, Salience, SalienceThresholds, Strictness, Variation};
+use prosaic_core::{Engine, Salience, SalienceThresholds, Strictness, Variation, pipe_spec};
 use prosaic_grammar_en::English;
-
-const KNOWN_PIPES: &[&str] = &[
-    "plural",
-    "pluralize",
-    "article",
-    "join",
-    "ordinal",
-    "words",
-    "truncate",
-    "capitalize",
-    "refer",
-    "verb",
-    "syn",
-    "relative",
-    "since_last",
-    "quantify",
-    "proportion",
-    "hedge",
-    "negated",
-    "choose",
-    "demonstrative",
-];
 
 impl Project {
     /// Walk every template; report unknown pipes and unknown partial
@@ -153,7 +131,7 @@ impl Project {
                     }
                 };
                 for pipe_name in parsed.pipe_names() {
-                    if !KNOWN_PIPES.contains(&pipe_name.as_str()) {
+                    if pipe_spec(&pipe_name).is_none() {
                         issues.push(ValidationIssue {
                             level: ValidationLevel::Error,
                             location: format!("templates/{key}.toml#variant[{vi}]"),

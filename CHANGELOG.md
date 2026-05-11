@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+## 1.0.0 - 2026-05-11
+
+- Declared the 1.x stability contract for crates, CLI behavior, template
+  syntax, pipe metadata, project schemas, and bundle schema version 1.
+- Added semver-facing contract tests for core rendering, the built-in pipe
+  registry, project bundling, project validation, CLI rendering, explain JSON,
+  and project subcommands.
+- Fixed project validation to use the `prosaic-core` pipe registry, eliminating
+  a stale duplicate list that missed the supported `possessive` pipe.
+- Updated workspace crate versions, lockfile metadata, install snippets, and
+  release documentation for the 1.0.0 line.
+
 ## 0.6.2 - 2026-05-11
 
 - Added release automation scripts for preflight checks, ordered crates.io

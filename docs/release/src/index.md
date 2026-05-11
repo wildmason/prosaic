@@ -18,8 +18,8 @@ The canonical automation lives in `scripts/`:
 ```powershell
 .\scripts\release-check.ps1
 .\scripts\publish-workspace.ps1 -Yes -RequireHeadTag
-.\scripts\verify-release.ps1 -Version 0.6.2
-.\scripts\verify-binary-release.ps1 -Version 0.6.2
+.\scripts\verify-release.ps1 -Version 1.0.0
+.\scripts\verify-binary-release.ps1 -Version 1.0.0
 .\scripts\build-release-book.ps1
 ```
 

@@ -7,8 +7,8 @@ repository.workspace = true
 description = "Code-analysis vocabulary module for the prosaic crate"
 
 [dependencies]
-prosaic-core = { version = "0.6.2", path = "../prosaic-core" }
+prosaic-core = { version = "1.0.0", path = "../prosaic-core" }
 
 [dev-dependencies]
-prosaic-grammar-en = { version = "0.6.2", path = "../prosaic-grammar-en" }
-prosaic-grammar-es = { version = "0.6.2", path = "../prosaic-grammar-es" }
+prosaic-grammar-en = { version = "1.0.0", path = "../prosaic-grammar-en" }
+prosaic-grammar-es = { version = "1.0.0", path = "../prosaic-grammar-es" }

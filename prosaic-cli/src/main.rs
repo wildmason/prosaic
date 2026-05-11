@@ -438,6 +438,11 @@ OPTIONS:
                            Missing-slot behavior (default: strict)
     -h, --help             Print this help
 
+COMMANDS:
+    new <name>             Scaffold a project (starters: blank, changelog, vocab-pack)
+    build <project>        Build a project bundle (targets: json, rust, both)
+    test <project>         Run project scenarios from tests/
+
 INPUT:
     Each line of stdin is one JSON event object with a `key` field naming
     the template, plus slot fields matching the template's placeholders.

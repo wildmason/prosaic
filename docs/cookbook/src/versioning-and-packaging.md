@@ -8,7 +8,7 @@ a local `path` and the matching crates.io `version`.
 That shape is intentional:
 
 ```toml
-prosaic-core = { version = "0.6.2", path = "../prosaic-core" }
+prosaic-core = { version = "1.0.0", path = "../prosaic-core" }
 ```
 
 Local development uses the path. Published crates use the version, so the same
@@ -67,10 +67,33 @@ The current public set is:
 ## Version Rules
 
 - One workspace version is the source of truth.
-- Patch releases are for fixes, docs, and non-breaking additions.
-- While the line is `0.x`, minor releases may include breaking API changes.
-- A release tag uses `vMAJOR.MINOR.PATCH`, for example `v0.6.2`.
+- Prosaic 1.x follows SemVer for the published Rust crates, the CLI, and the
+  folder-of-files project format.
+- Patch releases are for fixes, docs, and strictly non-breaking additions.
+- Minor releases may add crates, flags, fields, enum variants, starter files,
+  style profiles, vocabulary templates, and other backwards-compatible
+  capabilities.
+- Breaking API, CLI, template syntax, pipe contract, or project-schema changes
+  require a 2.0 release.
+- A release tag uses `vMAJOR.MINOR.PATCH`, for example `v1.0.0`.
 - Crates.io versions are immutable; a bad publish requires a new patch version.
+
+## Public Contract
+
+The 1.x stability contract covers:
+
+- Package names, the `prosaic` CLI package, and the installed `prosaic` binary.
+- CLI JSON-lines input, documented render flags, presets, and project
+  subcommands.
+- Template syntax: slots, pipe chains, arguments, conditionals, and partials.
+- Built-in pipe names and input/output value types.
+- `prosaic.toml`, template, partial, fixture, and scenario file schemas.
+- JSON bundle schema version 1 and `Engine::load_manifest`.
+- Public Rust APIs exported from the workspace crates.
+
+See `docs/release/src/stability-policy.md` for the release checklist and the
+boundary between SemVer-stable behavior and deterministic output improvements
+that can evolve within 1.x.
 
 ## Publish Order
 
@@ -166,7 +189,7 @@ For a no-upload rehearsal:
 Before publishing, tag the exact clean release commit:
 
 ```sh
-git tag v0.6.2
+git tag v1.0.0
 ```
 
 Then publish from that tagged commit:
@@ -179,7 +202,7 @@ Push the release commit and tag after the crates.io publish succeeds:
 
 ```sh
 git push origin main
-git push origin v0.6.2
+git push origin v1.0.0
 ```
 
 Pushing the tag starts the binary release workflow. It builds Windows and Linux
@@ -191,8 +214,8 @@ runners for routine Prosaic releases.
 Then verify the release:
 
 ```powershell
-.\scripts\verify-release.ps1 -Version 0.6.2
-.\scripts\verify-binary-release.ps1 -Version 0.6.2
+.\scripts\verify-release.ps1 -Version 1.0.0
+.\scripts\verify-binary-release.ps1 -Version 1.0.0
 ```
 
 The crates verification script checks every exact crate version through the
@@ -207,10 +230,10 @@ smoke-runs the archive matching the local host.
 The `prosaic` command is also packaged as GitHub Release assets:
 
 ```text
-prosaic-v0.6.2-x86_64-unknown-linux-gnu.tar.gz
-prosaic-v0.6.2-x86_64-unknown-linux-gnu.tar.gz.sha256
-prosaic-v0.6.2-x86_64-pc-windows-msvc.zip
-prosaic-v0.6.2-x86_64-pc-windows-msvc.zip.sha256
+prosaic-v1.0.0-x86_64-unknown-linux-gnu.tar.gz
+prosaic-v1.0.0-x86_64-unknown-linux-gnu.tar.gz.sha256
+prosaic-v1.0.0-x86_64-pc-windows-msvc.zip
+prosaic-v1.0.0-x86_64-pc-windows-msvc.zip.sha256
 ```
 
 Package a local target with:
@@ -222,7 +245,7 @@ Package a local target with:
 or an explicit target with:
 
 ```powershell
-.\scripts\package-binary.ps1 -Version 0.6.2 -TargetTriple x86_64-pc-windows-msvc
+.\scripts\package-binary.ps1 -Version 1.0.0 -TargetTriple x86_64-pc-windows-msvc
 ```
 
 The package script builds `cargo build --release --locked -p prosaic --target

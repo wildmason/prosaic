@@ -22,8 +22,8 @@ For library use, add the engine plus at least one grammar crate:
 
 ```toml
 [dependencies]
-prosaic-core = "0.6.2"
-prosaic-grammar-en = "0.6.2"
+prosaic-core = "1.0.0"
+prosaic-grammar-en = "1.0.0"
 ```
 
 For the command-line tool:
@@ -43,7 +43,7 @@ internal dependencies carry both a local `path` and the matching crates.io
 is named `prosaic` on crates.io and installs the `prosaic` binary; the source
 directory remains `prosaic-cli`. See
 [`docs/cookbook/src/versioning-and-packaging.md`](docs/cookbook/src/versioning-and-packaging.md)
-for the versioning and packaging scheme, and
+for the lockstep SemVer scheme and public 1.x contract, and
 [`docs/release`](docs/release) for the release operator book.
 
 ### Rust API
@@ -1025,7 +1025,7 @@ style = "executive"
 body = "Executive note: {name} materially changed"
 ```
 
-### StyleProfile (v0.6) — Declarative Voice Configuration
+### StyleProfile — Declarative Voice Configuration
 
 A `StyleProfile` is a deterministic dial layer that biases the engine's existing rendering choices toward a target voice. Seven orthogonal dials — `verbosity`, `sentence_length`, `connectives`, `list_style_bias`, `pronoun_density`, `hedging`, and `salience` — compose with the existing builders without breaking determinism. `StyleProfile::neutral()` is byte-for-byte equivalent to no profile, so applying a profile is always opt-in and non-breaking.
 
@@ -1044,7 +1044,7 @@ let engine = Engine::new(English::new()).style_profile(profile);
 
 A small **catalog of reference profiles** (`neutral`, `concise-professional`, `verbose-narrative`, `regulatory-formal`) ships with `prosaic-project::catalog` for projects that want a curated starting point. Profiles can also be declared in `prosaic.toml` under `[style_profile]`, optionally extending a sibling profile via `extends = "path"`. See [`docs/superpowers/specs/2026-05-09-style-profile-design.md`](docs/superpowers/specs/2026-05-09-style-profile-design.md) for the full design.
 
-### Retrospective Refine Pass (v0.6) — Self-Refine for Deterministic NLG
+### Retrospective Refine Pass — Self-Refine for Deterministic NLG
 
 Some failure modes (every paragraph opening with the same connective, list-style fatigue, RST-relation imbalance, document-scope cadence drift) only surface after the whole document is rendered. The retrospective pass detects these post-hoc, derives constraints, re-renders, and iterates until the composite score converges. The loop is deterministic, document-scope, opt-in, and never weakens faithfulness.
 
@@ -1063,7 +1063,7 @@ Six built-in diagnosers ship with the default config (`ParagraphOpenerMonotony`,
 
 ## Design Philosophy
 
-Deterministic, rule-based NLG — no LLM dependencies, no non-deterministic behavior by default. The goal is **natural-sounding output that is fully reproducible and testable**. Research informed by Reiter's NLG pipeline (content planning → microplanning → realisation), RosaeNLG's choosebest and referring expression systems, SimpleNLG's aggregation patterns, Dale & Reiter's REG work, and (for the v0.6 retro-pass) Madaan et al.'s Self-Refine pattern adapted onto deterministic diagnosers.
+Deterministic, rule-based NLG — no LLM dependencies, no non-deterministic behavior by default. The goal is **natural-sounding output that is fully reproducible and testable**. Research informed by Reiter's NLG pipeline (content planning → microplanning → realisation), RosaeNLG's choosebest and referring expression systems, SimpleNLG's aggregation patterns, Dale & Reiter's REG work, and (for the retrospective refine pass) Madaan et al.'s Self-Refine pattern adapted onto deterministic diagnosers.
 
 For a category-by-category defense of the "no hallucination" claim, mapped onto Huang et al.'s LLM hallucination taxonomy, see [`docs/hallucination-by-construction.md`](docs/hallucination-by-construction.md).
 

@@ -10,8 +10,8 @@ description = "WebAssembly bindings for the Prosaic NLG engine"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-prosaic-core = { version = "0.6.2", path = "../prosaic-core", default-features = false, features = ["std", "polish", "reg", "serde"] }
-prosaic-grammar-en = { version = "0.6.2", path = "../prosaic-grammar-en" }
+prosaic-core = { version = "1.0.0", path = "../prosaic-core", default-features = false, features = ["std", "polish", "reg", "serde"] }
+prosaic-grammar-en = { version = "1.0.0", path = "../prosaic-grammar-en" }
 wasm-bindgen = "0.2"
 serde = { version = "1", features = ["derive"] }
 serde-wasm-bindgen = "0.6"

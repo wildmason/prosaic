@@ -17,10 +17,10 @@ Each archive includes the binary, README, both license files, and a small
 `PACKAGE.txt` metadata file.
 
 ```text
-prosaic-v0.6.2-x86_64-unknown-linux-gnu.tar.gz
-prosaic-v0.6.2-x86_64-unknown-linux-gnu.tar.gz.sha256
-prosaic-v0.6.2-x86_64-pc-windows-msvc.zip
-prosaic-v0.6.2-x86_64-pc-windows-msvc.zip.sha256
+prosaic-v1.0.0-x86_64-unknown-linux-gnu.tar.gz
+prosaic-v1.0.0-x86_64-unknown-linux-gnu.tar.gz.sha256
+prosaic-v1.0.0-x86_64-pc-windows-msvc.zip
+prosaic-v1.0.0-x86_64-pc-windows-msvc.zip.sha256
 ```
 
 The SHA-256 sidecar format is compatible with `sha256sum -c`:
@@ -40,7 +40,7 @@ Build and package the host target:
 Build a specific target:
 
 ```powershell
-.\scripts\package-binary.ps1 -Version 0.6.2 -TargetTriple x86_64-pc-windows-msvc
+.\scripts\package-binary.ps1 -Version 1.0.0 -TargetTriple x86_64-pc-windows-msvc
 ```
 
 The script runs `cargo build --release --locked -p prosaic --target <triple>`,
@@ -58,5 +58,5 @@ Manual dispatch can rebuild assets for an existing tag:
 
 ```text
 workflow: Binary Release
-input tag: v0.6.2
+input tag: v1.0.0
 ```

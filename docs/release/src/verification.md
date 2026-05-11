@@ -5,7 +5,7 @@ There are two release verification lanes.
 ## Crates and install smoke
 
 ```powershell
-.\scripts\verify-release.ps1 -Version 0.6.2
+.\scripts\verify-release.ps1 -Version 1.0.0
 ```
 
 This checks each exact crate version through the crates.io API, checks docs.rs,
@@ -16,7 +16,7 @@ installed binary.
 ## GitHub binary assets
 
 ```powershell
-.\scripts\verify-binary-release.ps1 -Version 0.6.2
+.\scripts\verify-binary-release.ps1 -Version 1.0.0
 ```
 
 This downloads assets from `wildmason/prosaic`, verifies SHA-256 sidecars for
@@ -26,13 +26,13 @@ host triple.
 To verify downloaded assets without calling GitHub again:
 
 ```powershell
-.\scripts\verify-binary-release.ps1 -Version 0.6.2 -SkipDownload
+.\scripts\verify-binary-release.ps1 -Version 1.0.0 -SkipDownload
 ```
 
 To verify checksums only:
 
 ```powershell
-.\scripts\verify-binary-release.ps1 -Version 0.6.2 -SkipSmoke
+.\scripts\verify-binary-release.ps1 -Version 1.0.0 -SkipSmoke
 ```
 
 macOS verification is intentionally excluded until macOS assets are produced by

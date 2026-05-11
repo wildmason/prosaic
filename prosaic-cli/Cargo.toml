@@ -11,12 +11,12 @@ name = "prosaic"
 path = "src/main.rs"
 
 [dependencies]
-prosaic-core = { version = "0.6.2", path = "../prosaic-core", features = ["serde"] }
-prosaic-grammar-en = { version = "0.6.2", path = "../prosaic-grammar-en" }
-prosaic-vocab-code = { version = "0.6.2", path = "../prosaic-vocab-code" }
-prosaic-vocab-git = { version = "0.6.2", path = "../prosaic-vocab-git" }
-prosaic-vocab-release = { version = "0.6.2", path = "../prosaic-vocab-release" }
-prosaic-vocab-pr = { version = "0.6.2", path = "../prosaic-vocab-pr" }
-prosaic-project = { version = "0.6.2", path = "../prosaic-project" }
+prosaic-core = { version = "1.0.0", path = "../prosaic-core", features = ["serde"] }
+prosaic-grammar-en = { version = "1.0.0", path = "../prosaic-grammar-en" }
+prosaic-vocab-code = { version = "1.0.0", path = "../prosaic-vocab-code" }
+prosaic-vocab-git = { version = "1.0.0", path = "../prosaic-vocab-git" }
+prosaic-vocab-release = { version = "1.0.0", path = "../prosaic-vocab-release" }
+prosaic-vocab-pr = { version = "1.0.0", path = "../prosaic-vocab-pr" }
+prosaic-project = { version = "1.0.0", path = "../prosaic-project" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

@@ -9,7 +9,7 @@ workspace manifests. Keep all public crates in lockstep.
 
 ```toml
 [workspace.package]
-version = "0.6.2"
+version = "1.0.0"
 ```
 
 Move `CHANGELOG.md` entries from `Unreleased` into the new dated release
@@ -40,8 +40,8 @@ in crates.io.
 ```powershell
 git status --short
 git add .
-git commit -m "Release Prosaic 0.6.2"
-git tag v0.6.2
+git commit -m "Release Prosaic 1.0.0"
+git tag v1.0.0
 ```
 
 The publish script can require that HEAD carries the release tag:
@@ -54,7 +54,7 @@ The publish script can require that HEAD carries the release tag:
 
 ```powershell
 git push origin main
-git push origin v0.6.2
+git push origin v1.0.0
 ```
 
 Pushing the tag starts the GitHub binary release workflow. The workflow builds
@@ -64,8 +64,8 @@ updates the GitHub release for that tag.
 ## 5. Verify
 
 ```powershell
-.\scripts\verify-release.ps1 -Version 0.6.2
-.\scripts\verify-binary-release.ps1 -Version 0.6.2
+.\scripts\verify-release.ps1 -Version 1.0.0
+.\scripts\verify-binary-release.ps1 -Version 1.0.0
 ```
 
 The first command proves the crates.io and docs.rs side. The second command
