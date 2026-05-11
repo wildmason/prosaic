@@ -10,6 +10,7 @@ The release model is:
 - One git tag per release, named `vMAJOR.MINOR.PATCH`.
 - One crates.io publish pass in dependency order.
 - One GitHub release with Windows and Linux CLI archives plus SHA-256 sidecars.
+- Package-manager metadata updates after GitHub release verification.
 - No GitHub-hosted macOS release jobs until Wildmason has a self-hosted macOS
   runner available.
 

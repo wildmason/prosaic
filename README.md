@@ -32,6 +32,22 @@ For the command-line tool:
 cargo install prosaic
 ```
 
+Package-manager installs:
+
+```bash
+brew install wildmason/tap/prosaic
+```
+
+```powershell
+scoop bucket add wildmason https://github.com/wildmason/scoop-bucket
+scoop install prosaic
+```
+
+The Scoop manifest targets the Windows x86_64 archive. The Homebrew formula
+currently targets the Linux x86_64 archive; macOS Homebrew support will be added
+after Wildmason has a self-hosted macOS release runner. On macOS, use
+`cargo install prosaic` for now.
+
 Prebuilt CLI archives for Windows and Linux are attached to GitHub Releases.
 Download the archive matching your target, verify the adjacent `.sha256`
 sidecar, then put the extracted `prosaic` binary on your `PATH`. macOS archives

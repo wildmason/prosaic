@@ -71,3 +71,13 @@ updates the GitHub release for that tag.
 The first command proves the crates.io and docs.rs side. The second command
 downloads the GitHub release assets, verifies checksums for all configured
 binary targets, and smoke-runs the archive matching the local host.
+
+## 6. Update Package Managers
+
+After GitHub release verification succeeds, update the package-manager repos:
+
+- `../homebrew-tap/Formula/prosaic.rb` uses the Linux x86_64 archive.
+- `../scoop-bucket/bucket/prosaic.json` uses the Windows x86_64 archive.
+
+Commit and push those repos independently from the source release commit. See
+`package-managers.md` for the exact update and verification flow.

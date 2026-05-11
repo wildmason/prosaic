@@ -43,6 +43,25 @@ The source directory remains `prosaic-cli` because this repository grew the CLI
 as a workspace member before public packaging. Directory name and package name
 do not need to match.
 
+## Package Managers
+
+The package-manager repos consume the same published release artifacts:
+
+| Manager | Repository | Current target |
+|---------|------------|----------------|
+| Homebrew | `wildmason/homebrew-tap` | Linux x86_64 release archive |
+| Scoop | `wildmason/scoop-bucket` | Windows x86_64 release archive |
+
+Homebrew macOS support is intentionally pending until Wildmason has a
+self-hosted macOS release runner and publishes macOS archives. Until then,
+macOS users should install the command with `cargo install prosaic`.
+
+After each release, update the package-manager metadata only after
+`verify-binary-release.ps1` proves the GitHub assets and checksums. The
+Homebrew formula checksum comes from
+`prosaic-v<version>-x86_64-unknown-linux-gnu.tar.gz`; the Scoop manifest
+checksum comes from `prosaic-v<version>-x86_64-pc-windows-msvc.zip`.
+
 ## Crate Set
 
 The current public set is:

@@ -5,5 +5,6 @@
 - [1.0 Stability Policy](stability-policy.md)
 - [Crates.io Publishing](crates-io.md)
 - [Binary Assets](binary-assets.md)
+- [Package Managers](package-managers.md)
 - [Verification](verification.md)
 - [Recovery](recovery.md)
