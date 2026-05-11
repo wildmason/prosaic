@@ -1,5 +1,4 @@
 /target
-Cargo.lock
 
 # Claude local settings
 .claude/
