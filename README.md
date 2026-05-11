@@ -32,9 +32,11 @@ For the command-line tool:
 cargo install prosaic
 ```
 
-The published crates in this workspace share one lockstep version. The CLI
-package is named `prosaic` on crates.io and installs the `prosaic` binary; the
-source directory remains `prosaic-cli`. See
+The published crates in this workspace share one lockstep version. Regular
+internal dependencies carry both a local `path` and the matching crates.io
+`version`; bootstrap-only dev-dependencies may stay path-only. The CLI package
+is named `prosaic` on crates.io and installs the `prosaic` binary; the source
+directory remains `prosaic-cli`. See
 [`docs/cookbook/src/versioning-and-packaging.md`](docs/cookbook/src/versioning-and-packaging.md)
 for the full versioning and packaging scheme.
 

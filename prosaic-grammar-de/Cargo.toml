@@ -10,7 +10,7 @@ description = "German grammar layer for the Prosaic NLG engine"
 prosaic-core = { version = "0.6.1", path = "../prosaic-core", default-features = false }
 
 [dev-dependencies]
-prosaic-grammar-de = { version = "0.6.1", path = ".", features = ["time"] }
+prosaic-grammar-de = { path = ".", features = ["time"] }
 
 [features]
 # Enable the `since_last_marker` Language override and the time-related

@@ -2,8 +2,8 @@
 
 Prosaic publishes multiple Rust crates from one workspace. They move in
 lockstep: every public crate uses the version declared in the root
-`[workspace.package]` table, and every internal workspace dependency carries
-both a local `path` and the matching crates.io `version`.
+`[workspace.package]` table. Regular internal workspace dependencies carry both
+a local `path` and the matching crates.io `version`.
 
 That shape is intentional:
 
@@ -13,6 +13,21 @@ prosaic-core = { version = "0.6.1", path = "../prosaic-core" }
 
 Local development uses the path. Published crates use the version, so the same
 manifest works before and after release.
+
+Dev-dependencies are the exception when they are only local test harnesses. For
+example, `prosaic-core` tests exercise the derive, grammar, and vocabulary
+crates, but those crates depend on `prosaic-core` and cannot exist before it in
+the initial publish order. Those bootstrap-only dev-dependencies stay path-only:
+
+```toml
+[dev-dependencies]
+prosaic-derive = { path = "../prosaic-derive" }
+prosaic-grammar-en = { path = "../prosaic-grammar-en" }
+prosaic-vocab-code = { path = "../prosaic-vocab-code" }
+```
+
+Cargo uses them for local `cargo test --workspace`, but they are not part of
+the published dependency graph.
 
 ## CLI Package Name
 

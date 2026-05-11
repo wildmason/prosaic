@@ -56,9 +56,9 @@ parallel = ["dep:rayon", "std"]
 reg = []
 
 [dev-dependencies]
-prosaic-derive = { version = "0.6.1", path = "../prosaic-derive" }
-prosaic-grammar-en = { version = "0.6.1", path = "../prosaic-grammar-en" }
-prosaic-vocab-code = { version = "0.6.1", path = "../prosaic-vocab-code" }
+prosaic-derive = { path = "../prosaic-derive" }
+prosaic-grammar-en = { path = "../prosaic-grammar-en" }
+prosaic-vocab-code = { path = "../prosaic-vocab-code" }
 proptest = "1"
 serde_json = "1"
 criterion = { version = "0.5", default-features = false, features = ["cargo_bench_support"] }
