@@ -189,4 +189,5 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 ```
 
 Tests run on Ubuntu, Windows, and macOS. Formatting and clippy run on Ubuntu to
-avoid redundant lint work across operating systems.
+avoid redundant lint work across operating systems. The workspace tracks
+`Cargo.lock` so `--locked` gates are reproducible on fresh CI runners.

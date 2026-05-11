@@ -202,6 +202,7 @@ fn catalog_profile_renders_match_golden() {
             _ => unreachable!(),
         };
         let actual = render_corpus(&build_engine(profile));
+        let expected = expected.replace("\r\n", "\n");
         assert_eq!(
             actual.trim(),
             expected.trim(),

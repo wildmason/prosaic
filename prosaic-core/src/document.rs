@@ -237,7 +237,7 @@ impl DocumentPlan {
             // adjacent — stable to preserve user-provided ordering among
             // entity-free events.
             let mut sorted = bucket;
-            sorted.sort_by(|a, b| entity_key(&a.1).cmp(&entity_key(&b.1)));
+            sorted.sort_by_key(|(_, ctx)| entity_key(ctx));
 
             for (key, ctx) in sorted {
                 let salience = engine.context_salience(&ctx);
@@ -328,7 +328,8 @@ impl DocumentPlan {
             plan.paragraphs.push(current);
         }
 
-        plan.paragraphs.sort_by(|a, b| b.salience.cmp(&a.salience));
+        plan.paragraphs
+            .sort_by_key(|paragraph| core::cmp::Reverse(paragraph.salience));
         plan
     }
 
@@ -364,7 +365,8 @@ impl DocumentPlan {
         }
 
         // Sort paragraphs by highest salience first (stable to preserve tie order)
-        plan.paragraphs.sort_by(|a, b| b.salience.cmp(&a.salience));
+        plan.paragraphs
+            .sort_by_key(|paragraph| core::cmp::Reverse(paragraph.salience));
 
         plan
     }
