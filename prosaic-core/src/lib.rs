@@ -153,6 +153,10 @@ pub use hedge::{HedgeMode, hedge};
 #[cfg(feature = "polish")]
 pub use length::split_long;
 pub use proportion::english_proportion;
+pub use prosaic_common::{ValueType, pipe_spec, schema_lookup, types_compatible};
+#[cfg(feature = "polish")]
+pub use punctuation::{em_dash_nested_parentheticals, smart_quotes};
+pub use quantify::{QuantifyMode, quantify};
 pub use refine::{
     Diagnoser, Diagnostic, RefineConfig, RefineConstraint, RefineOutcome, RefineWeights,
     RenderedDocument, RenderedParagraph, RenderedSentence, UsedConnective, UsedListStyle,
@@ -162,10 +166,6 @@ pub use refine_diagnosers::{
     ProfileDistributionDrift, RstRelationImbalance,
 };
 pub use refine_score::score_document;
-pub use prosaic_common::{ValueType, pipe_spec, schema_lookup, types_compatible};
-#[cfg(feature = "polish")]
-pub use punctuation::{em_dash_nested_parentheticals, smart_quotes};
-pub use quantify::{QuantifyMode, quantify};
 #[cfg(feature = "reg")]
 pub use reg::{
     EntityDescriptor, EntityRegistry, SubgraphDescription, distinguishing_attributes,

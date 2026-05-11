@@ -3,6 +3,7 @@ name = "prosaic-derive"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 description = "Derive macros for the prosaic crate"
 
 [lib]
@@ -12,4 +13,4 @@ proc-macro = true
 syn = { version = "2", features = ["full"] }
 quote = "1"
 proc-macro2 = "1"
-prosaic-core = { path = "../prosaic-core", default-features = false }
+prosaic-core = { version = "0.6.1", path = "../prosaic-core", default-features = false }

@@ -3,6 +3,7 @@ name = "prosaic-core"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 description = "General-purpose natural language generation from structured data"
 
 [dependencies]
@@ -10,7 +11,7 @@ ahash = { version = "0.8", default-features = false, features = ["compile-time-r
 hashbrown = { version = "0.15", default-features = false, features = ["default-hasher", "inline-more"] }
 thiserror = { version = "2", default-features = false }
 itoa = { version = "1", default-features = false }
-prosaic-common = { path = "../prosaic-common", default-features = false }
+prosaic-common = { version = "0.6.1", path = "../prosaic-common", default-features = false }
 serde = { version = "1", default-features = false, features = ["derive", "alloc"], optional = true }
 serde_json = { version = "1", default-features = false, features = ["alloc"], optional = true }
 rayon = { version = "1", optional = true }
@@ -55,9 +56,9 @@ parallel = ["dep:rayon", "std"]
 reg = []
 
 [dev-dependencies]
-prosaic-derive = { path = "../prosaic-derive" }
-prosaic-grammar-en = { path = "../prosaic-grammar-en" }
-prosaic-vocab-code = { path = "../prosaic-vocab-code" }
+prosaic-derive = { version = "0.6.1", path = "../prosaic-derive" }
+prosaic-grammar-en = { version = "0.6.1", path = "../prosaic-grammar-en" }
+prosaic-vocab-code = { version = "0.6.1", path = "../prosaic-vocab-code" }
 proptest = "1"
 serde_json = "1"
 criterion = { version = "0.5", default-features = false, features = ["cargo_bench_support"] }

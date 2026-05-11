@@ -343,7 +343,9 @@ pub trait Language: Send + Sync {
             "If this happens,",
             "In summary,",
         ];
-        ENGLISH_OPENERS.iter().any(|opener| text.starts_with(opener))
+        ENGLISH_OPENERS
+            .iter()
+            .any(|opener| text.starts_with(opener))
     }
 
     fn discourse_marker(&self, relation: crate::rst::RstRelation) -> Option<&'static str> {
@@ -897,10 +899,7 @@ mod tests {
     fn proportion_phrase_default_zero_zero_with_noun() {
         let lang = MiniLang;
         let f = AgreementFeatures::default();
-        assert_eq!(
-            lang.proportion_phrase(0, 0, Some("file"), &f),
-            "no files"
-        );
+        assert_eq!(lang.proportion_phrase(0, 0, Some("file"), &f), "no files");
     }
 
     #[test]

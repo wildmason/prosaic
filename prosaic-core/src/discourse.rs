@@ -339,7 +339,6 @@ pub(crate) fn list_styles_count() -> usize {
     LIST_STYLES.len()
 }
 
-
 /// Lexical family a connector belongs to. The exact-string anti-repeat
 /// only sees individual connectors; the family lets the budget reason
 /// about whole categories ("similarity/continuation/contrast") so a
@@ -580,7 +579,8 @@ impl DiscourseState {
                 other => other,
             };
         }
-        if density_high && raw == ReferenceForm::ShortName && self.is_pronoun_eligible_relaxed(name) {
+        if density_high && raw == ReferenceForm::ShortName && self.is_pronoun_eligible_relaxed(name)
+        {
             return ReferenceForm::Pronoun;
         }
         raw

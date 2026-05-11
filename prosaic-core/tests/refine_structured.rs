@@ -16,11 +16,7 @@ fn engine() -> Engine {
         .strictness(Strictness::Strict)
         .variation(Variation::Fixed);
     engine
-        .register_template_at(
-            "code.modified",
-            "{name} was modified",
-            Salience::Medium,
-        )
+        .register_template_at("code.modified", "{name} was modified", Salience::Medium)
         .unwrap();
     engine
         .register_template_at(
@@ -69,7 +65,9 @@ fn render_structured_renders_sentence_by_sentence_without_gapping() {
     let plan = build_plan();
     let engine = engine();
     let event_count: usize = plan.paragraphs.iter().map(|p| p.events.len()).sum();
-    let structured = plan.render_structured(&engine, &mut Session::new()).unwrap();
+    let structured = plan
+        .render_structured(&engine, &mut Session::new())
+        .unwrap();
     assert_eq!(
         structured.sentences.len(),
         event_count,
@@ -84,7 +82,9 @@ fn render_structured_renders_sentence_by_sentence_without_gapping() {
 fn render_structured_populates_paragraph_count() {
     let plan = build_plan();
     let engine = engine();
-    let doc = plan.render_structured(&engine, &mut Session::new()).unwrap();
+    let doc = plan
+        .render_structured(&engine, &mut Session::new())
+        .unwrap();
     // The plan groups by entity; UserService has two consecutive events,
     // AuthService has one — so two paragraphs.
     assert_eq!(doc.paragraphs.len(), 2);
@@ -94,7 +94,9 @@ fn render_structured_populates_paragraph_count() {
 fn render_structured_populates_per_sentence_word_counts() {
     let plan = build_plan();
     let engine = engine();
-    let doc = plan.render_structured(&engine, &mut Session::new()).unwrap();
+    let doc = plan
+        .render_structured(&engine, &mut Session::new())
+        .unwrap();
     for sentence in &doc.sentences {
         assert!(
             sentence.word_count > 0,
@@ -108,7 +110,9 @@ fn render_structured_populates_per_sentence_word_counts() {
 fn render_structured_records_connectives_used() {
     let plan = build_plan();
     let engine = engine();
-    let doc = plan.render_structured(&engine, &mut Session::new()).unwrap();
+    let doc = plan
+        .render_structured(&engine, &mut Session::new())
+        .unwrap();
     // The second event in the UserService paragraph should pick up an
     // automatic connective (SameEntityDifferentAction relation).
     assert!(
@@ -136,7 +140,9 @@ fn render_structured_records_connectives_used() {
 fn render_structured_flattened_sentences_align_with_paragraph_sentences() {
     let plan = build_plan();
     let engine = engine();
-    let doc = plan.render_structured(&engine, &mut Session::new()).unwrap();
+    let doc = plan
+        .render_structured(&engine, &mut Session::new())
+        .unwrap();
     let total: usize = doc.paragraphs.iter().map(|p| p.sentences.len()).sum();
     assert_eq!(total, doc.sentences.len());
 }

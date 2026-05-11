@@ -61,7 +61,11 @@ fn register_corpus(engine: &mut Engine) {
         )
         .unwrap();
     engine
-        .register_template_at("code.renamed", "{old_name|refer} → {new_name}", Salience::Low)
+        .register_template_at(
+            "code.renamed",
+            "{old_name|refer} → {new_name}",
+            Salience::Low,
+        )
         .unwrap();
 
     engine.register_entity(
@@ -78,13 +82,13 @@ fn render_corpus(engine: &Engine) -> String {
     let mut out = String::new();
     out.push_str(
         &engine
-            .render(&mut session, "code.modified", &ctx_named("UserService", 25))
+            .render(&mut session, "code.modified", ctx_named("UserService", 25))
             .unwrap(),
     );
     out.push('\n');
     out.push_str(
         &engine
-            .render(&mut session, "code.modified", &ctx_named("UserService", 25))
+            .render(&mut session, "code.modified", ctx_named("UserService", 25))
             .unwrap(),
     );
     out.push('\n');
@@ -93,20 +97,25 @@ fn render_corpus(engine: &Engine) -> String {
             .render(
                 &mut session,
                 "code.renamed",
-                &ctx_renamed("UserService", "AccountService", 25, &["A", "B", "C", "D", "E"]),
+                ctx_renamed(
+                    "UserService",
+                    "AccountService",
+                    25,
+                    &["A", "B", "C", "D", "E"],
+                ),
             )
             .unwrap(),
     );
     out.push('\n');
     out.push_str(
         &engine
-            .render(&mut session, "code.modified", &ctx_named("AuthService", 5))
+            .render(&mut session, "code.modified", ctx_named("AuthService", 5))
             .unwrap(),
     );
     out.push('\n');
     out.push_str(
         &engine
-            .render(&mut session, "code.modified", &ctx_named("OrderService", 5))
+            .render(&mut session, "code.modified", ctx_named("OrderService", 5))
             .unwrap(),
     );
     out.push('\n');
@@ -233,15 +242,20 @@ fn no_catalog_profile_regresses_baseline_faithfulness() {
 
         let mut session = Session::new();
         let renders: Vec<Result<String, _>> = vec![
-            engine.render(&mut session, "code.modified", &ctx_named("UserService", 25)),
-            engine.render(&mut session, "code.modified", &ctx_named("UserService", 25)),
+            engine.render(&mut session, "code.modified", ctx_named("UserService", 25)),
+            engine.render(&mut session, "code.modified", ctx_named("UserService", 25)),
             engine.render(
                 &mut session,
                 "code.renamed",
-                &ctx_renamed("UserService", "AccountService", 25, &["A", "B", "C", "D", "E"]),
+                ctx_renamed(
+                    "UserService",
+                    "AccountService",
+                    25,
+                    &["A", "B", "C", "D", "E"],
+                ),
             ),
-            engine.render(&mut session, "code.modified", &ctx_named("AuthService", 5)),
-            engine.render(&mut session, "code.modified", &ctx_named("OrderService", 5)),
+            engine.render(&mut session, "code.modified", ctx_named("AuthService", 5)),
+            engine.render(&mut session, "code.modified", ctx_named("OrderService", 5)),
         ];
 
         for (i, r) in renders.iter().enumerate() {

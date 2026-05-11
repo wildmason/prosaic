@@ -796,10 +796,8 @@ mod has_schema_tests {
     struct Manual;
 
     impl HasProsaicSchema for Manual {
-        const PROSAIC_SCHEMA: &'static [(&'static str, ValueType)] = &[
-            ("count", ValueType::Number),
-            ("name", ValueType::String),
-        ];
+        const PROSAIC_SCHEMA: &'static [(&'static str, ValueType)] =
+            &[("count", ValueType::Number), ("name", ValueType::String)];
     }
 
     #[test]

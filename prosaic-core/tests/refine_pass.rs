@@ -8,7 +8,7 @@
 use prosaic_core::{
     Context, Diagnoser, Diagnostic, DocumentPlan, Engine, LengthDistribution,
     ParagraphOpenerMonotony, RefineConfig, RefineConstraint, RenderedDocument, Salience,
-    SalienceBias, Session, StyleProfile, Strictness, Value, Variation,
+    SalienceBias, Session, Strictness, StyleProfile, Value, Variation,
 };
 use prosaic_grammar_en::English;
 use std::sync::Arc;
@@ -22,10 +22,18 @@ fn engine(refine: bool) -> Engine {
     }
     e.register_template_at("evt.touched", "{name|refer} was touched", Salience::Medium)
         .unwrap();
-    e.register_template_at("evt.modified", "{name|refer} was modified", Salience::Medium)
-        .unwrap();
-    e.register_template_at("evt.renamed", "{name|refer} was renamed to {new_name}", Salience::Medium)
-        .unwrap();
+    e.register_template_at(
+        "evt.modified",
+        "{name|refer} was modified",
+        Salience::Medium,
+    )
+    .unwrap();
+    e.register_template_at(
+        "evt.renamed",
+        "{name|refer} was renamed to {new_name}",
+        Salience::Medium,
+    )
+    .unwrap();
     e
 }
 
@@ -64,12 +72,8 @@ fn build_multi_entity_plan(engine: &Engine) -> DocumentPlan {
 #[test]
 fn refine_off_renders_byte_identical_to_no_refine_path() {
     let plan = build_multi_entity_plan(&engine(false));
-    let off = plan
-        .render(&engine(false), &mut Session::new())
-        .unwrap();
-    let off_again = plan
-        .render(&engine(false), &mut Session::new())
-        .unwrap();
+    let off = plan.render(&engine(false), &mut Session::new()).unwrap();
+    let off_again = plan.render(&engine(false), &mut Session::new()).unwrap();
     assert_eq!(off, off_again);
     assert!(!off.is_empty());
 }
@@ -436,12 +440,8 @@ fn tighten_length_distribution_changes_candidate_scoring() {
             target,
             consumed: std::sync::Mutex::new(false),
         })));
-    e.register_template_at(
-        "evt.modified",
-        "{name|refer} was tweaked",
-        Salience::Medium,
-    )
-    .unwrap();
+    e.register_template_at("evt.modified", "{name|refer} was tweaked", Salience::Medium)
+        .unwrap();
     e.register_template_at(
         "evt.modified",
         "{name|refer} was extensively overhauled across many consumers and dependencies",

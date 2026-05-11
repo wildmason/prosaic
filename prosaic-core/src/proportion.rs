@@ -254,10 +254,7 @@ mod tests {
 
     #[test]
     fn negative_denominator_with_zero_numerator_reads_no_plural() {
-        assert_eq!(
-            english_proportion(&lang(), 0, -4, Some("file")),
-            "no files"
-        );
+        assert_eq!(english_proportion(&lang(), 0, -4, Some("file")), "no files");
     }
 
     #[test]

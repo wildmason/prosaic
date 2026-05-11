@@ -4,7 +4,9 @@
 //! Templates are registered inline so the example is self-contained and
 //! the relationship between input → template → output is visible.
 
-use prosaic_core::{Context, DocumentPlan, Engine, Salience, Session, Strictness, Value, Variation};
+use prosaic_core::{
+    Context, DocumentPlan, Engine, Salience, Session, Strictness, Value, Variation,
+};
 use prosaic_grammar_en::English;
 
 fn ctx(pairs: &[(&str, Value)]) -> Context {
@@ -100,7 +102,10 @@ fn main() {
             (
                 "release.bugfix",
                 ctx(&[
-                    ("description", s("session cookies no longer leak across tenants")),
+                    (
+                        "description",
+                        s("session cookies no longer leak across tenants"),
+                    ),
                     ("issue", n(2148)),
                 ]),
             ),
@@ -281,12 +286,8 @@ fn main() {
         let mut e = Engine::new(English::new())
             .strictness(Strictness::Strict)
             .variation(Variation::Seeded(3));
-        e.register_template_at(
-            "audit.login",
-            "{actor} signed in from {ip}",
-            Salience::Low,
-        )
-        .unwrap();
+        e.register_template_at("audit.login", "{actor} signed in from {ip}", Salience::Low)
+            .unwrap();
         e.register_template_at(
             "audit.permission_grant",
             "{actor} granted {permission} on {resource} to {target}",
@@ -306,12 +307,8 @@ fn main() {
             Salience::High,
         )
         .unwrap();
-        e.register_template_at(
-            "audit.logout",
-            "{actor} signed out",
-            Salience::Low,
-        )
-        .unwrap();
+        e.register_template_at("audit.logout", "{actor} signed out", Salience::Low)
+            .unwrap();
 
         let actor_alice = ctx(&[
             ("actor", s("Alice")),

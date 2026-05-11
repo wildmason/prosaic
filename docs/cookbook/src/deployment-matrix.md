@@ -24,7 +24,7 @@ Every feature is independent and additive. Defaults are `std + time + polish + r
 |--------|---------------|-------|-------|
 | Server (Linux / macOS / Windows) | `default` (+ `serde` if persisting) | `prosaic-core` | Engine is `Send + Sync`; share via `Arc<Engine>` |
 | Multi-threaded batch rendering | `default` + `parallel` | `prosaic-core` | Use `DocumentPlan::render_parallel` for independent paragraphs |
-| CLI tool | `default` + `serde` | `prosaic-cli` | `cargo install prosaic-cli` |
+| CLI tool | `default` + `serde` | `prosaic` | `cargo install prosaic` |
 | Browser WASM | no default | `prosaic-wasm` | `cdylib + rlib`; wraps Engine/Session for JS |
 | Node.js / serverless WASM | no default | `prosaic-wasm` | Same crate — runtime chooses how to import |
 | Embedded / `no_std + alloc` | `default-features = false` (optionally `+ polish + reg`) | `prosaic-core` | `Variation::Random` degrades to `Variation::Fixed`; `{ts\|relative}` requires explicit `engine.reference_time()` |
@@ -52,7 +52,7 @@ Every feature is independent and additive. Defaults are `std + time + polish + r
 
 | Use case | Recommended targets/features | Pattern |
 |----------|------------------------------|---------|
-| CI changelog generator | Server, `default` + `serde`, `prosaic-cli` | `prosaic-cli --preset changelog` |
+| CI changelog generator | Server, `default` + `serde`, `prosaic` | `prosaic --preset changelog` |
 | Release-note bot | Server, `default` + `prosaic-vocab-release` | `Engine::new(English::new())` + `prosaic_vocab_release::register` |
 | Incident narrative pages | Server, `default` + `prosaic-tracing` | Wire `ProsaicLayer` into `tracing_subscriber`; feed events through vocab templates |
 | Browser live-preview | `prosaic-wasm`, no default features | `new ProsaicEngine()` + `engine.render(session, key, ctx)` from JS |
@@ -67,16 +67,16 @@ Every feature is independent and additive. Defaults are `std + time + polish + r
 
 ```toml
 [dependencies]
-prosaic-core = "0.6"
-prosaic-grammar-en = "0.6"
+prosaic-core = "0.6.1"
+prosaic-grammar-en = "0.6.1"
 ```
 
 ### Size-optimized embedded build
 
 ```toml
 [dependencies]
-prosaic-core = { version = "0.6", default-features = false, features = ["reg"] }
-prosaic-grammar-en = "0.6"
+prosaic-core = { version = "0.6.1", default-features = false, features = ["reg"] }
+prosaic-grammar-en = "0.6.1"
 ```
 
 `std`, `time`, `polish` disabled. `reg` kept for `{name|refer}`. No
@@ -86,7 +86,7 @@ prosaic-grammar-en = "0.6"
 
 ```toml
 [dependencies]
-prosaic-wasm = "0.6"
+prosaic-wasm = "0.6.1"
 ```
 
 Build with `wasm-pack build` or `cargo build --target wasm32-unknown-unknown
@@ -97,19 +97,19 @@ supports Rust-side unit tests.
 
 ```toml
 [dependencies]
-prosaic-core = { version = "0.6", features = ["serde"] }
-prosaic-grammar-en = "0.6"
-prosaic-grammar-es = "0.6"
-prosaic-grammar-de = "0.6"
-prosaic-vocab-release = "0.6"
+prosaic-core = { version = "0.6.1", features = ["serde"] }
+prosaic-grammar-en = "0.6.1"
+prosaic-grammar-es = "0.6.1"
+prosaic-grammar-de = "0.6.1"
+prosaic-vocab-release = "0.6.1"
 ```
 
 ### Parallel batch pipeline
 
 ```toml
 [dependencies]
-prosaic-core = { version = "0.6", features = ["parallel"] }
-prosaic-grammar-en = "0.6"
+prosaic-core = { version = "0.6.1", features = ["parallel"] }
+prosaic-grammar-en = "0.6.1"
 ```
 
 ## Engine threading model
@@ -143,11 +143,11 @@ cargo build --target wasm32-unknown-unknown -p prosaic-wasm --release
 
 ## CLI binary size
 
-Release build of `prosaic-cli` is approximately 2 MB on Linux x86-64 with
+Release build of the `prosaic` CLI is approximately 2 MB on Linux x86-64 with
 `opt-level = "z"` and `lto = true`. Dominant contributors are the grammar
 tables in `prosaic-grammar-en` and serde codegen. Stripping reduces further:
 
 ```sh
-cargo build --release -p prosaic-cli
+cargo build --release -p prosaic
 strip target/release/prosaic
 ```

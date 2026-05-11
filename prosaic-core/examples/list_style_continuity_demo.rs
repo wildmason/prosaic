@@ -43,10 +43,7 @@ fn build_plan() -> DocumentPlan {
     plan
 }
 
-fn render_simulating_old_full_reset_per_paragraph(
-    engine: &Engine,
-    plan: &DocumentPlan,
-) -> String {
+fn render_simulating_old_full_reset_per_paragraph(engine: &Engine, plan: &DocumentPlan) -> String {
     // Simulates the old behavior: a hard `Session::reset` between paragraphs,
     // wiping the list-style cycle. Renders each paragraph in isolation.
     let mut session = Session::new();
@@ -67,7 +64,10 @@ fn main() {
     let plan = build_plan();
 
     println!("=== BEFORE FIX (full reset per paragraph) ===\n");
-    println!("{}", render_simulating_old_full_reset_per_paragraph(&engine, &plan));
+    println!(
+        "{}",
+        render_simulating_old_full_reset_per_paragraph(&engine, &plan)
+    );
 
     println!("\n=== AFTER FIX (paragraph-scoped reset preserves cycle) ===\n");
     let mut session = Session::new();

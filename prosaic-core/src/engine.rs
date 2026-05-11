@@ -420,21 +420,18 @@ impl<'e, 's> RenderCtx<'e, 's> {
             let prefer_owned: Option<Vec<(&str, f32)>> = rst_key
                 .and_then(|rst| prefs.preferred.get(&rst))
                 .map(|v| v.iter().map(|(s, w)| (s.as_str(), *w)).collect());
-            let forbid_owned: Option<Vec<&str>> = if self
-                .session
-                .refine_blacklist_connectives
-                .is_empty()
-            {
-                None
-            } else {
-                Some(
-                    self.session
-                        .refine_blacklist_connectives
-                        .iter()
-                        .map(String::as_str)
-                        .collect(),
-                )
-            };
+            let forbid_owned: Option<Vec<&str>> =
+                if self.session.refine_blacklist_connectives.is_empty() {
+                    None
+                } else {
+                    Some(
+                        self.session
+                            .refine_blacklist_connectives
+                            .iter()
+                            .map(String::as_str)
+                            .collect(),
+                    )
+                };
             self.session.discourse.select_connective_filtered(
                 &relation,
                 allow_owned.as_deref(),
@@ -567,11 +564,7 @@ impl<'e, 's> RenderCtx<'e, 's> {
             .refine_length_distribution
             .as_ref()
             .unwrap_or(&self.engine.style_profile.sentence_length);
-        score += profile_length_bias_score(
-            candidate,
-            &self.session.discourse,
-            target_distribution,
-        );
+        score += profile_length_bias_score(candidate, &self.session.discourse, target_distribution);
         score
     }
 
@@ -910,8 +903,14 @@ impl<'e, 's> RenderCtx<'e, 's> {
 
         let form = self.session.discourse.reference_form_with_density(
             &name,
-            matches!(self.engine.style_profile.pronoun_density, crate::style::PronounDensity::Low),
-            matches!(self.engine.style_profile.pronoun_density, crate::style::PronounDensity::High),
+            matches!(
+                self.engine.style_profile.pronoun_density,
+                crate::style::PronounDensity::Low
+            ),
+            matches!(
+                self.engine.style_profile.pronoun_density,
+                crate::style::PronounDensity::High
+            ),
         );
 
         let rendered = match form {
@@ -936,8 +935,14 @@ impl<'e, 's> RenderCtx<'e, 's> {
         let name = value.as_display();
         let form = self.session.discourse.reference_form_with_density(
             &name,
-            matches!(self.engine.style_profile.pronoun_density, crate::style::PronounDensity::Low),
-            matches!(self.engine.style_profile.pronoun_density, crate::style::PronounDensity::High),
+            matches!(
+                self.engine.style_profile.pronoun_density,
+                crate::style::PronounDensity::Low
+            ),
+            matches!(
+                self.engine.style_profile.pronoun_density,
+                crate::style::PronounDensity::High
+            ),
         );
         let rendered = match form {
             ReferenceForm::Pronoun | ReferenceForm::Demonstrative | ReferenceForm::Zero => {
@@ -1156,7 +1161,8 @@ impl<'e, 's> RenderCtx<'e, 's> {
                 s
             }
             None => {
-                let mut bias_target = list_style_bias_target(self.engine.style_profile.list_style_bias);
+                let mut bias_target =
+                    list_style_bias_target(self.engine.style_profile.list_style_bias);
                 // If a refine blacklist is active and includes the bias
                 // target, drop the bias for this render so the cycle's
                 // anti-repeat naturally lands on something else.
@@ -1165,7 +1171,10 @@ impl<'e, 's> RenderCtx<'e, 's> {
                 {
                     bias_target = None;
                 }
-                let chosen = self.session.discourse.next_list_style_with_bias(bias_target);
+                let chosen = self
+                    .session
+                    .discourse
+                    .next_list_style_with_bias(bias_target);
                 // If anti-repeat picked a blacklisted style anyway (e.g.,
                 // the recent window forced its hand), advance the cycle
                 // until we find a non-blacklisted slot. Worst case the
@@ -2741,11 +2750,9 @@ impl Engine {
                         &context,
                     ) {
                         Ok(()) => {
-                            let mut score =
-                                scoring_session.discourse.repetition_score(&scratch);
+                            let mut score = scoring_session.discourse.repetition_score(&scratch);
                             if self.sentence_rhythm_enabled {
-                                score +=
-                                    scoring_session.discourse.sentence_rhythm_score(&scratch);
+                                score += scoring_session.discourse.sentence_rhythm_score(&scratch);
                             }
                             scored.push(score);
                         }
@@ -2768,8 +2775,14 @@ impl Engine {
         let reference_form = entity_name.as_ref().map(|n| {
             session.discourse.reference_form_with_density(
                 n,
-                matches!(self.style_profile.pronoun_density, crate::style::PronounDensity::Low),
-                matches!(self.style_profile.pronoun_density, crate::style::PronounDensity::High),
+                matches!(
+                    self.style_profile.pronoun_density,
+                    crate::style::PronounDensity::Low
+                ),
+                matches!(
+                    self.style_profile.pronoun_density,
+                    crate::style::PronounDensity::High
+                ),
             )
         });
 
@@ -4024,9 +4037,7 @@ fn hedge_with_calibration(
 }
 
 fn is_forbidden(candidate: &str, forbid: &[String]) -> bool {
-    forbid
-        .iter()
-        .any(|f| f.eq_ignore_ascii_case(candidate))
+    forbid.iter().any(|f| f.eq_ignore_ascii_case(candidate))
 }
 
 /// Map a `ListStyleBias` dial onto a concrete `ListStyle` target, or
@@ -4047,7 +4058,9 @@ fn list_style_bias_target(bias: crate::style::ListStyleBias) -> Option<ListStyle
 /// `StyleProfile.connectives` lookup. The internal relation taxonomy
 /// (continuation / similarity / contrast) is coarser than the RST
 /// taxonomy; this is the canonical bridge between them.
-fn rst_for_discourse(relation: &crate::discourse::DiscourseRelation) -> Option<crate::rst::RstRelation> {
+fn rst_for_discourse(
+    relation: &crate::discourse::DiscourseRelation,
+) -> Option<crate::rst::RstRelation> {
     match relation {
         crate::discourse::DiscourseRelation::SameEntityDifferentAction => {
             Some(crate::rst::RstRelation::Elaboration)

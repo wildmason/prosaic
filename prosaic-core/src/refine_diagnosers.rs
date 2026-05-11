@@ -8,13 +8,11 @@
 //! [`RefineConfig::balanced`].
 
 #[cfg(not(feature = "std"))]
-use alloc::string::{String, ToString};
+use alloc::string::String;
 #[cfg(not(feature = "std"))]
 use alloc::vec;
 #[cfg(not(feature = "std"))]
 use alloc::vec::Vec;
-#[cfg(not(feature = "std"))]
-use alloc::format;
 
 use crate::discourse::ListStyle;
 use crate::refine::{Diagnoser, Diagnostic, RefineConstraint, RenderedDocument};
@@ -232,9 +230,7 @@ impl Diagnoser for RstRelationImbalance {
         let classified: Vec<(String, RstRelation)> = document
             .connectives_used
             .iter()
-            .filter_map(|c| {
-                classify(&c.connective).map(|(_, rst)| (c.connective.clone(), rst))
-            })
+            .filter_map(|c| classify(&c.connective).map(|(_, rst)| (c.connective.clone(), rst)))
             .collect();
         if classified.len() < self.min_emissions {
             return Vec::new();
@@ -373,8 +369,7 @@ impl Diagnoser for ConnectiveFamilySaturation {
         document: &RenderedDocument,
         _profile: Option<&StyleProfile>,
     ) -> Vec<Diagnostic> {
-        let mut by_family =
-            alloc::collections::BTreeMap::<ConnectorFamily, Vec<String>>::new();
+        let mut by_family = alloc::collections::BTreeMap::<ConnectorFamily, Vec<String>>::new();
         for u in &document.connectives_used {
             if let Some((family, _)) = classify(&u.connective) {
                 by_family
@@ -727,12 +722,8 @@ mod tests {
 
     #[test]
     fn connective_family_saturation_silent_at_budget() {
-        let doc = doc_with_connectives(&[
-            "Additionally,",
-            "Additionally,",
-            "Furthermore,",
-            "It also",
-        ]);
+        let doc =
+            doc_with_connectives(&["Additionally,", "Additionally,", "Furthermore,", "It also"]);
         let d = ConnectiveFamilySaturation::default().diagnose(&doc, None);
         assert!(d.is_empty());
     }

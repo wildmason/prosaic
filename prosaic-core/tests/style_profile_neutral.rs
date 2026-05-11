@@ -144,13 +144,13 @@ fn render_corpus(engine: &Engine) -> String {
     // for full → short → pronoun reference transitions).
     out.push_str(
         &engine
-            .render(&mut session, "code.modified", &ctx_modified("UserService"))
+            .render(&mut session, "code.modified", ctx_modified("UserService"))
             .unwrap(),
     );
     out.push('\n');
     out.push_str(
         &engine
-            .render(&mut session, "code.modified", &ctx_modified("UserService"))
+            .render(&mut session, "code.modified", ctx_modified("UserService"))
             .unwrap(),
     );
     out.push('\n');
@@ -159,7 +159,7 @@ fn render_corpus(engine: &Engine) -> String {
             .render(
                 &mut session,
                 "code.renamed",
-                &ctx_renamed(
+                ctx_renamed(
                     "UserService",
                     "AccountService",
                     25, // High salience tier
@@ -174,13 +174,13 @@ fn render_corpus(engine: &Engine) -> String {
     // discourse relation; exercises connective selection).
     out.push_str(
         &engine
-            .render(&mut session, "code.modified", &ctx_modified("AuthService"))
+            .render(&mut session, "code.modified", ctx_modified("AuthService"))
             .unwrap(),
     );
     out.push('\n');
     out.push_str(
         &engine
-            .render(&mut session, "code.modified", &ctx_modified("OrderService"))
+            .render(&mut session, "code.modified", ctx_modified("OrderService"))
             .unwrap(),
     );
     out.push('\n');
@@ -192,7 +192,7 @@ fn render_corpus(engine: &Engine) -> String {
                 .render(
                     &mut session,
                     "code.unstable",
-                    &ctx_unstable("UserService", conf),
+                    ctx_unstable("UserService", conf),
                 )
                 .unwrap(),
         );
@@ -205,7 +205,7 @@ fn render_corpus(engine: &Engine) -> String {
             .render(
                 &mut session,
                 "code.renamed",
-                &ctx_renamed("OrderService", "BillingService", 0, &[]),
+                ctx_renamed("OrderService", "BillingService", 0, &[]),
             )
             .unwrap(),
     );

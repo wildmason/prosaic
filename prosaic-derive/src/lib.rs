@@ -253,7 +253,6 @@ fn value_type_for_rust_type(ty: &Type) -> Option<proc_macro2::TokenStream> {
 
 // ── prosaic_template! ──────────────────────────────────────────────────────────
 
-
 /// Compile-time-validated template string.
 ///
 /// Parses the template, checks every slot reference against the declared
@@ -349,13 +348,15 @@ impl Parse for ProsaicTemplateInput {
             .ok_or_else(|| syn::Error::new(input.span(), "missing `template: \"...\"` argument"))?;
         let slots = slots.unwrap_or_default();
 
-        Ok(ProsaicTemplateInput { template, slots, context })
+        Ok(ProsaicTemplateInput {
+            template,
+            slots,
+            context,
+        })
     }
 }
 
-fn validate_template(
-    input: &ProsaicTemplateInput,
-) -> syn::Result<proc_macro2::TokenStream> {
+fn validate_template(input: &ProsaicTemplateInput) -> syn::Result<proc_macro2::TokenStream> {
     let template_str = input.template.value();
     let span = input.template.span();
 
@@ -456,7 +457,11 @@ fn validate_pipes(template: &prosaic_core::Template, span: proc_macro2::Span) ->
     let used = template.pipe_names();
     let mut unknown: Vec<String> = used
         .into_iter()
-        .filter(|p| !prosaic_core::PIPE_SPECS.iter().any(|spec| spec.name == p.as_str()))
+        .filter(|p| {
+            !prosaic_core::PIPE_SPECS
+                .iter()
+                .any(|spec| spec.name == p.as_str())
+        })
         .collect();
     unknown.sort();
     unknown.dedup();
@@ -485,7 +490,10 @@ fn validate_pipes(template: &prosaic_core::Template, span: proc_macro2::Span) ->
 fn nearest_pipe(unknown: &str) -> Option<&'static str> {
     let mut names = prosaic_core::PIPE_SPECS.iter().map(|s| s.name);
     // Exact prefix / suffix match first (catches common truncations).
-    if let Some(valid) = names.clone().find(|&v| v.starts_with(unknown) || unknown.starts_with(v)) {
+    if let Some(valid) = names
+        .clone()
+        .find(|&v| v.starts_with(unknown) || unknown.starts_with(v))
+    {
         return Some(valid);
     }
     // Fallback: any pipe sharing the first three characters.

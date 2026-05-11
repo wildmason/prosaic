@@ -7,7 +7,7 @@ strategy.
 ## Install
 
 ```sh
-cargo install prosaic-cli
+cargo install prosaic
 ```
 
 ## One-liner

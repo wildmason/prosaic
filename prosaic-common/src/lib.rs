@@ -102,26 +102,106 @@ pub struct PipeSpec {
 // identically when reviewed side by side. Lookup is a linear scan so
 // order has no behavioral impact — this is purely for maintainability.
 pub const PIPE_SPECS: &[PipeSpec] = &[
-    PipeSpec { name: "plural",        input: ValueType::Number, output: ValueType::String },
-    PipeSpec { name: "pluralize",     input: ValueType::Number, output: ValueType::String },
-    PipeSpec { name: "article",       input: ValueType::Any,    output: ValueType::String },
-    PipeSpec { name: "join",          input: ValueType::List,   output: ValueType::String },
-    PipeSpec { name: "ordinal",       input: ValueType::Number, output: ValueType::String },
-    PipeSpec { name: "words",         input: ValueType::Number, output: ValueType::String },
-    PipeSpec { name: "truncate",      input: ValueType::List,   output: ValueType::List   },
-    PipeSpec { name: "capitalize",    input: ValueType::Any,    output: ValueType::String },
-    PipeSpec { name: "refer",         input: ValueType::Any,    output: ValueType::String },
-    PipeSpec { name: "possessive",    input: ValueType::Any,    output: ValueType::String },
-    PipeSpec { name: "verb",          input: ValueType::Any,    output: ValueType::String },
-    PipeSpec { name: "syn",           input: ValueType::Any,    output: ValueType::String },
-    PipeSpec { name: "relative",      input: ValueType::Number, output: ValueType::String },
-    PipeSpec { name: "since_last",    input: ValueType::Number, output: ValueType::String },
-    PipeSpec { name: "quantify",      input: ValueType::Number, output: ValueType::String },
-    PipeSpec { name: "proportion",    input: ValueType::Number, output: ValueType::String },
-    PipeSpec { name: "hedge",         input: ValueType::Number, output: ValueType::String },
-    PipeSpec { name: "negated",       input: ValueType::Any,    output: ValueType::String },
-    PipeSpec { name: "choose",        input: ValueType::Any,    output: ValueType::String },
-    PipeSpec { name: "demonstrative", input: ValueType::Any,    output: ValueType::String },
+    PipeSpec {
+        name: "plural",
+        input: ValueType::Number,
+        output: ValueType::String,
+    },
+    PipeSpec {
+        name: "pluralize",
+        input: ValueType::Number,
+        output: ValueType::String,
+    },
+    PipeSpec {
+        name: "article",
+        input: ValueType::Any,
+        output: ValueType::String,
+    },
+    PipeSpec {
+        name: "join",
+        input: ValueType::List,
+        output: ValueType::String,
+    },
+    PipeSpec {
+        name: "ordinal",
+        input: ValueType::Number,
+        output: ValueType::String,
+    },
+    PipeSpec {
+        name: "words",
+        input: ValueType::Number,
+        output: ValueType::String,
+    },
+    PipeSpec {
+        name: "truncate",
+        input: ValueType::List,
+        output: ValueType::List,
+    },
+    PipeSpec {
+        name: "capitalize",
+        input: ValueType::Any,
+        output: ValueType::String,
+    },
+    PipeSpec {
+        name: "refer",
+        input: ValueType::Any,
+        output: ValueType::String,
+    },
+    PipeSpec {
+        name: "possessive",
+        input: ValueType::Any,
+        output: ValueType::String,
+    },
+    PipeSpec {
+        name: "verb",
+        input: ValueType::Any,
+        output: ValueType::String,
+    },
+    PipeSpec {
+        name: "syn",
+        input: ValueType::Any,
+        output: ValueType::String,
+    },
+    PipeSpec {
+        name: "relative",
+        input: ValueType::Number,
+        output: ValueType::String,
+    },
+    PipeSpec {
+        name: "since_last",
+        input: ValueType::Number,
+        output: ValueType::String,
+    },
+    PipeSpec {
+        name: "quantify",
+        input: ValueType::Number,
+        output: ValueType::String,
+    },
+    PipeSpec {
+        name: "proportion",
+        input: ValueType::Number,
+        output: ValueType::String,
+    },
+    PipeSpec {
+        name: "hedge",
+        input: ValueType::Number,
+        output: ValueType::String,
+    },
+    PipeSpec {
+        name: "negated",
+        input: ValueType::Any,
+        output: ValueType::String,
+    },
+    PipeSpec {
+        name: "choose",
+        input: ValueType::Any,
+        output: ValueType::String,
+    },
+    PipeSpec {
+        name: "demonstrative",
+        input: ValueType::Any,
+        output: ValueType::String,
+    },
 ];
 
 /// Returns `true` when a value of type `actual` can satisfy a slot or
@@ -167,10 +247,7 @@ pub const fn pipe_spec(name: &str) -> Option<&'static PipeSpec> {
 ///
 /// Matching is byte-exact and case-sensitive. If the schema contains
 /// duplicate keys, the first entry wins.
-pub const fn schema_lookup(
-    schema: &[(&str, ValueType)],
-    slot: &str,
-) -> Option<ValueType> {
+pub const fn schema_lookup(schema: &[(&str, ValueType)], slot: &str) -> Option<ValueType> {
     let mut i = 0;
     while i < schema.len() {
         if byte_eq(schema[i].0.as_bytes(), slot.as_bytes()) {
@@ -252,7 +329,9 @@ mod pipe_spec_tests {
         // Verify both const evaluation worked AND returned the right data.
         // Using matches! lets us destructure inside a const-context assertion
         // without relying on PartialEq on references.
-        assert!(matches!(SPEC, Some(s) if s.input == ValueType::Number && s.output == ValueType::String));
+        assert!(
+            matches!(SPEC, Some(s) if s.input == ValueType::Number && s.output == ValueType::String)
+        );
     }
 
     #[test]
@@ -365,10 +444,7 @@ mod schema_lookup_tests {
         // Documents the first-match contract — if a schema contains
         // duplicate keys (shouldn't happen with the derive but could with
         // hand-authored impls), the first entry wins.
-        const DUPE: &[(&str, ValueType)] = &[
-            ("x", ValueType::Number),
-            ("x", ValueType::String),
-        ];
+        const DUPE: &[(&str, ValueType)] = &[("x", ValueType::Number), ("x", ValueType::String)];
         assert_eq!(schema_lookup(DUPE, "x"), Some(ValueType::Number));
     }
 

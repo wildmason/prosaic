@@ -99,10 +99,8 @@ impl Session {
         connectives: &[String],
         list_styles: &[crate::discourse::ListStyle],
     ) {
-        self.discourse
-            .prime_connective_history(connectives);
-        self.discourse
-            .prime_list_style_history(list_styles);
+        self.discourse.prime_connective_history(connectives);
+        self.discourse.prime_list_style_history(list_styles);
     }
 
     /// Set the refine-pass salience-bias override. `None` clears it.
@@ -121,10 +119,7 @@ impl Session {
 
     /// Set the refine-pass forced-variant-tier mapping. Replaces any
     /// existing mapping wholesale.
-    pub(crate) fn set_refine_force_variant_tiers(
-        &mut self,
-        tiers: Vec<(String, Salience)>,
-    ) {
+    pub(crate) fn set_refine_force_variant_tiers(&mut self, tiers: Vec<(String, Salience)>) {
         self.refine_force_variant_tier = tiers;
     }
 

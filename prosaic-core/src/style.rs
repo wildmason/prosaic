@@ -12,7 +12,7 @@
 //! full design rationale and the resolved decisions on each dial.
 
 #[cfg(not(feature = "std"))]
-use alloc::string::{String, ToString};
+use alloc::string::String;
 #[cfg(not(feature = "std"))]
 use alloc::vec::Vec;
 
@@ -429,8 +429,7 @@ impl StyleProfileBuilder {
         relation: RstRelation,
         weights: impl IntoIterator<Item = (impl Into<String>, f32)>,
     ) -> Self {
-        let weights: Vec<(String, f32)> =
-            weights.into_iter().map(|(s, w)| (s.into(), w)).collect();
+        let weights: Vec<(String, f32)> = weights.into_iter().map(|(s, w)| (s.into(), w)).collect();
         self.profile.connectives.preferred.insert(relation, weights);
         self
     }
@@ -578,7 +577,9 @@ mod tests {
 
     #[test]
     fn neutral_validates() {
-        StyleProfile::neutral().validate().expect("neutral must validate");
+        StyleProfile::neutral()
+            .validate()
+            .expect("neutral must validate");
     }
 
     #[test]

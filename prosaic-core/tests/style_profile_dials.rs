@@ -61,7 +61,10 @@ fn verbosity_terse_picks_lowest_tier_below_context_salience() {
             .unwrap(),
     );
     let out = render(&engine, ctx_with_count(5));
-    assert!(out.starts_with("TERSE:"), "expected Low-tier variant; got {out:?}");
+    assert!(
+        out.starts_with("TERSE:"),
+        "expected Low-tier variant; got {out:?}"
+    );
 }
 
 #[test]
@@ -75,14 +78,20 @@ fn verbosity_verbose_picks_higher_tier_above_context_salience() {
             .unwrap(),
     );
     let out = render(&engine, ctx_with_count(5));
-    assert!(out.starts_with("VERBOSE:"), "expected High-tier variant; got {out:?}");
+    assert!(
+        out.starts_with("VERBOSE:"),
+        "expected High-tier variant; got {out:?}"
+    );
 }
 
 #[test]
 fn verbosity_neutral_picks_context_tier_unchanged() {
     let engine = engine_with(StyleProfile::neutral());
     let out = render(&engine, ctx_with_count(5));
-    assert!(out.starts_with("MEDIUM:"), "expected Medium-tier variant; got {out:?}");
+    assert!(
+        out.starts_with("MEDIUM:"),
+        "expected Medium-tier variant; got {out:?}"
+    );
 }
 
 #[test]
@@ -95,7 +104,10 @@ fn verbosity_terse_at_low_tier_stays_low() {
             .unwrap(),
     );
     let out = render(&engine, ctx_with_count(0));
-    assert!(out.starts_with("TERSE:"), "expected Low-tier variant; got {out:?}");
+    assert!(
+        out.starts_with("TERSE:"),
+        "expected Low-tier variant; got {out:?}"
+    );
 }
 
 #[test]
@@ -108,7 +120,10 @@ fn verbosity_verbose_at_high_tier_stays_high() {
             .unwrap(),
     );
     let out = render(&engine, ctx_with_count(50));
-    assert!(out.starts_with("VERBOSE:"), "expected High-tier variant; got {out:?}");
+    assert!(
+        out.starts_with("VERBOSE:"),
+        "expected High-tier variant; got {out:?}"
+    );
 }
 
 // ── ListStyleBias ───────────────────────────────────────────────────────
@@ -138,7 +153,7 @@ fn render_list_once(engine: &Engine) -> String {
         .render(
             &mut session,
             "evt",
-            &ctx_with_items(&["A", "B", "C", "D", "E", "F", "G"]),
+            ctx_with_items(&["A", "B", "C", "D", "E", "F", "G"]),
         )
         .unwrap()
 }
@@ -209,10 +224,9 @@ fn connective_preferences_compose_with_seeded_variation() {
     // to connectives only, so multi-template variant selection still rotates
     // under seeded scoring while connectives stay constrained.
     let mut prefs = ConnectivePreferences::neutral();
-    prefs.allowed.insert(
-        RstRelation::Elaboration,
-        vec!["Furthermore,".to_string()],
-    );
+    prefs
+        .allowed
+        .insert(RstRelation::Elaboration, vec!["Furthermore,".to_string()]);
     let mut engine = Engine::new(English::new())
         .variation(Variation::Seeded(7))
         .style_profile(
@@ -233,10 +247,10 @@ fn connective_preferences_compose_with_seeded_variation() {
 
     let mut session = Session::new();
     engine
-        .render(&mut session, "code.modified", &ctx_class("UserService"))
+        .render(&mut session, "code.modified", ctx_class("UserService"))
         .unwrap();
     let second = engine
-        .render(&mut session, "code.renamed", &ctx_class("UserService"))
+        .render(&mut session, "code.renamed", ctx_class("UserService"))
         .unwrap();
     assert!(
         second.starts_with("Furthermore,"),
@@ -247,10 +261,9 @@ fn connective_preferences_compose_with_seeded_variation() {
 #[test]
 fn multi_dial_profile_render_is_deterministic_across_repeats() {
     let mut prefs = ConnectivePreferences::neutral();
-    prefs.allowed.insert(
-        RstRelation::Elaboration,
-        vec!["Furthermore,".to_string()],
-    );
+    prefs
+        .allowed
+        .insert(RstRelation::Elaboration, vec!["Furthermore,".to_string()]);
     let profile = StyleProfile::builder("kitchen-sink")
         .verbosity(Verbosity::Terse)
         .salience(SalienceBias::Higher)
@@ -396,7 +409,10 @@ fn hedging_offset_shifts_bucket_upward() {
     );
     // confidence=60 (probable=probably). With +20 offset → 80 → likely.
     let out = render_hedge(&engine, 60);
-    assert!(out.contains("likely"), "expected likely under +20 offset; got {out:?}");
+    assert!(
+        out.contains("likely"),
+        "expected likely under +20 offset; got {out:?}"
+    );
 }
 
 #[test]
@@ -409,7 +425,10 @@ fn hedging_offset_shifts_bucket_downward() {
     );
     // confidence=60 (probable=probably). With -30 offset → 30 → possibly.
     let out = render_hedge(&engine, 60);
-    assert!(out.contains("possibly"), "expected possibly under -30 offset; got {out:?}");
+    assert!(
+        out.contains("possibly"),
+        "expected possibly under -30 offset; got {out:?}"
+    );
 }
 
 #[test]
@@ -533,17 +552,20 @@ fn ctx_class(name: &str) -> Context {
 
 fn render_same_entity_different_action(engine: &Engine) -> String {
     let mut session = Session::new();
-    engine.render(&mut session, "code.modified", &ctx_class("UserService")).unwrap();
-    engine.render(&mut session, "code.renamed", &ctx_class("UserService")).unwrap()
+    engine
+        .render(&mut session, "code.modified", ctx_class("UserService"))
+        .unwrap();
+    engine
+        .render(&mut session, "code.renamed", ctx_class("UserService"))
+        .unwrap()
 }
 
 #[test]
 fn connective_allowed_filter_picks_only_listed_pool_member() {
     let mut prefs = ConnectivePreferences::neutral();
-    prefs.allowed.insert(
-        RstRelation::Elaboration,
-        vec!["Furthermore,".to_string()],
-    );
+    prefs
+        .allowed
+        .insert(RstRelation::Elaboration, vec!["Furthermore,".to_string()]);
     let engine = engine_for_connectives(
         StyleProfile::builder("furth")
             .connectives(prefs)
@@ -573,10 +595,9 @@ fn connective_preferred_weight_biases_within_full_pool() {
     // Apply heavy weight to the third pool entry. With Variation::Fixed and
     // an empty connective_history, all three candidates have equal distance
     // — preferred-weight breaks the tie toward "It also".
-    prefs.preferred.insert(
-        RstRelation::Elaboration,
-        vec![("It also".to_string(), 1.0)],
-    );
+    prefs
+        .preferred
+        .insert(RstRelation::Elaboration, vec![("It also".to_string(), 1.0)]);
     let engine = engine_for_connectives(
         StyleProfile::builder("italso")
             .connectives(prefs)
@@ -595,10 +616,9 @@ fn connective_filter_emptying_pool_falls_back_to_base() {
     // Allowed pool that doesn't intersect the base pool at all — engine
     // must fall back to the base pool rather than emit no connective.
     let mut prefs = ConnectivePreferences::neutral();
-    prefs.allowed.insert(
-        RstRelation::Elaboration,
-        vec!["NotInPool".to_string()],
-    );
+    prefs
+        .allowed
+        .insert(RstRelation::Elaboration, vec!["NotInPool".to_string()]);
     let engine = engine_for_connectives(
         StyleProfile::builder("missing")
             .connectives(prefs)
@@ -619,9 +639,7 @@ fn engine_for_length(profile: StyleProfile) -> Engine {
         .variation(Variation::Seeded(42))
         .style_profile(profile);
     engine.register_template("warm", "ok").unwrap();
-    engine
-        .register_template("evt", "Short {name}")
-        .unwrap();
+    engine.register_template("evt", "Short {name}").unwrap();
     engine
         .register_template(
             "evt",
@@ -641,8 +659,12 @@ fn ctx_named(name: &str) -> Context {
 fn render_two(engine: &Engine) -> String {
     let mut session = Session::new();
     // Warmup populates rhythm history so choose-best fires on the next call.
-    engine.render(&mut session, "warm", &ctx_named("UserService")).unwrap();
-    engine.render(&mut session, "evt", &ctx_named("UserService")).unwrap()
+    engine
+        .render(&mut session, "warm", ctx_named("UserService"))
+        .unwrap();
+    engine
+        .render(&mut session, "evt", ctx_named("UserService"))
+        .unwrap()
 }
 
 #[test]
@@ -819,7 +841,10 @@ fn verbosity_terse_falls_through_to_medium_when_low_tier_missing() {
 
     let mut session = Session::new();
     let out = engine
-        .render(&mut session, "evt", &ctx_with_count(5))
+        .render(&mut session, "evt", ctx_with_count(5))
         .unwrap();
-    assert!(out.starts_with("MEDIUM:"), "expected Medium fallback; got {out:?}");
+    assert!(
+        out.starts_with("MEDIUM:"),
+        "expected Medium fallback; got {out:?}"
+    );
 }

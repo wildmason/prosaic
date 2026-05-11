@@ -3,11 +3,12 @@ name = "prosaic-vocab-git"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 description = "Git / VCS activity vocabulary module for the prosaic crate (commits, PRs, issues, reviews, releases)"
 
 [dependencies]
-prosaic-core = { path = "../prosaic-core" }
+prosaic-core = { version = "0.6.1", path = "../prosaic-core" }
 
 [dev-dependencies]
-prosaic-grammar-en = { path = "../prosaic-grammar-en" }
-prosaic-grammar-es = { path = "../prosaic-grammar-es" }
+prosaic-grammar-en = { version = "0.6.1", path = "../prosaic-grammar-en" }
+prosaic-grammar-es = { version = "0.6.1", path = "../prosaic-grammar-es" }

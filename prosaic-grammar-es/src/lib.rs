@@ -189,7 +189,9 @@ impl Language for Spanish {
             "Si esto ocurre,",
             "En resumen,",
         ];
-        SPANISH_OPENERS.iter().any(|opener| text.starts_with(opener))
+        SPANISH_OPENERS
+            .iter()
+            .any(|opener| text.starts_with(opener))
     }
 
     #[cfg(feature = "time")]
@@ -811,10 +813,7 @@ mod tests {
     fn proportion_no_noun_two_two_masc_default() {
         let es = Spanish::new();
         // Without noun and without explicit gender, default to masc.
-        assert_eq!(
-            es.proportion_phrase(2, 2, None, &no_features()),
-            "ambos"
-        );
+        assert_eq!(es.proportion_phrase(2, 2, None, &no_features()), "ambos");
     }
 
     #[test]
@@ -845,10 +844,7 @@ mod tests {
         // Caller explicitly sets fem; the noun's masc ending is overridden.
         let es = Spanish::new();
         let f = AgreementFeatures::default().with_gender(Gender::Fem);
-        assert_eq!(
-            es.proportion_phrase(2, 2, Some("foo"), &f),
-            "ambas foos"
-        );
+        assert_eq!(es.proportion_phrase(2, 2, Some("foo"), &f), "ambas foos");
     }
 
     // ── Send + Sync assertion ─────────────────────────────────────────────────

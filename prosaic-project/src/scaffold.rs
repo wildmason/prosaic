@@ -20,7 +20,9 @@ impl std::str::FromStr for Starter {
             "blank" => Ok(Self::Blank),
             "changelog" => Ok(Self::Changelog),
             "vocab-pack" => Ok(Self::VocabPack),
-            other => Err(format!("unknown starter `{other}`; expected: blank | changelog | vocab-pack")),
+            other => Err(format!(
+                "unknown starter `{other}`; expected: blank | changelog | vocab-pack"
+            )),
         }
     }
 }

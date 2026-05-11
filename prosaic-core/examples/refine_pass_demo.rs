@@ -22,7 +22,9 @@ fn main() {
     println!("=== refine: off (baseline) ===");
     let off = build_engine(false);
     let off_plan = DocumentPlan::from_events(&events, &off);
-    let off_text = off_plan.render_structured(&off, &mut Session::new()).unwrap();
+    let off_text = off_plan
+        .render_structured(&off, &mut Session::new())
+        .unwrap();
     println!("{}", off_text.text);
 
     println!();

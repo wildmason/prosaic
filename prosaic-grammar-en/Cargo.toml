@@ -3,7 +3,8 @@ name = "prosaic-grammar-en"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 description = "English grammar implementation for the prosaic crate"
 
 [dependencies]
-prosaic-core = { path = "../prosaic-core" }
+prosaic-core = { version = "0.6.1", path = "../prosaic-core" }

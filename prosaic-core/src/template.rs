@@ -464,10 +464,7 @@ fn parse_pipe(content: &str, source: &str, position: usize) -> Result<Pipe, Pros
     }
 }
 
-fn infer_segments(
-    segments: &[Segment],
-    out: &mut Vec<(String, ValueType)>,
-) -> Result<(), String> {
+fn infer_segments(segments: &[Segment], out: &mut Vec<(String, ValueType)>) -> Result<(), String> {
     for seg in segments {
         match seg {
             Segment::Literal(_) | Segment::Partial { .. } => {}
@@ -475,7 +472,10 @@ fn infer_segments(
                 let slot_ty = slot_type_from_pipes(key, pipes)?;
                 unify(out, key, slot_ty)?;
             }
-            Segment::Conditional { condition_key, inner } => {
+            Segment::Conditional {
+                condition_key,
+                inner,
+            } => {
                 unify(out, condition_key, ValueType::Any)?;
                 infer_segments(inner, out)?;
             }
@@ -516,11 +516,7 @@ fn lookup_spec(name: &str) -> Result<&'static PipeSpec, String> {
     pipe_spec(name).ok_or_else(|| format!("unknown pipe `{name}`"))
 }
 
-fn unify(
-    out: &mut Vec<(String, ValueType)>,
-    key: &str,
-    ty: ValueType,
-) -> Result<(), String> {
+fn unify(out: &mut Vec<(String, ValueType)>, key: &str, ty: ValueType) -> Result<(), String> {
     if let Some(entry) = out.iter_mut().find(|(k, _)| k == key) {
         entry.1 = match (entry.1, ty) {
             (ValueType::Any, t) | (t, ValueType::Any) => t,
@@ -934,8 +930,14 @@ mod tests {
         // callers (macro / register_template) don't need to re-derive them.
         assert!(err.contains("capitalize"), "error was: {err}");
         assert!(err.contains("pluralize"), "error was: {err}");
-        assert!(err.contains("String"), "error should name the output type; got: {err}");
-        assert!(err.contains("Number"), "error should name the expected input; got: {err}");
+        assert!(
+            err.contains("String"),
+            "error should name the output type; got: {err}"
+        );
+        assert!(
+            err.contains("Number"),
+            "error should name the expected input; got: {err}"
+        );
     }
 
     #[test]

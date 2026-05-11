@@ -3,11 +3,12 @@ name = "prosaic-vocab-release"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 description = "Release-note vocabulary templates for the prosaic engine"
 
 [dependencies]
-prosaic-core = { path = "../prosaic-core", default-features = false }
+prosaic-core = { version = "0.6.1", path = "../prosaic-core", default-features = false }
 
 [dev-dependencies]
-prosaic-grammar-en = { path = "../prosaic-grammar-en" }
-prosaic-grammar-es = { path = "../prosaic-grammar-es" }
+prosaic-grammar-en = { version = "0.6.1", path = "../prosaic-grammar-en" }
+prosaic-grammar-es = { version = "0.6.1", path = "../prosaic-grammar-es" }

@@ -16,6 +16,30 @@ Notice: **pronouns** on second and third mentions, a **discourse connective** ("
 
 ## Quick Start
 
+### Install
+
+For library use, add the engine plus at least one grammar crate:
+
+```toml
+[dependencies]
+prosaic-core = "0.6.1"
+prosaic-grammar-en = "0.6.1"
+```
+
+For the command-line tool:
+
+```bash
+cargo install prosaic
+```
+
+The published crates in this workspace share one lockstep version. The CLI
+package is named `prosaic` on crates.io and installs the `prosaic` binary; the
+source directory remains `prosaic-cli`. See
+[`docs/cookbook/src/versioning-and-packaging.md`](docs/cookbook/src/versioning-and-packaging.md)
+for the full versioning and packaging scheme.
+
+### Rust API
+
 ```rust
 use prosaic_core::{Engine, Context, Session, Value, Variation, Strictness};
 use prosaic_grammar_en::English;
@@ -62,10 +86,10 @@ let sentence = engine.render(&mut session, "entity.renamed", &ctx)?;
 | `prosaic-vocab-git` | Git/VCS activity templates (commits, PRs, issues, reviews, releases). `en` + `es` siblings. |
 | `prosaic-vocab-release` | Release and deployment event templates. `en` + `es` siblings. |
 | `prosaic-vocab-pr` | Pull-request lifecycle templates. `en` + `es` siblings. |
-| `prosaic-project` | Folder-of-files project format (`prosaic.toml` + `templates/` + `partials/` + `fixtures/` + `tests/`); load, validate, materialize an `Engine`, run scenarios, bundle to JSON or generated Rust. Powers `prosaic-cli new/build/test` and Prosaic Studio. |
+| `prosaic-project` | Folder-of-files project format (`prosaic.toml` + `templates/` + `partials/` + `fixtures/` + `tests/`); load, validate, materialize an `Engine`, run scenarios, bundle to JSON or generated Rust. Powers the `prosaic new/build/test` subcommands and Prosaic Studio. |
 | `prosaic-tracing` | `tracing_subscriber::Layer` that converts structured tracing events into prose narrative. |
 | `prosaic-wasm` | WebAssembly bindings via `wasm-bindgen` — exposes `ProsaicEngine` and `ProsaicSession` to JS/TS. |
-| `prosaic-cli` | `prosaic` binary: reads JSON-lines events on stdin, writes rendered prose on stdout. `--preset=changelog\|release-notes\|digest` bundles. |
+| `prosaic` | CLI package and binary: reads JSON-lines events on stdin, writes rendered prose on stdout. `--preset=changelog\|release-notes\|digest` bundles. |
 
 ## Core Concepts
 

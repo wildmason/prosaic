@@ -21,8 +21,7 @@ fn validate_clean_project_has_no_issues() {
 #[test]
 fn validate_unknown_pipe_reports_error() {
     let p = Project::load_from_dir(
-        Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/fixtures/invalid-projects/unknown-pipe"),
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/invalid-projects/unknown-pipe"),
     )
     .unwrap();
     let issues = p.validate();
@@ -31,7 +30,11 @@ fn validate_unknown_pipe_reports_error() {
         .filter(|i| i.level == ValidationLevel::Error)
         .collect();
     assert!(!errors.is_empty());
-    assert!(errors.iter().any(|i| i.message.contains("nonexistent_pipe")));
+    assert!(
+        errors
+            .iter()
+            .any(|i| i.message.contains("nonexistent_pipe"))
+    );
 }
 
 #[test]

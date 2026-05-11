@@ -25,8 +25,6 @@
 #[cfg(not(feature = "std"))]
 use alloc::string::String;
 #[cfg(not(feature = "std"))]
-use alloc::vec;
-#[cfg(not(feature = "std"))]
 use alloc::vec::Vec;
 
 use crate::discourse::ListStyle;
@@ -67,7 +65,11 @@ fn repetition_compliance(document: &RenderedDocument) -> f32 {
             continue;
         }
         let intersection: usize = a.iter().filter(|w| b.contains(w)).count();
-        let union: usize = a.iter().chain(b.iter()).collect::<alloc::collections::BTreeSet<_>>().len();
+        let union: usize = a
+            .iter()
+            .chain(b.iter())
+            .collect::<alloc::collections::BTreeSet<_>>()
+            .len();
         if union > 0 {
             total_sim += intersection as f32 / union as f32;
             pairs += 1;
@@ -288,7 +290,11 @@ mod tests {
         RenderedDocument::from_paragraphs(paragraphs)
     }
 
-    fn one_paragraph(text: &str, connective: Option<&str>, list_style: Option<ListStyle>) -> ParagraphRender {
+    fn one_paragraph(
+        text: &str,
+        connective: Option<&str>,
+        list_style: Option<ListStyle>,
+    ) -> ParagraphRender {
         ParagraphRender {
             text: text.to_string(),
             events: vec![EventMeta {
@@ -324,7 +330,11 @@ mod tests {
     fn score_is_deterministic() {
         let doc = doc_from(vec![
             one_paragraph("First short sentence.", None, None),
-            one_paragraph("Additionally, second longer sentence with more words.", Some("Additionally,"), None),
+            one_paragraph(
+                "Additionally, second longer sentence with more words.",
+                Some("Additionally,"),
+                None,
+            ),
         ]);
         let a = score_document(&doc, &weights(), None);
         let b = score_document(&doc, &weights(), None);
@@ -335,25 +345,56 @@ mod tests {
 
     #[test]
     fn rhythm_compliance_higher_with_more_variance() {
-        let flat = doc_from((0..6).map(|i| {
-            one_paragraph(&format!("{} word word word word word word word word word.", "x".repeat(i+1)), None, None)
-        }).collect());
+        let flat = doc_from(
+            (0..6)
+                .map(|i| {
+                    one_paragraph(
+                        &format!(
+                            "{} word word word word word word word word word.",
+                            "x".repeat(i + 1)
+                        ),
+                        None,
+                        None,
+                    )
+                })
+                .collect(),
+        );
         let varied = doc_from(vec![
             one_paragraph("Short.", None, None),
             one_paragraph("A medium length sentence here for context.", None, None),
-            one_paragraph("And a much longer sentence with several clauses extending well beyond average length.", None, None),
+            one_paragraph(
+                "And a much longer sentence with several clauses extending well beyond average length.",
+                None,
+                None,
+            ),
             one_paragraph("Tiny.", None, None),
-            one_paragraph("Another medium length sentence with reasonable word count.", None, None),
-            one_paragraph("Yet another extended one with more words to really push the variance up.", None, None),
+            one_paragraph(
+                "Another medium length sentence with reasonable word count.",
+                None,
+                None,
+            ),
+            one_paragraph(
+                "Yet another extended one with more words to really push the variance up.",
+                None,
+                None,
+            ),
         ]);
         assert!(rhythm_compliance(&varied) > rhythm_compliance(&flat));
     }
 
     #[test]
     fn paragraph_opener_diversity_higher_with_distinct_openers() {
-        let monotone = doc_from((0..4).map(|_| {
-            one_paragraph("Additionally, opener text here.", Some("Additionally,"), None)
-        }).collect());
+        let monotone = doc_from(
+            (0..4)
+                .map(|_| {
+                    one_paragraph(
+                        "Additionally, opener text here.",
+                        Some("Additionally,"),
+                        None,
+                    )
+                })
+                .collect(),
+        );
         let diverse = doc_from(vec![
             one_paragraph("Additionally, opener.", Some("Additionally,"), None),
             one_paragraph("Furthermore, opener.", Some("Furthermore,"), None),
@@ -365,9 +406,11 @@ mod tests {
 
     #[test]
     fn list_style_diversity_higher_with_distinct_styles() {
-        let monotone = doc_from((0..4).map(|_| {
-            one_paragraph("Sentence with list.", None, Some(ListStyle::Including))
-        }).collect());
+        let monotone = doc_from(
+            (0..4)
+                .map(|_| one_paragraph("Sentence with list.", None, Some(ListStyle::Including)))
+                .collect(),
+        );
         let diverse = doc_from(vec![
             one_paragraph("Sentence.", None, Some(ListStyle::Including)),
             one_paragraph("Sentence.", None, Some(ListStyle::SuchAs)),
@@ -379,9 +422,11 @@ mod tests {
 
     #[test]
     fn rst_relation_balance_higher_when_balanced() {
-        let imbalanced = doc_from((0..5).map(|_| {
-            one_paragraph("Additionally, sentence.", Some("Additionally,"), None)
-        }).collect());
+        let imbalanced = doc_from(
+            (0..5)
+                .map(|_| one_paragraph("Additionally, sentence.", Some("Additionally,"), None))
+                .collect(),
+        );
         let balanced = doc_from(vec![
             one_paragraph("Additionally, sentence.", Some("Additionally,"), None),
             one_paragraph("However, sentence.", Some("However,"), None),
@@ -405,16 +450,24 @@ mod tests {
             .sentence_length(target)
             .build()
             .unwrap();
-        let aligned = doc_from((0..6).map(|_| {
-            one_paragraph("Short text here.", None, None) // 3 words → short
-        }).collect());
-        let misaligned = doc_from((0..6).map(|_| {
-            one_paragraph(
-                "A long sentence with many many words far above the short threshold count.",
-                None,
-                None,
-            )
-        }).collect());
+        let aligned = doc_from(
+            (0..6)
+                .map(|_| {
+                    one_paragraph("Short text here.", None, None) // 3 words → short
+                })
+                .collect(),
+        );
+        let misaligned = doc_from(
+            (0..6)
+                .map(|_| {
+                    one_paragraph(
+                        "A long sentence with many many words far above the short threshold count.",
+                        None,
+                        None,
+                    )
+                })
+                .collect(),
+        );
         assert!(profile_match(&aligned, Some(&p)) > profile_match(&misaligned, Some(&p)));
     }
 
@@ -446,6 +499,14 @@ mod tests {
     #[test]
     fn tokenize_drops_short_and_punct() {
         let toks = tokenize("a, foo bar! the. baz?");
-        assert_eq!(toks, vec!["foo".to_string(), "bar".to_string(), "the".to_string(), "baz".to_string()]);
+        assert_eq!(
+            toks,
+            vec![
+                "foo".to_string(),
+                "bar".to_string(),
+                "the".to_string(),
+                "baz".to_string()
+            ]
+        );
     }
 }

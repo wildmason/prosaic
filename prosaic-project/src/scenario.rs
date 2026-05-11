@@ -115,7 +115,10 @@ mod tests {
         assert_eq!(exp.faithfulness_min, Some(0.85));
         assert_eq!(exp.discourse.len(), 2);
         assert_eq!(exp.discourse[0].reference_form.as_deref(), Some("Pronoun"));
-        assert_eq!(exp.discourse[1].connective_contains.as_deref(), Some("also"));
+        assert_eq!(
+            exp.discourse[1].connective_contains.as_deref(),
+            Some("also")
+        );
     }
 
     #[test]

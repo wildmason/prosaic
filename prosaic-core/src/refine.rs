@@ -26,8 +26,6 @@ use alloc::sync::Arc;
 #[cfg(not(feature = "std"))]
 use alloc::string::{String, ToString};
 #[cfg(not(feature = "std"))]
-use alloc::vec;
-#[cfg(not(feature = "std"))]
 use alloc::vec::Vec;
 
 use crate::discourse::{ListStyle, sentence_word_counts};
@@ -112,9 +110,7 @@ impl RenderedDocument {
     /// Each paragraph result is `(text, list_of_(connective, list_style))`
     /// where the per-sentence metadata lines up with the sentences the
     /// engine emitted for that paragraph.
-    pub(crate) fn from_paragraphs(
-        rendered: Vec<ParagraphRender>,
-    ) -> Self {
+    pub(crate) fn from_paragraphs(rendered: Vec<ParagraphRender>) -> Self {
         let mut paragraphs = Vec::with_capacity(rendered.len());
         let mut all_sentences: Vec<RenderedSentence> = Vec::new();
         let mut connectives_used: Vec<UsedConnective> = Vec::new();
@@ -144,9 +140,10 @@ impl RenderedDocument {
                         sentence_index_in_paragraph: s_idx,
                     });
                 }
-                let word_count = counts.get(s_idx).copied().unwrap_or_else(|| {
-                    sentence_text.split_whitespace().count()
-                });
+                let word_count = counts
+                    .get(s_idx)
+                    .copied()
+                    .unwrap_or_else(|| sentence_text.split_whitespace().count());
                 let s = RenderedSentence {
                     text: sentence_text.clone(),
                     word_count,
@@ -444,8 +441,7 @@ where
         session.clear_refine_overrides();
 
         let candidate_score = score_document(&candidate, &config.weights, profile);
-        let candidate_diagnostics =
-            run_all_diagnosers(&config.diagnosers, &candidate, profile);
+        let candidate_diagnostics = run_all_diagnosers(&config.diagnosers, &candidate, profile);
         let candidate_signature = diagnosis_signature(&candidate_diagnostics);
 
         // Cycle halt: same diagnosis signature as before → no progress.
@@ -500,17 +496,19 @@ fn aggregate_constraints(diagnostics: &[Diagnostic]) -> Vec<RefineConstraint> {
         for c in &d.constraints {
             // Deduplicate by structural equality. Constraints are small;
             // a linear scan is fine for v1 set sizes.
-            let already = out.iter().any(|existing: &RefineConstraint| match (existing, c) {
-                (
-                    RefineConstraint::BlacklistConnective(a),
-                    RefineConstraint::BlacklistConnective(b),
-                ) => a == b,
-                (
-                    RefineConstraint::BlacklistListStyle(a),
-                    RefineConstraint::BlacklistListStyle(b),
-                ) => a == b,
-                _ => false,
-            });
+            let already = out
+                .iter()
+                .any(|existing: &RefineConstraint| match (existing, c) {
+                    (
+                        RefineConstraint::BlacklistConnective(a),
+                        RefineConstraint::BlacklistConnective(b),
+                    ) => a == b,
+                    (
+                        RefineConstraint::BlacklistListStyle(a),
+                        RefineConstraint::BlacklistListStyle(b),
+                    ) => a == b,
+                    _ => false,
+                });
             if !already {
                 out.push(c.clone());
             }
@@ -678,8 +676,7 @@ mod tests {
     #[test]
     fn apply_constraints_blacklist_list_style_writes_session_blacklist() {
         let mut session = crate::session::Session::new();
-        let constraints =
-            vec![RefineConstraint::BlacklistListStyle(ListStyle::Including)];
+        let constraints = vec![RefineConstraint::BlacklistListStyle(ListStyle::Including)];
         super::apply_constraints_to_session(&mut session, &constraints);
         assert_eq!(
             session.refine_blacklist_list_styles,
@@ -719,8 +716,7 @@ mod tests {
     #[test]
     fn apply_constraints_override_salience_bias_writes_session_override() {
         let mut session = crate::session::Session::new();
-        let constraints =
-            vec![RefineConstraint::OverrideSalienceBias(SalienceBias::Lower)];
+        let constraints = vec![RefineConstraint::OverrideSalienceBias(SalienceBias::Lower)];
         super::apply_constraints_to_session(&mut session, &constraints);
         assert_eq!(session.refine_salience_bias, Some(SalienceBias::Lower));
     }
@@ -794,8 +790,7 @@ mod tests {
             short_max_words: 7,
             medium_max_words: 15,
         };
-        let constraints =
-            vec![RefineConstraint::TightenLengthDistribution(target.clone())];
+        let constraints = vec![RefineConstraint::TightenLengthDistribution(target.clone())];
         super::apply_constraints_to_session(&mut session, &constraints);
         assert_eq!(session.refine_length_distribution, Some(target));
     }

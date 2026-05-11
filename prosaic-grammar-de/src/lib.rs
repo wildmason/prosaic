@@ -679,10 +679,7 @@ mod tests {
         let de = German::new();
         // Override fem despite "Tisch" inferring masc.
         let f = AgreementFeatures::default().with_gender(Gender::Fem);
-        assert_eq!(
-            de.proportion_phrase(0, 0, Some("Tisch"), &f),
-            "keine Tisch"
-        );
+        assert_eq!(de.proportion_phrase(0, 0, Some("Tisch"), &f), "keine Tisch");
     }
 
     #[test]

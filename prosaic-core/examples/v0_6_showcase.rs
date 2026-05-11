@@ -72,20 +72,25 @@ fn scenario_1_voice_differentiation() {
         println!("```");
         println!(
             "{}",
-            engine
-                .render(&mut session, "code.modified", &ctx)
-                .unwrap()
+            engine.render(&mut session, "code.modified", &ctx).unwrap()
+        );
+        println!(
+            "{}",
+            engine.render(&mut session, "code.modified", &ctx).unwrap()
         );
         println!(
             "{}",
             engine
-                .render(&mut session, "code.modified", &ctx)
-                .unwrap()
-        );
-        println!(
-            "{}",
-            engine
-                .render(&mut session, "code.renamed", &ctx_renamed("UserService", "AccountService", 5, &["A", "B", "C", "D", "E"]))
+                .render(
+                    &mut session,
+                    "code.renamed",
+                    ctx_renamed(
+                        "UserService",
+                        "AccountService",
+                        5,
+                        &["A", "B", "C", "D", "E"]
+                    )
+                )
                 .unwrap()
         );
         println!("```\n");
@@ -241,7 +246,10 @@ fn scenario_4_list_style_bias() {
     );
 
     let scenarios: Vec<(&str, ListStyleBias)> = vec![
-        ("ListStyleBias::Auto (pre-v0.6 default)", ListStyleBias::Auto),
+        (
+            "ListStyleBias::Auto (pre-v0.6 default)",
+            ListStyleBias::Auto,
+        ),
         ("ListStyleBias::Bracketed", ListStyleBias::Bracketed),
         ("ListStyleBias::SuchAs", ListStyleBias::SuchAs),
         ("ListStyleBias::Dash", ListStyleBias::Dash),
@@ -257,7 +265,7 @@ fn scenario_4_list_style_bias() {
         println!("```");
         for (i, name) in ["Alpha", "Bravo", "Charlie"].iter().enumerate() {
             let out = engine
-                .render(&mut session, "evt", &ctx_with_items(name))
+                .render(&mut session, "evt", ctx_with_items(name))
                 .unwrap();
             println!("{}. {out}", i + 1);
         }
@@ -288,9 +296,15 @@ fn scenario_5_pronoun_density() {
     );
 
     let densities: Vec<(&str, PronounDensity)> = vec![
-        ("PronounDensity::Default (pre-v0.6 equivalent)", PronounDensity::Default),
+        (
+            "PronounDensity::Default (pre-v0.6 equivalent)",
+            PronounDensity::Default,
+        ),
         ("PronounDensity::Low (formal)", PronounDensity::Low),
-        ("PronounDensity::High (conversational)", PronounDensity::High),
+        (
+            "PronounDensity::High (conversational)",
+            PronounDensity::High,
+        ),
     ];
     for (label, density) in densities {
         println!("### {label}");
@@ -306,10 +320,7 @@ fn scenario_5_pronoun_density() {
         c.insert("name", Value::String("UserService".into()));
         c.insert("entity_type", Value::String("class".into()));
         for _ in 0..3 {
-            println!(
-                "{}",
-                engine.render(&mut session, "evt", &c).unwrap()
-            );
+            println!("{}", engine.render(&mut session, "evt", &c).unwrap());
         }
         println!("```\n");
     }
@@ -524,10 +535,12 @@ fn rst_engine(refine: bool) -> Engine {
             .with_max_iterations(3)
             .with_min_improvement(0.0);
         config.diagnosers.clear();
-        config.diagnosers.push(Arc::new(prosaic_core::RstRelationImbalance {
-            max_share: 0.5,
-            min_emissions: 3,
-        }));
+        config
+            .diagnosers
+            .push(Arc::new(prosaic_core::RstRelationImbalance {
+                max_share: 0.5,
+                min_emissions: 3,
+            }));
         e = e.refine(config);
     }
     e.register_template("evt.modified", "{name|refer} was modified")

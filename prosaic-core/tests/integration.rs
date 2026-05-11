@@ -585,7 +585,11 @@ fn service_shape_run_does_not_alternate_similarity_connectives() {
 
     let outputs: Vec<String> = services
         .iter()
-        .map(|name| engine.render(&mut session, "code.touched", ctx(name)).unwrap())
+        .map(|name| {
+            engine
+                .render(&mut session, "code.touched", ctx(name))
+                .unwrap()
+        })
         .collect();
 
     // Lead sentence is unconnected.
@@ -794,14 +798,22 @@ fn sentence_rhythm_increases_burstiness_versus_disabled_baseline() {
     let engine_off = build_engine(false);
     let outputs_off: Vec<String> = items
         .iter()
-        .map(|item| engine_off.render(&mut session_off, "rhythm", ctx(item)).unwrap())
+        .map(|item| {
+            engine_off
+                .render(&mut session_off, "rhythm", ctx(item))
+                .unwrap()
+        })
         .collect();
 
     let mut session_on = Session::new();
     let engine_on = build_engine(true);
     let outputs_on: Vec<String> = items
         .iter()
-        .map(|item| engine_on.render(&mut session_on, "rhythm", ctx(item)).unwrap())
+        .map(|item| {
+            engine_on
+                .render(&mut session_on, "rhythm", ctx(item))
+                .unwrap()
+        })
         .collect();
 
     let lengths_off = word_counts(&outputs_off);
@@ -867,8 +879,7 @@ fn sentence_rhythm_preserves_event_count_and_entity_propositions() {
         .unwrap();
 
     let entities = [
-        "Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot", "Golf", "Hotel", "India",
-        "Juliet",
+        "Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot", "Golf", "Hotel", "India", "Juliet",
     ];
 
     let mut session = Session::new();
@@ -2249,9 +2260,7 @@ fn sentence_rhythm_burst_pivot_breaks_tied_candidate_into_pivot() {
     let same_rhythm = session
         .discourse()
         .sentence_rhythm_score(same_side_candidate);
-    let pivot_rhythm = session
-        .discourse()
-        .sentence_rhythm_score(pivot_candidate);
+    let pivot_rhythm = session.discourse().sentence_rhythm_score(pivot_candidate);
 
     assert!(
         same_rhythm > pivot_rhythm,
@@ -2359,9 +2368,7 @@ fn sentence_rhythm_renders_more_burst_pivots_than_disabled_baseline() {
                 if raw.chars().any(|c| c.is_alphanumeric()) {
                     current += 1;
                 }
-                if (raw.ends_with('.') || raw.ends_with('!') || raw.ends_with('?'))
-                    && current > 0
-                {
+                if (raw.ends_with('.') || raw.ends_with('!') || raw.ends_with('?')) && current > 0 {
                     lens.push(current);
                     current = 0;
                 }

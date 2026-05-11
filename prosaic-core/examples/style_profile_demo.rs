@@ -111,13 +111,13 @@ fn render_corpus(engine: &Engine) -> String {
     let mut out = String::new();
     out.push_str(
         &engine
-            .render(&mut session, "code.modified", &ctx_named("UserService", 25))
+            .render(&mut session, "code.modified", ctx_named("UserService", 25))
             .unwrap(),
     );
     out.push('\n');
     out.push_str(
         &engine
-            .render(&mut session, "code.modified", &ctx_named("UserService", 25))
+            .render(&mut session, "code.modified", ctx_named("UserService", 25))
             .unwrap(),
     );
     out.push('\n');
@@ -126,20 +126,25 @@ fn render_corpus(engine: &Engine) -> String {
             .render(
                 &mut session,
                 "code.renamed",
-                &ctx_renamed("UserService", "AccountService", 25, &["A", "B", "C", "D", "E"]),
+                ctx_renamed(
+                    "UserService",
+                    "AccountService",
+                    25,
+                    &["A", "B", "C", "D", "E"],
+                ),
             )
             .unwrap(),
     );
     out.push('\n');
     out.push_str(
         &engine
-            .render(&mut session, "code.modified", &ctx_named("AuthService", 5))
+            .render(&mut session, "code.modified", ctx_named("AuthService", 5))
             .unwrap(),
     );
     out.push('\n');
     out.push_str(
         &engine
-            .render(&mut session, "code.modified", &ctx_named("OrderService", 5))
+            .render(&mut session, "code.modified", ctx_named("OrderService", 5))
             .unwrap(),
     );
     out.push('\n');
@@ -182,7 +187,10 @@ fn concise_professional() -> StyleProfile {
         .list_style_bias(ListStyleBias::Bracketed)
         .pronoun_density(PronounDensity::Low)
         .salience(SalienceBias::Auto)
-        .hedging(HedgingCalibration { offset: 5, forbid: Vec::new() })
+        .hedging(HedgingCalibration {
+            offset: 5,
+            forbid: Vec::new(),
+        })
         .sentence_length(LengthDistribution {
             short: 0.5,
             medium: 0.4,
@@ -201,7 +209,10 @@ fn verbose_narrative() -> StyleProfile {
         .list_style_bias(ListStyleBias::Including)
         .pronoun_density(PronounDensity::High)
         .salience(SalienceBias::Auto)
-        .hedging(HedgingCalibration { offset: -5, forbid: Vec::new() })
+        .hedging(HedgingCalibration {
+            offset: -5,
+            forbid: Vec::new(),
+        })
         .sentence_length(LengthDistribution {
             short: 0.2,
             medium: 0.5,

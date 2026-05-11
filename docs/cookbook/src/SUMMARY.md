@@ -9,4 +9,5 @@
 - [Building a Vocabulary Crate](building-a-vocab-crate.md)
 - [Faithfulness Testing](faithfulness-testing.md)
 - [Deployment Matrix](deployment-matrix.md)
+- [Versioning and Packaging](versioning-and-packaging.md)
 - [Migrating from RosaeNLG](migrating-from-rosaenlg.md)

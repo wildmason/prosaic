@@ -25,7 +25,9 @@ pub enum ProjectError {
     #[error("fixture `{name}` failed: {reason}")]
     FixtureValidation { name: String, reason: String },
 
-    #[error("vocab dependency `{crate_name}` not registered: enable the `{crate_name}` feature or add it to `prosaic.toml`")]
+    #[error(
+        "vocab dependency `{crate_name}` not registered: enable the `{crate_name}` feature or add it to `prosaic.toml`"
+    )]
     UnregisteredVocab { crate_name: String },
 
     #[error("template `{key}` references unknown partial `{partial}`")]

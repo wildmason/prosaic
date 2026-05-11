@@ -194,7 +194,9 @@ fn render_fixture(engine: &Engine, fixture: &Fixture) -> Vec<String> {
             let mut ctx = Context::new();
             ctx.insert("entity_type", Value::String(fixture.entity_type.into()));
             ctx.insert("name", Value::String((*name).into()));
-            engine.render(&mut session, fixture.template_key, &ctx).unwrap()
+            engine
+                .render(&mut session, fixture.template_key, &ctx)
+                .unwrap()
         })
         .collect()
 }
