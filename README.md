@@ -22,8 +22,8 @@ For library use, add the engine plus at least one grammar crate:
 
 ```toml
 [dependencies]
-prosaic-core = "1.0.0"
-prosaic-grammar-en = "1.0.0"
+prosaic-core = "1.0.1"
+prosaic-grammar-en = "1.0.1"
 ```
 
 For the command-line tool:

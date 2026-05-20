@@ -8,7 +8,7 @@ a local `path` and the matching crates.io `version`.
 That shape is intentional:
 
 ```toml
-prosaic-core = { version = "1.0.0", path = "../prosaic-core" }
+prosaic-core = { version = "1.0.1", path = "../prosaic-core" }
 ```
 
 Local development uses the path. Published crates use the version, so the same

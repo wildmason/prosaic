@@ -5,9 +5,10 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "German grammar layer for the Prosaic NLG engine"
+readme = "README.md"
 
 [dependencies]
-prosaic-core = { version = "1.0.0", path = "../prosaic-core", default-features = false }
+prosaic-core = { version = "1.0.1", path = "../prosaic-core", default-features = false }
 
 [dev-dependencies]
 prosaic-grammar-de = { path = ".", features = ["time"] }

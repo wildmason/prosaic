@@ -5,10 +5,11 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Folder-of-files project format and bundler for Prosaic templates."
+readme = "README.md"
 
 [dependencies]
-prosaic-core = { version = "1.0.0", path = "../prosaic-core", default-features = false, features = ["std", "serde"] }
-prosaic-grammar-en = { version = "1.0.0", path = "../prosaic-grammar-en" }
+prosaic-core = { version = "1.0.1", path = "../prosaic-core", default-features = false, features = ["std", "serde"] }
+prosaic-grammar-en = { version = "1.0.1", path = "../prosaic-grammar-en" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = { version = "0.8", features = ["preserve_order"] }
@@ -16,5 +17,5 @@ thiserror = "2"
 
 [dev-dependencies]
 tempfile = "3"
-prosaic-grammar-es = { version = "1.0.0", path = "../prosaic-grammar-es" }
-prosaic-grammar-de = { version = "1.0.0", path = "../prosaic-grammar-de" }
+prosaic-grammar-es = { version = "1.0.1", path = "../prosaic-grammar-es" }
+prosaic-grammar-de = { version = "1.0.1", path = "../prosaic-grammar-de" }

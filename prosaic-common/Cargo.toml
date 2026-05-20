@@ -5,3 +5,4 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Shared type metadata for prosaic-core and prosaic-derive: ValueType, PipeSpec registry, and const-eval schema helpers."
+readme = "README.md"

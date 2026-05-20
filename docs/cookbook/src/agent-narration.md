@@ -17,8 +17,8 @@ The agent emits a structured event for each step it takes. A small narration hel
 
 ```toml
 [dependencies]
-prosaic-core = "1.0.0"
-prosaic-grammar-en = "1.0.0"
+prosaic-core = "1.0.1"
+prosaic-grammar-en = "1.0.1"
 ```
 
 ```rust
@@ -131,9 +131,9 @@ When the agent already emits `tracing` events, you don't need to wire a narrator
 
 ```toml
 [dependencies]
-prosaic-core = "1.0.0"
-prosaic-grammar-en = "1.0.0"
-prosaic-tracing = "1.0.0"
+prosaic-core = "1.0.1"
+prosaic-grammar-en = "1.0.1"
+prosaic-tracing = "1.0.1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["registry"] }
 ```

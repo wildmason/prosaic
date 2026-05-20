@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 1.0.1 - 2026-05-20
+
+- Added package-specific README files and manifest `readme` metadata for all
+  published Prosaic crates so crates.io and GitHub show crate-level
+  documentation.
+- Updated workspace and internal dependency versions for the lockstep 1.0.1
+  patch release.
+
 ## 1.0.0 - 2026-05-11
 
 - Declared the 1.x stability contract for crates, CLI behavior, template

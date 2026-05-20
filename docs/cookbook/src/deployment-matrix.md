@@ -67,16 +67,16 @@ Every feature is independent and additive. Defaults are `std + time + polish + r
 
 ```toml
 [dependencies]
-prosaic-core = "1.0.0"
-prosaic-grammar-en = "1.0.0"
+prosaic-core = "1.0.1"
+prosaic-grammar-en = "1.0.1"
 ```
 
 ### Size-optimized embedded build
 
 ```toml
 [dependencies]
-prosaic-core = { version = "1.0.0", default-features = false, features = ["reg"] }
-prosaic-grammar-en = "1.0.0"
+prosaic-core = { version = "1.0.1", default-features = false, features = ["reg"] }
+prosaic-grammar-en = "1.0.1"
 ```
 
 `std`, `time`, `polish` disabled. `reg` kept for `{name|refer}`. No
@@ -86,7 +86,7 @@ prosaic-grammar-en = "1.0.0"
 
 ```toml
 [dependencies]
-prosaic-wasm = "1.0.0"
+prosaic-wasm = "1.0.1"
 ```
 
 Build with `wasm-pack build` or `cargo build --target wasm32-unknown-unknown
@@ -97,19 +97,19 @@ supports Rust-side unit tests.
 
 ```toml
 [dependencies]
-prosaic-core = { version = "1.0.0", features = ["serde"] }
-prosaic-grammar-en = "1.0.0"
-prosaic-grammar-es = "1.0.0"
-prosaic-grammar-de = "1.0.0"
-prosaic-vocab-release = "1.0.0"
+prosaic-core = { version = "1.0.1", features = ["serde"] }
+prosaic-grammar-en = "1.0.1"
+prosaic-grammar-es = "1.0.1"
+prosaic-grammar-de = "1.0.1"
+prosaic-vocab-release = "1.0.1"
 ```
 
 ### Parallel batch pipeline
 
 ```toml
 [dependencies]
-prosaic-core = { version = "1.0.0", features = ["parallel"] }
-prosaic-grammar-en = "1.0.0"
+prosaic-core = { version = "1.0.1", features = ["parallel"] }
+prosaic-grammar-en = "1.0.1"
 ```
 
 ## Engine threading model

@@ -5,10 +5,11 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Git / VCS activity vocabulary module for the prosaic crate (commits, PRs, issues, reviews, releases)"
+readme = "README.md"
 
 [dependencies]
-prosaic-core = { version = "1.0.0", path = "../prosaic-core" }
+prosaic-core = { version = "1.0.1", path = "../prosaic-core" }
 
 [dev-dependencies]
-prosaic-grammar-en = { version = "1.0.0", path = "../prosaic-grammar-en" }
-prosaic-grammar-es = { version = "1.0.0", path = "../prosaic-grammar-es" }
+prosaic-grammar-en = { version = "1.0.1", path = "../prosaic-grammar-en" }
+prosaic-grammar-es = { version = "1.0.1", path = "../prosaic-grammar-es" }

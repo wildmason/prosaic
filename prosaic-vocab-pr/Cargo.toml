@@ -5,10 +5,11 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Pull-request narrative vocabulary templates for the prosaic engine"
+readme = "README.md"
 
 [dependencies]
-prosaic-core = { version = "1.0.0", path = "../prosaic-core", default-features = false }
+prosaic-core = { version = "1.0.1", path = "../prosaic-core", default-features = false }
 
 [dev-dependencies]
-prosaic-grammar-en = { version = "1.0.0", path = "../prosaic-grammar-en" }
-prosaic-grammar-es = { version = "1.0.0", path = "../prosaic-grammar-es" }
+prosaic-grammar-en = { version = "1.0.1", path = "../prosaic-grammar-en" }
+prosaic-grammar-es = { version = "1.0.1", path = "../prosaic-grammar-es" }

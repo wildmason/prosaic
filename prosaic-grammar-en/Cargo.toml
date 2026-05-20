@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "English grammar implementation for the prosaic crate"
+readme = "README.md"
 
 [dependencies]
-prosaic-core = { version = "1.0.0", path = "../prosaic-core" }
+prosaic-core = { version = "1.0.1", path = "../prosaic-core" }

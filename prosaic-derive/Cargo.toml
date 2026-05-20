@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Derive macros for the prosaic crate"
+readme = "README.md"
 
 [lib]
 proc-macro = true
@@ -13,4 +14,4 @@ proc-macro = true
 syn = { version = "2", features = ["full"] }
 quote = "1"
 proc-macro2 = "1"
-prosaic-core = { version = "1.0.0", path = "../prosaic-core", default-features = false }
+prosaic-core = { version = "1.0.1", path = "../prosaic-core", default-features = false }
